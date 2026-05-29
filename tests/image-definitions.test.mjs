@@ -26,6 +26,28 @@ test('ploinky-node workflow builds the local image definition', () => {
     assert.match(dockerfile, /\bpython3\b/);
 });
 
+test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
+    const workflow = read('.github/workflows/publish-llm-runtime-cpu-image.yml');
+    const dockerfile = read('images/llm-runtime-cpu/Dockerfile');
+
+    assert.match(workflow, /images\/llm-runtime-cpu/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/llm-runtime-cpu/);
+    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
+    assert.match(workflow, /runs-on:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /DEFAULT_PLATFORMS:\s*linux\/arm64/);
+    assert.match(workflow, /llama-server --version/);
+    assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim$/m);
+    assert.match(dockerfile, /^ARG LLAMA_CPP_REF=b6412$/m);
+    assert.match(dockerfile, /\bhuggingface_hub\b/);
+    assert.match(dockerfile, /\bllama-server\b/);
+    assert.match(dockerfile, /GGML_NATIVE=OFF/);
+    assert.match(dockerfile, /\/models\/hf-cache/);
+    assert.match(dockerfile, /\/models\/artifacts/);
+    assert.match(dockerfile, /\/models\/derived/);
+});
+
 test('bwrap-runner workflow builds source checkout with centralized Dockerfile', () => {
     const workflow = read('.github/workflows/publish-bwrap-runner.yml');
     const dockerfile = read('images/bwrap-runner/Dockerfile');

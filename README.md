@@ -9,6 +9,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | Image | Source repo | Build context | Dockerfile | Workflow |
 | --- | --- | --- | --- | --- |
 | `assistos/ploinky-node:24-bookworm-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
+| `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `PloinkyRepos/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `PloinkyRepos/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 
@@ -38,6 +39,12 @@ Do not store Docker Hub token values in repository files.
 gh workflow run publish-ploinky-node-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f image_tag=24-bookworm-tools
+
+gh workflow run publish-llm-runtime-cpu-image.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f llama_cpp_ref=b6412 \
+  -f image_tag=cpu-arm64-smoke \
+  -f platforms=linux/arm64
 
 gh workflow run publish-bwrap-runner.yml \
   --repo AssistOS-AI/container-image-builds \
