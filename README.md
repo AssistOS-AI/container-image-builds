@@ -12,6 +12,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `PloinkyRepos/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `PloinkyRepos/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
+| `assistos/soul-gateway:node24-sqlite` | `PloinkyRepos/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` and build with the Dockerfiles in this repository.
@@ -55,6 +56,11 @@ gh workflow run publish-livekit-server-agent.yml \
   --repo AssistOS-AI/container-image-builds \
   -f source_ref=main \
   -f image_tag=webmeet-infra
+
+gh workflow run publish-soul-gateway-image.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f source_ref=main \
+  -f image_tag=node24-sqlite
 ```
 
 `publish-ploinky-node-image.yml` also runs on pushes to its image definition or

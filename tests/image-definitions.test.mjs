@@ -85,3 +85,26 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
     assert.match(dockerfile, /livekit-server/);
     assert.match(dockerfile, /\begress\b/);
 });
+
+test('soul-gateway workflow builds source checkout with SQLite and baked gateway code', () => {
+    const workflow = read('.github/workflows/publish-soul-gateway-image.yml');
+    const dockerfile = read('images/soul-gateway/Dockerfile');
+
+    assert.match(workflow, /repository:\s*PloinkyRepos\/proxies/);
+    assert.match(workflow, /path:\s*sources\/proxies/);
+    assert.match(workflow, /git -C sources\/proxies rev-parse --short=12 HEAD/);
+    assert.match(workflow, /context:\s*\.\/sources\/proxies\/soul-gateway/);
+    assert.match(workflow, /file:\s*\.\/images\/soul-gateway\/Dockerfile/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/soul-gateway/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /node -e "import\('node:sqlite'\)/);
+    assert.match(workflow, /sqlite3 --version/);
+
+    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools$/m);
+    assert.match(dockerfile, /\bsqlite3\b/);
+    assert.match(dockerfile, /WORKDIR \/opt\/soul-gateway/);
+    assert.match(dockerfile, /COPY package\.json package-lock\.json \.\//);
+    assert.match(dockerfile, /RUN npm ci --omit=dev/);
+    assert.match(dockerfile, /COPY src \/opt\/soul-gateway\/src/);
+    assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
+});
