@@ -26,6 +26,30 @@ test('ploinky-node workflow builds the local image definition', () => {
     assert.match(dockerfile, /\bpython3\b/);
 });
 
+test('onlyoffice-agent workflow layers Node onto the standard Document Server image', () => {
+    const workflow = read('.github/workflows/publish-onlyoffice-agent-image.yml');
+    const dockerfile = read('images/onlyoffice-agent/Dockerfile');
+
+    assert.match(workflow, /images\/onlyoffice-agent/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/onlyoffice-agent/);
+    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /onlyoffice_base_image=docker\.io\/onlyoffice\/documentserver:\$\{onlyoffice_version\}/);
+    assert.match(workflow, /test -x \/app\/ds\/run-document-server\.sh/);
+
+    assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
+    assert.match(dockerfile, /^ARG ONLYOFFICE_BASE_IMAGE=docker\.io\/onlyoffice\/documentserver:9\.3\.1$/m);
+    assert.match(dockerfile, /^FROM \$\{NODE_RUNTIME_IMAGE\} AS node-runtime$/m);
+    assert.match(dockerfile, /^FROM \$\{ONLYOFFICE_BASE_IMAGE\}$/m);
+    assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
+    assert.match(dockerfile, /\/usr\/local\/bin\/npm/);
+    assert.match(dockerfile, /\bgit\b/);
+    assert.match(dockerfile, /\bpython3\b/);
+    assert.match(dockerfile, /\bmake\b/);
+});
+
 test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     const workflow = read('.github/workflows/publish-llm-runtime-cpu-image.yml');
     const dockerfile = read('images/llm-runtime-cpu/Dockerfile');
