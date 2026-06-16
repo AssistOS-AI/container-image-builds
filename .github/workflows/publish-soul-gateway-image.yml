@@ -1,0 +1,89 @@
+name: Publish Soul Gateway image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'PloinkyRepos/proxies ref to build from'
+        required: false
+        default: 'main'
+        type: string
+      image_tag:
+        description: 'Docker Hub tag to publish'
+        required: false
+        default: 'node24-sqlite'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-soul-gateway-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/soul-gateway
+  IMAGE_TAG: ${{ inputs.image_tag || 'node24-sqlite' }}
+
+jobs:
+  publish:
+    name: Build and push Docker Hub image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@v4
+
+      - name: Checkout proxies source
+        uses: actions/checkout@v4
+        with:
+          repository: PloinkyRepos/proxies
+          ref: ${{ inputs.source_ref || 'main' }}
+          path: sources/proxies
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Resolve source revision
+        id: source
+        run: echo "sha=$(git -C sources/proxies rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke build local architecture
+        run: |
+          set -euo pipefail
+          docker build \
+            -f images/soul-gateway/Dockerfile \
+            -t "$IMAGE_NAME:smoke" \
+            sources/proxies/soul-gateway
+          docker run --rm "$IMAGE_NAME:smoke" node -e "import('node:sqlite').then(() => console.log('node:sqlite ok'))"
+          docker run --rm "$IMAGE_NAME:smoke" sqlite3 --version
+          docker run --rm "$IMAGE_NAME:smoke" test -f /opt/soul-gateway/src/index.mjs
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ env.IMAGE_TAG }}
+            type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.source.outputs.sha }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./sources/proxies/soul-gateway
+          file: ./images/soul-gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
