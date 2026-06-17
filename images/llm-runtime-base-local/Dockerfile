@@ -12,11 +12,14 @@ ARG MODEL_REVISION=main
 ENV LLAMA_CPP_DEFAULT_REPO=${MODEL_REPO}
 ENV LLAMA_CPP_DEFAULT_FILE=${MODEL_FILE}
 ENV LLAMA_CPP_DEFAULT_REVISION=${MODEL_REVISION}
+ENV PLOINKY_MODEL_SEED_DIR=/opt/ploinky/model-seed
 
-# Bake the GGUF to the exact path the launcher checks:
-#   $PLOINKY_MODELS_DIR/<repo with / -> __>/<revision>/<file>
+# Bake the GGUF into a seed dir OUTSIDE /models. The runtime bind-mounts a host
+# volume over /models, which would shadow a model baked under it; the launcher's
+# prepare step copies from this seed dir into the model cache (no network).
 RUN safe_repo="$(printf '%s' "$MODEL_REPO" | sed 's#/#__#g')" \
-    && target="${PLOINKY_MODELS_DIR}/${safe_repo}/${MODEL_REVISION}" \
+    && safe_rev="$(printf '%s' "$MODEL_REVISION" | sed 's#/#__#g')" \
+    && target="${PLOINKY_MODEL_SEED_DIR}/${safe_repo}/${safe_rev}" \
     && mkdir -p "$target" \
     && hf download "$MODEL_REPO" "$MODEL_FILE" --revision "$MODEL_REVISION" --local-dir "$target" \
     && test -f "$target/$MODEL_FILE"
