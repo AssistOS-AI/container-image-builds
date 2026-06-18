@@ -15,12 +15,14 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends git cmake build-essential libcurl4-openssl-dev ca-certificates curl; \
     git clone --depth 1 --branch "${LLAMA_CPP_TAG}" https://github.com/ggml-org/llama.cpp /tmp/llama.cpp; \
-    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_SERVER=ON; \
+    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=OFF; \
     cmake --build /tmp/llama.cpp/build --target llama-server -j "$(nproc)"; \
     install -m 0755 /tmp/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server; \
     rm -rf /tmp/llama.cpp; \
     apt-get purge -y git cmake build-essential libcurl4-openssl-dev; \
-    apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
+    apt-get autoremove -y; \
+    apt-get install -y --no-install-recommends libgomp1; \
+    rm -rf /var/lib/apt/lists/*
 
 # Bake the GGUF (offline at runtime).
 RUN set -eux; \
