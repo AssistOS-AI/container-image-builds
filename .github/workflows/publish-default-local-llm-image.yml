@@ -7,10 +7,6 @@ on:
         description: Image tag (e.g. cpu)
         required: false
         default: cpu
-      platforms:
-        description: Build platforms
-        required: false
-        default: linux/amd64
       base_image:
         description: Base image
         required: false
@@ -28,37 +24,92 @@ env:
   IMAGE_NAME: assistos/default-local-llm
 
 jobs:
-  publish:
-    name: Build and push Docker Hub image
-    runs-on: ubuntu-24.04
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ inputs.image_tag }}
-            type=sha,prefix=${{ inputs.image_tag }}-
-      - name: Build and push image
+
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: images/default-local-llm
-          platforms: ${{ inputs.platforms }}
-          push: true
+          platforms: ${{ matrix.platform }}
           build-args: |
             BASE_IMAGE=${{ inputs.base_image }}
             MODEL_REPO=${{ inputs.model_repo }}
             MODEL_FILE=${{ inputs.model_file }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          docker buildx imagetools create \
+            -t "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            -t "docker.io/${IMAGE_NAME}:${IMAGE_TAG}-${GITHUB_SHA}" \
+            $(printf "docker.io/${IMAGE_NAME}@sha256:%s " *)
+
+      - name: Inspect manifest
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
