@@ -11,11 +11,14 @@ ARG LLAMA_CPP_TAG=b4519
 ENV LLAMA_MODEL_PATH=/opt/models/${MODEL_FILE}
 
 # Build llama-server from a pinned tag, then strip build deps.
+# GGML_NATIVE=OFF is REQUIRED for this distributed image: the build runner's CPU is
+# not the deployment CPU, and a -mcpu=native build silently miscomputes (degenerate
+# garbage output) on a different host. OFF builds portable kernels with runtime dispatch.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends git cmake build-essential libcurl4-openssl-dev ca-certificates curl; \
     git clone --depth 1 --branch "${LLAMA_CPP_TAG}" https://github.com/ggml-org/llama.cpp /tmp/llama.cpp; \
-    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=OFF; \
+    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF; \
     cmake --build /tmp/llama.cpp/build --target llama-server -j "$(nproc)"; \
     install -m 0755 /tmp/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server; \
     rm -rf /tmp/llama.cpp; \
