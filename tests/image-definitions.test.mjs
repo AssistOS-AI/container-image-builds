@@ -50,6 +50,21 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(dockerfile, /\bmake\b/);
 });
 
+test('webtty-agent workflow builds and publishes the node-pty terminal image', () => {
+    const workflow = read('.github/workflows/publish-webtty-agent-image.yml');
+    const dockerfile = read('images/webtty-agent/Dockerfile');
+
+    assert.match(workflow, /images\/webtty-agent/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/webtty-agent/);
+    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+
+    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools$/m);
+    assert.match(dockerfile, /\bnode-pty\b/);
+});
+
 test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     const workflow = read('.github/workflows/publish-llm-runtime-cpu-image.yml');
     const dockerfile = read('images/llm-runtime-cpu/Dockerfile');

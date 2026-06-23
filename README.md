@@ -9,6 +9,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | Image | Source repo | Build context | Dockerfile | Workflow |
 | --- | --- | --- | --- | --- |
 | `assistos/ploinky-node:24-bookworm-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
+| `assistos/webtty-agent:node24` | this repo | `images/webtty-agent` | `images/webtty-agent/Dockerfile` | `publish-webtty-agent-image.yml` |
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/default-local-llm:cpu` | `PloinkyRepos/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
@@ -43,6 +44,10 @@ gh workflow run publish-ploinky-node-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f image_tag=24-bookworm-tools
 
+gh workflow run publish-webtty-agent-image.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f image_tag=node24
+
 gh workflow run publish-onlyoffice-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f onlyoffice_version=9.3.1 \
@@ -70,7 +75,7 @@ gh workflow run publish-soul-gateway-image.yml \
   -f image_tag=node24-sqlite
 ```
 
-`publish-ploinky-node-image.yml` and `publish-onlyoffice-agent-image.yml` also
-run on pushes to their image definitions or workflow files. The other publish
-workflows stay manual because their build contexts live in separate source
-repositories.
+`publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`, and
+`publish-onlyoffice-agent-image.yml` also run on pushes to their image
+definitions or workflow files. The other publish workflows stay manual because
+their build contexts live in separate source repositories.

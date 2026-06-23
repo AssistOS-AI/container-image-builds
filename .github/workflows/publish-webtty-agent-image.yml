@@ -1,0 +1,99 @@
+name: Publish WebTTY Agent Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image:
+        description: 'Base image to build from'
+        required: false
+        default: 'docker.io/assistos/ploinky-node:24-bookworm-tools'
+        type: string
+      image_tag:
+        description: 'Docker Hub tag to publish'
+        required: false
+        default: 'node24'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'images/webtty-agent/**'
+      - '.github/workflows/publish-webtty-agent-image.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-webtty-agent-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/webtty-agent
+  DEFAULT_BASE_IMAGE: docker.io/assistos/ploinky-node:24-bookworm-tools
+  DEFAULT_IMAGE_TAG: node24
+
+jobs:
+  publish:
+    name: Build and push Docker Hub image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@v4
+
+      - name: Resolve image inputs
+        id: image
+        run: |
+          set -euo pipefail
+          base_image="${{ github.event.inputs.base_image }}"
+          image_tag="${{ github.event.inputs.image_tag }}"
+          if [ -z "$base_image" ]; then
+            base_image="$DEFAULT_BASE_IMAGE"
+          fi
+          if [ -z "$image_tag" ]; then
+            image_tag="$DEFAULT_IMAGE_TAG"
+          fi
+          echo "base_image=$base_image" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke build local architecture
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg BASE_IMAGE='${{ steps.image.outputs.base_image }}' \
+            -t "$IMAGE_NAME:smoke" \
+            images/webtty-agent
+          docker run --rm "$IMAGE_NAME:smoke" node -e "require('node-pty'); console.log('node-pty ok')"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.image.outputs.image_tag }}
+            type=sha,prefix=${{ steps.image.outputs.image_tag }}-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/webtty-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ steps.image.outputs.base_image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
