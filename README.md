@@ -13,10 +13,10 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/analytics-agent:umami-stack` | this repo | `images/analytics-agent` | `images/analytics-agent/Dockerfile` | `publish-analytics-agent-image.yml` |
-| `assistos/default-local-llm:cpu` | `PloinkyRepos/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
-| `assistos/bwrap-runner:node24-python-bookworm` | `PloinkyRepos/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
-| `assistos/livekit-server-agent:webmeet-infra` | `PloinkyRepos/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
-| `assistos/soul-gateway:node24-sqlite` | `PloinkyRepos/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
+| `assistos/default-local-llm:cpu` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
+| `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
+| `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
+| `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` and build with the Dockerfiles in this repository.

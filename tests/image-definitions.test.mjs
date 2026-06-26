@@ -117,7 +117,7 @@ test('bwrap-runner workflow builds source checkout with centralized Dockerfile',
     const workflow = read('.github/workflows/publish-bwrap-runner.yml');
     const dockerfile = read('images/bwrap-runner/Dockerfile');
 
-    assert.match(workflow, /repository:\s*PloinkyRepos\/basic/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/basic/);
     assert.match(workflow, /path:\s*sources\/basic/);
     assert.match(workflow, /git -C sources\/basic rev-parse --short=12 HEAD/);
     assert.match(workflow, /context:\s*\.\/sources\/basic\/bwrap-runner/);
@@ -136,7 +136,7 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
     const workflow = read('.github/workflows/publish-livekit-server-agent.yml');
     const dockerfile = read('images/livekit-server-agent/Dockerfile');
 
-    assert.match(workflow, /repository:\s*PloinkyRepos\/webmeetInfra/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/webmeetInfra/);
     assert.match(workflow, /path:\s*sources\/webmeetInfra/);
     assert.match(workflow, /git -C sources\/webmeetInfra rev-parse --short=12 HEAD/);
     assert.match(workflow, /context:\s*\.\/sources\/webmeetInfra\/liveKitServerAgent/);
@@ -155,7 +155,7 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     const workflow = read('.github/workflows/publish-soul-gateway-image.yml');
     const dockerfile = read('images/soul-gateway/Dockerfile');
 
-    assert.match(workflow, /repository:\s*PloinkyRepos\/proxies/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/proxies/);
     assert.match(workflow, /path:\s*sources\/proxies/);
     assert.match(workflow, /git -C sources\/proxies rev-parse --short=12 HEAD/);
     assert.match(workflow, /context:\s*\.\/sources\/proxies\/soul-gateway/);

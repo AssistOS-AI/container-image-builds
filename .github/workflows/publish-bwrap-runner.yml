@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'PloinkyRepos/basic ref to build from'
+        description: 'AssistOS-AI/basic ref to build from'
         required: false
         default: 'main'
         type: string
@@ -36,7 +36,7 @@ jobs:
       - name: Checkout basic source
         uses: actions/checkout@v4
         with:
-          repository: PloinkyRepos/basic
+          repository: AssistOS-AI/basic
           ref: ${{ inputs.source_ref || 'main' }}
           path: sources/basic
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
