@@ -87,6 +87,32 @@ test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     assert.match(dockerfile, /\/models\/derived/);
 });
 
+test('analytics-agent workflow builds the all-in-one Umami analytics stack', () => {
+    const workflow = read('.github/workflows/publish-analytics-agent-image.yml');
+    const dockerfile = read('images/analytics-agent/Dockerfile');
+
+    assert.match(workflow, /images\/analytics-agent/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/analytics-agent/);
+    assert.match(workflow, /DEFAULT_IMAGE_TAG:\s*umami-stack/);
+    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /postgres --version/);
+    assert.match(workflow, /bun --version/);
+    assert.match(workflow, /\/opt\/umami-mcp\/dist\/index\.js/);
+
+    assert.match(dockerfile, /^ARG UMAMI_BASE_IMAGE=docker\.umami\.is\/umami-software\/umami:postgresql-latest$/m);
+    assert.match(dockerfile, /\bpostgresql\b/);
+    assert.match(dockerfile, /\bpostgresql-client\b/);
+    assert.match(dockerfile, /\bpostgresql-contrib\b/);
+    assert.match(dockerfile, /\bsu-exec\b/);
+    assert.match(dockerfile, /BUN_INSTALL=\/opt\/bun/);
+    assert.match(dockerfile, /github\.com\/MadsNyl\/umami-mcp\.git/);
+    assert.match(dockerfile, /bun install --frozen-lockfile/);
+    assert.match(dockerfile, /bun run build/);
+});
+
 test('bwrap-runner workflow builds source checkout with centralized Dockerfile', () => {
     const workflow = read('.github/workflows/publish-bwrap-runner.yml');
     const dockerfile = read('images/bwrap-runner/Dockerfile');
