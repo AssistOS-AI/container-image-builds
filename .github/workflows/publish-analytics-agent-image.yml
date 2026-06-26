@@ -1,0 +1,98 @@
+name: Publish Analytics Agent image
+
+on:
+  workflow_dispatch:
+    inputs:
+      umami_base_image:
+        description: 'Umami base image to build from'
+        required: false
+        default: 'docker.umami.is/umami-software/umami:postgresql-latest'
+        type: string
+      image_tag:
+        description: 'Docker Hub tag to publish'
+        required: false
+        default: 'umami-stack'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'images/analytics-agent/**'
+      - '.github/workflows/publish-analytics-agent-image.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-analytics-agent-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/analytics-agent
+  DEFAULT_UMAMI_BASE_IMAGE: docker.umami.is/umami-software/umami:postgresql-latest
+  DEFAULT_IMAGE_TAG: umami-stack
+
+jobs:
+  publish:
+    name: Build and push Docker Hub image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@v4
+
+      - name: Resolve image inputs
+        id: image
+        run: |
+          set -euo pipefail
+          umami_base_image="${{ github.event.inputs.umami_base_image }}"
+          image_tag="${{ github.event.inputs.image_tag }}"
+          if [ -z "$umami_base_image" ]; then
+            umami_base_image="$DEFAULT_UMAMI_BASE_IMAGE"
+          fi
+          if [ -z "$image_tag" ]; then
+            image_tag="$DEFAULT_IMAGE_TAG"
+          fi
+          echo "umami_base_image=$umami_base_image" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke build local architecture
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg UMAMI_BASE_IMAGE='${{ steps.image.outputs.umami_base_image }}' \
+            -t "$IMAGE_NAME:smoke" \
+            images/analytics-agent
+          docker run --rm "$IMAGE_NAME:smoke" sh -c 'node --version && npm --version && postgres --version && bun --version && test -f /app/server.js && test -f /opt/umami-mcp/dist/index.js'
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.image.outputs.image_tag }}
+            type=sha,prefix=${{ steps.image.outputs.image_tag }}-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/analytics-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            UMAMI_BASE_IMAGE=${{ steps.image.outputs.umami_base_image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
