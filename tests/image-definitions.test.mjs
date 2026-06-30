@@ -87,12 +87,12 @@ test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     assert.match(dockerfile, /\/models\/derived/);
 });
 
-test('analytics-agent workflow builds the all-in-one Umami analytics stack', () => {
-    const workflow = read('.github/workflows/publish-analytics-agent-image.yml');
-    const dockerfile = read('images/analytics-agent/Dockerfile');
+test('umami-agent workflow builds the all-in-one Umami stack', () => {
+    const workflow = read('.github/workflows/publish-umami-agent-image.yml');
+    const dockerfile = read('images/umami-agent/Dockerfile');
 
-    assert.match(workflow, /images\/analytics-agent/);
-    assert.match(workflow, /IMAGE_NAME:\s*assistos\/analytics-agent/);
+    assert.match(workflow, /images\/umami-agent/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/umami-agent/);
     assert.match(workflow, /DEFAULT_IMAGE_TAG:\s*umami-stack/);
     assert.match(workflow, /docker\/login-action@v3/);
     assert.match(workflow, /docker\/build-push-action@v6/);

@@ -1,4 +1,4 @@
-name: Publish Analytics Agent image
+name: Publish Umami Agent image
 
 on:
   workflow_dispatch:
@@ -17,18 +17,18 @@ on:
     branches:
       - main
     paths:
-      - 'images/analytics-agent/**'
-      - '.github/workflows/publish-analytics-agent-image.yml'
+      - 'images/umami-agent/**'
+      - '.github/workflows/publish-umami-agent-image.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-analytics-agent-image
+  group: publish-umami-agent-image
   cancel-in-progress: false
 
 env:
-  IMAGE_NAME: assistos/analytics-agent
+  IMAGE_NAME: assistos/umami-agent
   DEFAULT_UMAMI_BASE_IMAGE: docker.umami.is/umami-software/umami:postgresql-latest
   DEFAULT_IMAGE_TAG: umami-stack
 
@@ -61,7 +61,7 @@ jobs:
           docker build \
             --build-arg UMAMI_BASE_IMAGE='${{ steps.image.outputs.umami_base_image }}' \
             -t "$IMAGE_NAME:smoke" \
-            images/analytics-agent
+            images/umami-agent
           docker run --rm "$IMAGE_NAME:smoke" sh -c 'node --version && npm --version && postgres --version && bun --version && test -f /app/server.js && test -f /opt/umami-mcp/dist/index.js'
 
       - name: Set up QEMU
@@ -88,7 +88,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: images/analytics-agent
+          context: images/umami-agent
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
