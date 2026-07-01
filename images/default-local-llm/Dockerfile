@@ -1,12 +1,12 @@
 # default-local-llm image: node (for AgentServer) + llama.cpp llama-server (built
-# from a pinned source tag) + a baked Qwen2.5-1.5B GGUF (offline at runtime).
+# from a pinned source tag) + a baked Qwen2.5-Coder-1.5B GGUF (offline at runtime).
 ARG BASE_IMAGE=docker.io/assistos/ploinky-node:24-bookworm-tools
 FROM ${BASE_IMAGE}
 
-ARG MODEL_REPO=Qwen/Qwen2.5-1.5B-Instruct-GGUF
-ARG MODEL_FILE=qwen2.5-1.5b-instruct-q4_k_m.gguf
+ARG MODEL_REPO=bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF
+ARG MODEL_FILE=Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf
 ARG MODEL_REVISION=main
-ARG LLAMA_CPP_TAG=b4519
+ARG LLAMA_CPP_TAG=b6096
 
 ENV LLAMA_MODEL_PATH=/opt/models/${MODEL_FILE}
 
