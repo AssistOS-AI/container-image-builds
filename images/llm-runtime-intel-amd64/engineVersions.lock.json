@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "imageId": "llm-runtime-intel-amd64",
+  "platform": "linux/amd64",
+  "supportedEngines": [
+    "openvino-model-server",
+    "llamacpp-cpu",
+    "llamacpp-vulkan"
+  ],
+  "lockfilePath": "/opt/ploinky/engineVersions.lock.json",
+  "llamaCppCommit": "a885dcff11a7b73f9377812d6151f6b15d307de0",
+  "openvinoModelServerVersion": "2025.2",
+  "pythonVersion": "3.11"
+}

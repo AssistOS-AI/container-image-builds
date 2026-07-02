@@ -11,7 +11,14 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/ploinky-node:24-bookworm-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
 | `assistos/webtty-agent:node24` | this repo | `images/webtty-agent` | `images/webtty-agent/Dockerfile` | `publish-webtty-agent-image.yml` |
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
-| `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
+| `docker.io/assistos/llm-runtime:cpu-amd64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:cpu-arm64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:nvidia-amd64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-nvidia-amd64/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:nvidia-spark-arm64-sm121` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-nvidia-spark-arm64-sm121/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:amd-rocm-amd64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-amd-rocm-amd64/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:vulkan-amd64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-vulkan-amd64/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:vulkan-arm64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-vulkan-arm64/Dockerfile` | `publish-llm-runtime-images.yml` |
+| `docker.io/assistos/llm-runtime:intel-amd64` | `AssistOS-AI/llm-runtime` | this repo plus `shared/runtime-agent` source checkout | `images/llm-runtime-intel-amd64/Dockerfile` | `publish-llm-runtime-images.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
 | `assistos/default-local-llm:cpu` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
@@ -20,6 +27,47 @@ shared runtime images to the `assistos` Docker Hub organization.
 
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` and build with the Dockerfiles in this repository.
+The `llm-runtime` workflow also checks out `AssistOS-AI/llm-runtime` under
+`sources/llm-runtime` so each runtime image Dockerfile can copy
+`sources/llm-runtime/shared/runtime-agent` into `/opt/ploinky/runtime-agent`.
+
+LLM runtime images publish under one Docker Hub namespace,
+`docker.io/assistos/llm-runtime`, with hardware-specific tags. Each image
+includes the runtime MCP server, `hf`, bash, curl, jq, Python 3, tini,
+inspection utilities, the standard `/workspace/modelLaunchers`, `/models/*`,
+and `/runtime` directories, and `/opt/ploinky/engineVersions.lock.json`. They
+enter through `tini -- node /opt/ploinky/runtime-agent/mcp-server.mjs`;
+engines are selected and launched by runtime requests, not by container boot.
+Every image declares the full runtime env, volume, and expose contract through
+`HF_HOME`, `PLOINKY_MODELS_DIR`, `PLOINKY_DERIVED_DIR`,
+`PLOINKY_RUNTIME_DIR`, `PLOINKY_LAUNCHERS_DIR`,
+`PLOINKY_MCP_PORT=9000`, `PLOINKY_INFERENCE_PORT=8080`,
+`EXPOSE 9000 8080`, and the `/workspace`, `/models`, and `/runtime` volumes.
+
+Every LLM runtime Dockerfile must copy its sibling `engineVersions.lock.json`
+to `/opt/ploinky/engineVersions.lock.json`. The single
+`publish-llm-runtime-images.yml` matrix owns all hardware tags, validates the
+checked-out runtime source for the clean `PLOINKY_LAUNCHERS_DIR`
+`/workspace/modelLaunchers` contract, and smoke-tests the CPU image with mounted
+runtime state by checking the MCP health endpoint, the lockfile, launcher
+directory, Hugging Face CLI, and absence of pre-started engine processes.
+
+| Tag | Engine stack |
+| --- | --- |
+| `cpu-amd64`, `cpu-arm64` | llama.cpp CPU under `/opt/engines/llamacpp` |
+| `nvidia-amd64` | CUDA llama.cpp plus vLLM, SGLang, and TensorRT-LLM virtual environments under `/opt/engines` |
+| `nvidia-spark-arm64-sm121` | sm_121 CUDA llama.cpp plus Spark-targeted SGLang and TensorRT-LLM virtual environments; no vLLM claim |
+| `amd-rocm-amd64` | ROCm llama.cpp plus vLLM/SGLang ROCm environments and Vulkan fallback metadata |
+| `vulkan-amd64`, `vulkan-arm64` | llama.cpp Vulkan with CPU fallback under `/opt/engines/llamacpp` |
+| `intel-amd64` | OpenVINO Model Server under `/opt/engines/openvino` plus llama.cpp CPU/Vulkan support |
+
+Runtime lockfiles use `schemaVersion`, `imageId`, `platform`,
+`supportedEngines`, `lockfilePath`, and only the version pins relevant to the
+installed engines: `llamaCppCommit`, `vllmVersion`, `sglangVersion`,
+`tensorRtLlmVersion`, `openvinoModelServerVersion`, `cudaVersion`,
+`rocmVersion`, `pythonVersion`, `nodeVersion`, and `nodeDistSha256`.
+GPU runtime images install Node.js from official release tarballs and verify
+the tarball SHA256 recorded in the image lockfile.
 
 ## Secrets
 
@@ -54,11 +102,9 @@ gh workflow run publish-onlyoffice-agent-image.yml \
   -f onlyoffice_version=9.3.1 \
   -f image_tag=9.3.1
 
-gh workflow run publish-llm-runtime-cpu-image.yml \
+gh workflow run publish-llm-runtime-images.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f llama_cpp_ref=b6412 \
-  -f image_tag=cpu-arm64-smoke \
-  -f platforms=linux/arm64
+  -f source_ref=main
 
 gh workflow run publish-umami-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -80,7 +126,8 @@ gh workflow run publish-soul-gateway-image.yml \
   -f image_tag=node24-sqlite
 ```
 
-`publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`, and
-`publish-onlyoffice-agent-image.yml` also run on pushes to their image
-definitions or workflow files. The other publish workflows stay manual because
-their build contexts live in separate source repositories.
+`publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`,
+`publish-onlyoffice-agent-image.yml`, and `publish-llm-runtime-images.yml` also
+run on pushes to their image definitions or workflow files. The remaining
+publish workflows stay manual because their build contexts live in separate
+source repositories.

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "imageId": "llm-runtime-nvidia-spark-arm64-sm121",
+  "platform": "linux/arm64",
+  "supportedEngines": [
+    "llamacpp-cuda-sm121",
+    "sglang",
+    "trtllm"
+  ],
+  "lockfilePath": "/opt/ploinky/engineVersions.lock.json",
+  "llamaCppCommit": "a885dcff11a7b73f9377812d6151f6b15d307de0",
+  "sglangVersion": "0.4.6.post1",
+  "tensorRtLlmVersion": "0.20.0",
+  "cudaVersion": "12.8.1",
+  "pythonVersion": "3.12",
+  "nodeVersion": "24.4.1",
+  "nodeDistSha256": "555659c36fc72d0617e278b5d26ffcaebc3760a3de354926b1e5f1b0bfd66083"
+}

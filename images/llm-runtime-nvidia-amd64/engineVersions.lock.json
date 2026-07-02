@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "imageId": "llm-runtime-nvidia-amd64",
+  "platform": "linux/amd64",
+  "supportedEngines": [
+    "llamacpp-cuda",
+    "vllm",
+    "sglang",
+    "trtllm"
+  ],
+  "lockfilePath": "/opt/ploinky/engineVersions.lock.json",
+  "llamaCppCommit": "a885dcff11a7b73f9377812d6151f6b15d307de0",
+  "vllmVersion": "0.10.0",
+  "sglangVersion": "0.4.6.post1",
+  "tensorRtLlmVersion": "0.20.0",
+  "cudaVersion": "12.8.1",
+  "pythonVersion": "3.12",
+  "nodeVersion": "24.4.1",
+  "nodeDistSha256": "7e067b13cd0dc7ee8b239f4ebe1ae54f3bba3a6e904553fcb5f581530eb8306d"
+}

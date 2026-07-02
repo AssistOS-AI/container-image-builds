@@ -1,13 +1,17 @@
+ARG OPENVINO_MODEL_SERVER_VERSION=2025.2
+FROM openvino/model_server:${OPENVINO_MODEL_SERVER_VERSION} AS openvino-model-server
+
 ARG NODE_BASE=node:24-bookworm-slim
 FROM ${NODE_BASE}
 
+ARG OPENVINO_MODEL_SERVER_VERSION=2025.2
 ARG LLAMA_CPP_COMMIT=a885dcff11a7b73f9377812d6151f6b15d307de0
 ARG LLAMA_BUILD_JOBS=1
 ARG HF_HUB_VERSION=0.33.2
 
-LABEL org.assistos.llm-runtime.image-id="llm-runtime-cpu" \
-      org.assistos.llm-runtime.supported-engines="llamacpp-cpu" \
-      org.assistos.llm-runtime.platform="linux/amd64,linux/arm64" \
+LABEL org.assistos.llm-runtime.image-id="llm-runtime-intel-amd64" \
+      org.assistos.llm-runtime.supported-engines="openvino-model-server,llamacpp-cpu,llamacpp-vulkan" \
+      org.assistos.llm-runtime.platform="linux/amd64" \
       org.assistos.llm-runtime.lockfile="/opt/ploinky/engineVersions.lock.json"
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -18,6 +22,9 @@ ENV PLOINKY_RUNTIME_DIR=/runtime
 ENV PLOINKY_LAUNCHERS_DIR=/workspace/modelLaunchers
 ENV PLOINKY_MCP_PORT=9000
 ENV PLOINKY_INFERENCE_PORT=8080
+ENV PATH=/opt/engines/openvino/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/engines/openvino/lib:${LD_LIBRARY_PATH}
+ENV PYTHONPATH=/opt/engines/openvino/lib/python:${PYTHONPATH}
 
 EXPOSE 9000 8080
 VOLUME ["/workspace", "/models", "/runtime"]
@@ -26,16 +33,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
+        clinfo \
         cmake \
         curl \
         file \
         git \
         g++ \
+        glslang-tools \
+        intel-media-va-driver \
         iproute2 \
         jq \
         libcurl4-openssl-dev \
+        libvulkan-dev \
         lsof \
         make \
+        mesa-vulkan-drivers \
         netcat-openbsd \
         pciutils \
         procps \
@@ -44,6 +56,8 @@ RUN apt-get update \
         python3-venv \
         tini \
         usbutils \
+        vainfo \
+        vulkan-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/hf-cli \
@@ -57,6 +71,7 @@ RUN python3 -m venv /opt/hf-cli \
     && ln -s /usr/local/bin/hf /usr/local/bin/huggingface-cli
 
 RUN mkdir -p \
+        /opt/engines/openvino \
         /opt/engines/llamacpp/bin \
         /workspace/modelLaunchers \
         /models/hf-cache \
@@ -64,11 +79,16 @@ RUN mkdir -p \
         /models/derived \
         /runtime
 
+COPY --from=openvino-model-server /ovms /opt/engines/openvino
+RUN ln -s /opt/engines/openvino/bin/ovms /usr/local/bin/ovms \
+    && /opt/engines/openvino/bin/ovms --version
+
 RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/engines/llamacpp/src \
     && git -C /opt/engines/llamacpp/src fetch --depth 1 origin "${LLAMA_CPP_COMMIT}" \
     && git -C /opt/engines/llamacpp/src checkout FETCH_HEAD \
     && cmake -S /opt/engines/llamacpp/src -B /opt/engines/llamacpp/build \
         -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_VULKAN=ON \
         -DGGML_NATIVE=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -76,12 +96,11 @@ RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/engines/l
     && cmake --build /opt/engines/llamacpp/build --target llama-server --config Release -j"${LLAMA_BUILD_JOBS}" \
     && install -m 0755 /opt/engines/llamacpp/build/bin/llama-server /opt/engines/llamacpp/bin/llama-server \
     && ln -s /opt/engines/llamacpp/bin/llama-server /usr/local/bin/llama-server \
-    && find /opt/engines/llamacpp/build/bin -maxdepth 1 -type f -name '*.so*' -exec install -m 0755 {} /usr/local/lib/ \; \
     && ldconfig \
     && rm -rf /opt/engines/llamacpp/src/.git
 
 COPY sources/llm-runtime/shared/runtime-agent/ /opt/ploinky/runtime-agent/
-COPY images/llm-runtime-cpu/engineVersions.lock.json /opt/ploinky/engineVersions.lock.json
+COPY images/llm-runtime-intel-amd64/engineVersions.lock.json /opt/ploinky/engineVersions.lock.json
 
 WORKDIR /opt/ploinky/runtime-agent
 

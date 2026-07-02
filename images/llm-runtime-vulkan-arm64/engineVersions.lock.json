@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "imageId": "llm-runtime-vulkan-arm64",
+  "platform": "linux/arm64",
+  "supportedEngines": [
+    "llamacpp-vulkan",
+    "llamacpp-cpu-fallback"
+  ],
+  "lockfilePath": "/opt/ploinky/engineVersions.lock.json",
+  "llamaCppCommit": "a885dcff11a7b73f9377812d6151f6b15d307de0",
+  "pythonVersion": "3.11"
+}

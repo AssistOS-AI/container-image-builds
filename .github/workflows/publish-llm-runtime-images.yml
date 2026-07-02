@@ -1,0 +1,186 @@
+name: Publish LLM Runtime images
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'AssistOS-AI/llm-runtime ref that provides shared/runtime-agent'
+        required: false
+        default: 'main'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'images/llm-runtime*/**'
+      - '.github/workflows/publish-llm-runtime-images.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-llm-runtime-images
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/llm-runtime
+  DEFAULT_SOURCE_REF: main
+
+jobs:
+  publish:
+    name: Build and push ${{ matrix.tag }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: cpu-amd64
+            image_context: images/llm-runtime-cpu
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - tag: cpu-arm64
+            image_context: images/llm-runtime-cpu
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - tag: nvidia-amd64
+            image_context: images/llm-runtime-nvidia-amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - tag: nvidia-spark-arm64-sm121
+            image_context: images/llm-runtime-nvidia-spark-arm64-sm121
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - tag: amd-rocm-amd64
+            image_context: images/llm-runtime-amd-rocm-amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - tag: vulkan-amd64
+            image_context: images/llm-runtime-vulkan-amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - tag: vulkan-arm64
+            image_context: images/llm-runtime-vulkan-arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - tag: intel-amd64
+            image_context: images/llm-runtime-intel-amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@v4
+
+      - name: Resolve source ref
+        id: source
+        run: |
+          set -euo pipefail
+          source_ref="${{ github.event.inputs.source_ref }}"
+          if [ -z "$source_ref" ]; then
+            source_ref="$DEFAULT_SOURCE_REF"
+          fi
+          echo "ref=$source_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout runtime source
+        uses: actions/checkout@v4
+        with:
+          repository: AssistOS-AI/llm-runtime
+          ref: ${{ steps.source.outputs.ref }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+          path: sources/llm-runtime
+
+      - name: Validate runtime source
+        run: |
+          set -euo pipefail
+          mcp_server=sources/llm-runtime/shared/runtime-agent/mcp-server.mjs
+          runtime_contract=sources/llm-runtime/shared/runtime-agent/lib/runtimeContract.mjs
+          legacy_ploinky_launcher_path="/opt/ploinky"
+          legacy_ploinky_launcher_path="${legacy_ploinky_launcher_path}/launchers"
+          legacy_code_launcher_path="/code"
+          legacy_code_launcher_path="${legacy_code_launcher_path}/launchers"
+          test -f "$mcp_server"
+          test -f "$runtime_contract"
+          grep -q "PLOINKY_LAUNCHERS_DIR" "$runtime_contract"
+          grep -q "/workspace/modelLaunchers" "$runtime_contract"
+          grep -q "/health" "$mcp_server"
+          for runtime_source_file in "$mcp_server" "$runtime_contract"; do
+            if grep -q "${legacy_ploinky_launcher_path}" "$runtime_source_file"; then
+              echo "runtime source uses legacy Ploinky launcher path in $runtime_source_file" >&2
+              exit 1
+            fi
+            if grep -q "${legacy_code_launcher_path}" "$runtime_source_file"; then
+              echo "runtime source uses legacy code launcher path in $runtime_source_file" >&2
+              exit 1
+            fi
+          done
+          test -f "${{ matrix.image_context }}/engineVersions.lock.json"
+
+      - name: Smoke build CPU runtime image
+        if: ${{ matrix.tag == 'cpu-amd64' }}
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "$IMAGE_NAME:cpu-smoke" \
+            -f images/llm-runtime-cpu/Dockerfile \
+            .
+          smoke_dir="$(mktemp -d)"
+          mkdir -p "$smoke_dir/runtime"
+          cat > "$smoke_dir/runtime/selected-architecture.json" <<'JSON'
+          {
+            "schemaVersion": 1,
+            "architecture": {
+              "id": "cpu-amd64",
+              "imageRef": "assistos/llm-runtime:cpu-smoke"
+            }
+          }
+          JSON
+          docker rm -f llm-runtime-cpu-smoke >/dev/null 2>&1 || true
+          trap 'docker rm -f llm-runtime-cpu-smoke >/dev/null 2>&1 || true; rm -rf "$smoke_dir"' EXIT
+          docker run -d --name llm-runtime-cpu-smoke \
+            -v "$smoke_dir/runtime/selected-architecture.json:/runtime/selected-architecture.json:ro" \
+            "$IMAGE_NAME:cpu-smoke"
+          for _ in $(seq 1 30); do
+            if docker exec llm-runtime-cpu-smoke curl -fsS http://127.0.0.1:9000/health >/tmp/llm-runtime-health.json; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec llm-runtime-cpu-smoke curl -fsS http://127.0.0.1:9000/health
+          docker exec llm-runtime-cpu-smoke hf --help >/dev/null
+          docker exec llm-runtime-cpu-smoke test -f /opt/ploinky/engineVersions.lock.json
+          docker exec llm-runtime-cpu-smoke test -f /runtime/selected-architecture.json
+          docker exec llm-runtime-cpu-smoke test -d /workspace/modelLaunchers
+          docker exec llm-runtime-cpu-smoke sh -lc "if pgrep -fa '[l]lama-server|[v]llm|[s]glang|[t]rtllm|[o]vms'; then exit 1; fi"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ matrix.tag }}
+            type=sha,prefix=${{ matrix.tag }}-
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.image_context }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
