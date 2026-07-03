@@ -89,6 +89,7 @@ jobs:
         run: |
           docker run --rm --user podman \
             --device /dev/fuse --security-opt seccomp=unconfined \
+            --security-opt label=disable \
             ploinky-box:verify \
             podman run --rm docker.io/library/alpine echo nested-ok
 
