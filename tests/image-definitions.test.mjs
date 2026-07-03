@@ -228,6 +228,7 @@ test('ploinky-box workflow builds pinned ploinky checkout with nested-podman bas
 
     assert.match(entrypoint, /podman info/);
     assert.match(entrypoint, /\/dev\/net\/tun/);
+    assert.match(entrypoint, /podman rm -af --time 0/);
     assert.match(entrypoint, /exec "\$@"/);
     assert.match(entrypoint, /exec sleep infinity/);
 });

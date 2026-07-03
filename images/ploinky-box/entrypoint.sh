@@ -20,6 +20,12 @@ command -v podman >/dev/null 2>&1 || fail "podman not on PATH"
 podman info >/dev/null 2>&1 \
     || fail "inner podman not functional - check --security-opt seccomp=unconfined, --device /dev/fuse, and subuid mapping"
 
+# Fresh slate: an unclean box stop leaves inner podman with stale "running"
+# containers (dead conmon/rootlessport, PID reuse fools liveness), which stops
+# ploinky from recreating agents on resume. Agent containers are disposable -
+# `ploinky start` recreates them from /workspace/.ploinky state.
+podman rm -af --time 0 >/dev/null 2>&1 || true
+
 echo "[ploinky-box] self-check OK"
 
 if [ "$#" -gt 0 ]; then
