@@ -13,7 +13,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
-| `assistos/default-local-llm:cpu` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
+| `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
@@ -59,6 +59,12 @@ gh workflow run publish-llm-runtime-cpu-image.yml \
   -f llama_cpp_ref=b6412 \
   -f image_tag=cpu-arm64-smoke \
   -f platforms=linux/arm64
+
+gh workflow run publish-default-local-llm-image.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f image_tag=cpu-qwen25-coder-1.5b \
+  -f model_repo=bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF \
+  -f model_file=Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf
 
 gh workflow run publish-umami-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \

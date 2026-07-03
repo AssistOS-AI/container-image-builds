@@ -87,6 +87,29 @@ test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     assert.match(dockerfile, /\/models\/derived/);
 });
 
+test('default-local-llm workflow publishes the Qwen2.5 Coder image as multi-arch', () => {
+    const workflow = read('.github/workflows/publish-default-local-llm-image.yml');
+    const dockerfile = read('images/default-local-llm/Dockerfile');
+
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/default-local-llm/);
+    assert.match(workflow, /default:\s*cpu-qwen25-coder-1\.5b/);
+    assert.match(workflow, /default:\s*bartowski\/Qwen2\.5-Coder-1\.5B-Instruct-GGUF/);
+    assert.match(workflow, /default:\s*Qwen2\.5-Coder-1\.5B-Instruct-Q4_K_M\.gguf/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /push-by-digest=true/);
+    assert.match(workflow, /docker run --rm "docker\.io\/\$\{IMAGE_NAME\}@\$\{\{ steps\.build\.outputs\.digest \}\}"/);
+    assert.match(workflow, /docker buildx imagetools create/);
+    assert.match(workflow, /grep -q 'linux\/amd64'/);
+    assert.match(workflow, /grep -q 'linux\/arm64'/);
+
+    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools$/m);
+    assert.match(dockerfile, /^ARG MODEL_REPO=bartowski\/Qwen2\.5-Coder-1\.5B-Instruct-GGUF$/m);
+    assert.match(dockerfile, /^ARG MODEL_FILE=Qwen2\.5-Coder-1\.5B-Instruct-Q4_K_M\.gguf$/m);
+    assert.match(dockerfile, /GGML_NATIVE=OFF/);
+    assert.match(dockerfile, /llama-server/);
+});
+
 test('umami-agent workflow builds the all-in-one Umami stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');

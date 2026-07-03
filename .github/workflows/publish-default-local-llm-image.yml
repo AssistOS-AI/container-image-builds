@@ -4,21 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Image tag (e.g. cpu)
+        description: Image tag to publish
         required: false
-        default: cpu
+        default: cpu-qwen25-coder-1.5b
+        type: string
       base_image:
         description: Base image
         required: false
         default: docker.io/assistos/ploinky-node:24-bookworm-tools
+        type: string
       model_repo:
         description: HuggingFace GGUF repo
         required: false
-        default: Qwen/Qwen2.5-1.5B-Instruct-GGUF
+        default: bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF
+        type: string
       model_file:
         description: GGUF filename
         required: false
-        default: qwen2.5-1.5b-instruct-q4_k_m.gguf
+        default: Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf
+        type: string
 
 env:
   IMAGE_NAME: assistos/default-local-llm
@@ -27,6 +31,7 @@ jobs:
   build:
     name: Build ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +67,10 @@ jobs:
             MODEL_FILE=${{ inputs.model_file }}
           outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
+
+      - name: Smoke pushed digest
+        run: |
+          docker run --rm "docker.io/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" sh -lc 'node --version && llama-server --version && test -f "$LLAMA_MODEL_PATH"'
 
       - name: Export digest
         env:
@@ -112,4 +121,7 @@ jobs:
       - name: Inspect manifest
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
-        run: docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
+        run: |
+          docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" | tee /tmp/default-local-llm-manifest.txt
+          grep -q 'linux/amd64' /tmp/default-local-llm-manifest.txt
+          grep -q 'linux/arm64' /tmp/default-local-llm-manifest.txt
