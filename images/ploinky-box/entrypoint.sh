@@ -16,6 +16,7 @@ command -v podman >/dev/null 2>&1 || fail "podman not on PATH"
 [ -d /opt/ploinky/node_modules/achillesAgentLib ] || fail "achillesAgentLib missing under /opt/ploinky/node_modules"
 [ -w /workspace ] || fail "/workspace not writable (named-volume ownership problem)"
 [ -e /dev/fuse ] || fail "/dev/fuse not present - run the box with --device /dev/fuse"
+[ -e /dev/net/tun ] || fail "/dev/net/tun not present - run the box with --device /dev/net/tun (slirp4netns agent networking needs it)"
 podman info >/dev/null 2>&1 \
     || fail "inner podman not functional - check --security-opt seccomp=unconfined, --device /dev/fuse, and subuid mapping"
 

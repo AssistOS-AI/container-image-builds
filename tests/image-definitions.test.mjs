@@ -213,7 +213,8 @@ test('ploinky-box workflow builds pinned ploinky checkout with nested-podman bas
     assert.match(workflow, /docker\/build-push-action@v6/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(workflow, /--device \/dev\/fuse --security-opt seccomp=unconfined/);
+    assert.match(workflow, /--device \/dev\/fuse --device \/dev\/net\/tun --security-opt seccomp=unconfined/);
+    assert.match(workflow, /slirp4netns:allow_host_loopback=true/);
     assert.match(workflow, /test -d \/opt\/ploinky\/node_modules\/achillesAgentLib/);
 
     assert.match(dockerfile, /^ARG PODMAN_BASE=quay\.io\/podman\/stable$/m);
@@ -226,6 +227,7 @@ test('ploinky-box workflow builds pinned ploinky checkout with nested-podman bas
     assert.match(dockerfile, /WORKDIR \/workspace/);
 
     assert.match(entrypoint, /podman info/);
+    assert.match(entrypoint, /\/dev\/net\/tun/);
     assert.match(entrypoint, /exec "\$@"/);
     assert.match(entrypoint, /exec sleep infinity/);
 });
