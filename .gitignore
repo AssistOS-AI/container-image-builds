@@ -3,3 +3,6 @@
 .claude
 .agents/
 # <<< ploinky default-skills <<<
+
+# CI/local source checkouts for external-source image builds
+sources/

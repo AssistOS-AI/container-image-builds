@@ -17,9 +17,11 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
+| `assistos/ploinky-box:podman-node24` | `AssistOS-AI/ploinky` | repo root (`sources/ploinky` checkout) | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
-The `bwrap-runner` and `livekit-server-agent` workflows check out their source
-repositories under `sources/` and build with the Dockerfiles in this repository.
+The `bwrap-runner`, `livekit-server-agent`, and `ploinky-box` workflows check out
+their source repositories under `sources/` and build with the Dockerfiles in this
+repository.
 
 ## Secrets
 
@@ -84,6 +86,11 @@ gh workflow run publish-soul-gateway-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f source_ref=main \
   -f image_tag=node24-sqlite
+
+gh workflow run publish-ploinky-box-image.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f source_ref=master \
+  -f image_tag=podman-node24
 ```
 
 `publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`, and

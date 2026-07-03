@@ -196,3 +196,35 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY src \/opt\/soul-gateway\/src/);
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
+
+test('ploinky-box workflow builds pinned ploinky checkout with nested-podman base', () => {
+    const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
+    const dockerfile = read('images/ploinky-box/Dockerfile');
+    const entrypoint = read('images/ploinky-box/entrypoint.sh');
+
+    assert.match(workflow, /repository:\s*AssistOS-AI\/ploinky/);
+    assert.match(workflow, /submodules:\s*true/);
+    assert.match(workflow, /path:\s*sources\/ploinky/);
+    assert.match(workflow, /ref:\s*\$\{\{ inputs\.source_ref \|\| 'master' \}\}/);
+    assert.match(workflow, /git -C sources\/ploinky rev-parse --short=12 HEAD/);
+    assert.match(workflow, /file:\s*\.\/images\/ploinky-box\/Dockerfile/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/ploinky-box/);
+    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /--device \/dev\/fuse --security-opt seccomp=unconfined/);
+    assert.match(workflow, /test -d \/opt\/ploinky\/node_modules\/achillesAgentLib/);
+
+    assert.match(dockerfile, /^ARG PODMAN_BASE=quay\.io\/podman\/stable$/m);
+    assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
+    assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
+    assert.match(dockerfile, /COPY sources\/ploinky \/opt\/ploinky/);
+    assert.match(dockerfile, /npm install --ignore-scripts/);
+    assert.match(dockerfile, /^USER podman$/m);
+    assert.match(dockerfile, /WORKDIR \/workspace/);
+
+    assert.match(entrypoint, /podman info/);
+    assert.match(entrypoint, /exec "\$@"/);
+    assert.match(entrypoint, /exec sleep infinity/);
+});
