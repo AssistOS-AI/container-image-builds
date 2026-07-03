@@ -11,8 +11,10 @@ COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && dnf install -y git \
+    && dnf install -y git slirp4netns \
     && dnf clean all
+# slirp4netns: ploinky pins agent networking to slirp4netns:allow_host_loopback,
+# but podman/stable ships only pasta by default.
 
 # Ploinky baked from the workflow checkout (submodules: true pins achillesAgentLib).
 # --ignore-scripts skips the postinstall that would clone achillesAgentLib master

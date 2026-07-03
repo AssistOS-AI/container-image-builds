@@ -91,7 +91,8 @@ jobs:
             --device /dev/fuse --security-opt seccomp=unconfined \
             --security-opt label=disable \
             ploinky-box:verify \
-            podman run --rm docker.io/library/alpine echo nested-ok
+            podman run --network slirp4netns:allow_host_loopback=true \
+              --rm docker.io/library/alpine echo nested-ok
 
       - name: Build metadata
         id: meta

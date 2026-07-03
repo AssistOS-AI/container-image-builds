@@ -221,6 +221,7 @@ test('ploinky-box workflow builds pinned ploinky checkout with nested-podman bas
     assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
     assert.match(dockerfile, /COPY sources\/ploinky \/opt\/ploinky/);
     assert.match(dockerfile, /npm install --ignore-scripts/);
+    assert.match(dockerfile, /\bslirp4netns\b/);
     assert.match(dockerfile, /^USER podman$/m);
     assert.match(dockerfile, /WORKDIR \/workspace/);
 
