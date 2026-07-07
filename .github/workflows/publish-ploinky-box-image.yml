@@ -42,9 +42,9 @@ jobs:
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Resolve source revision
-        id: source
-        run: echo "sha=$(git -C sources/ploinky rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Resolve build revision
+        id: build_rev
+        run: echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -68,20 +68,84 @@ jobs:
           push: false
           tags: ploinky-box:verify
 
-      - name: Verify image contents
+      - name: Verify image contents (runtime-only, no baked ploinky)
         run: |
           docker run --rm --user podman --entrypoint bash \
-            --device /dev/fuse --device /dev/net/tun --security-opt seccomp=unconfined \
             ploinky-box:verify -lc '
               set -e
               node -v
+              npm -v
+              npx -v
               git --version
               podman --version
-              test -x /opt/ploinky/bin/ploinky
-              test -x /opt/ploinky/bin/p-cli
+              command -v slirp4netns
+              test -f /etc/ploinky-box
+              test -d /opt/ploinky
+              test -z "$(ls -A /opt/ploinky)"
+              test -x /usr/local/bin/ploinky-box-entrypoint
+              echo IMAGE-OK
+            '
+
+      - name: Verify ploinky-box entrypoint self-check
+        run: |
+          entrypoint_deps_volume="ploinky-box-entrypoint-deps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          entrypoint_container="ploinky-box-entrypoint-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker rm -f "$entrypoint_container" >/dev/null 2>&1 || true
+          docker volume rm -f "$entrypoint_deps_volume" >/dev/null 2>&1 || true
+          docker volume create "$entrypoint_deps_volume"
+          trap 'docker rm -f "$entrypoint_container" >/dev/null 2>&1 || true; docker volume rm -f "$entrypoint_deps_volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --user root --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$entrypoint_deps_volume":/opt/ploinky/node_modules \
+            ploinky-box:verify -lc 'chown podman:podman /opt/ploinky/node_modules'
+          docker run -d --name "$entrypoint_container" --user podman \
+            --device /dev/fuse --device /dev/net/tun --security-opt seccomp=unconfined \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$entrypoint_deps_volume":/opt/ploinky/node_modules \
+            ploinky-box:verify
+          for _ in $(seq 1 30); do
+            docker logs "$entrypoint_container" 2>&1 | grep -q 'self-check OK' && break
+            sleep 1
+          done
+          docker logs "$entrypoint_container" | grep -q 'self-check OK'
+
+      - name: Verify mounted-source contract
+        run: |
+          verify_deps_volume="ploinky-box-verify-deps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker volume rm -f "$verify_deps_volume" >/dev/null 2>&1 || true
+          docker volume create "$verify_deps_volume"
+          trap 'docker volume rm -f "$verify_deps_volume" >/dev/null 2>&1 || true' EXIT
+          # docker named volumes start root-owned; mirror the wrapper's fixup
+          docker run --rm --user root --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$verify_deps_volume":/opt/ploinky/node_modules \
+            ploinky-box:verify -lc 'chown podman:podman /opt/ploinky/node_modules'
+          # 1) first ploinky run without deps: non-interactive => decline, warn, exit non-zero
+          set +e
+          out=$(docker run --rm --user podman --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$verify_deps_volume":/opt/ploinky/node_modules \
+            ploinky-box:verify -lc 'ploinky help' 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" -ne 0
+          echo "$out" | grep -q "Ploinky cannot run until dependencies are installed"
+          # 2) explicit install writes only into the deps volume
+          docker run --rm --user podman --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$verify_deps_volume":/opt/ploinky/node_modules \
+            ploinky-box:verify -lc '/opt/ploinky/bin/ploinky-install-deps'
+          # 3) deps landed; ploinky now runs from the mounted source via PATH
+          docker run --rm --user podman --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$verify_deps_volume":/opt/ploinky/node_modules \
+            ploinky-box:verify -lc '
+              set -e
               test -d /opt/ploinky/node_modules/achillesAgentLib
               test -d /opt/ploinky/node_modules/mcp-sdk
-              echo IMAGE-OK
+              ploinky help >/dev/null
+              echo MOUNT-OK
             '
 
       - name: Nested podman check (best effort)
@@ -90,9 +154,23 @@ jobs:
           docker run --rm --user podman \
             --device /dev/fuse --device /dev/net/tun --security-opt seccomp=unconfined \
             --security-opt label=disable \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v /opt/ploinky/node_modules \
             ploinky-box:verify \
             podman run --network slirp4netns:allow_host_loopback=true \
               --rm docker.io/library/alpine echo nested-ok
+
+      - name: WebTTY runtime check (best effort)
+        continue-on-error: true
+        run: |
+          docker run --rm --user podman \
+            --device /dev/fuse --device /dev/net/tun --security-opt seccomp=unconfined \
+            --security-opt label=disable \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v /opt/ploinky/node_modules \
+            ploinky-box:verify \
+            podman run --rm docker.io/assistos/webtty-agent:node24 \
+              node -e "require('node-pty'); console.log('webtty-runtime-ok')"
 
       - name: Build metadata
         id: meta
@@ -101,7 +179,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ env.IMAGE_TAG }}
-            type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.source.outputs.sha }}
+            type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.build_rev.outputs.sha }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

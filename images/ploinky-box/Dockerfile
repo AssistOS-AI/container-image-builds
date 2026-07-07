@@ -16,21 +16,16 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # slirp4netns: ploinky pins agent networking to slirp4netns:allow_host_loopback,
 # but podman/stable ships only pasta by default.
 
-# Ploinky baked from the workflow checkout (submodules: true pins achillesAgentLib).
-# --ignore-scripts skips the postinstall that would clone achillesAgentLib master
-# over the pinned checkout (and would fail: git clone into a non-empty dir errors).
-# npm >= 11 prunes packages not listed in package.json, so the pinned submodule
-# is parked aside during install and restored afterwards.
-COPY sources/ploinky /opt/ploinky
-RUN cd /opt/ploinky \
-    && mv node_modules/achillesAgentLib /tmp/achillesAgentLib-pinned \
-    && npm install --ignore-scripts \
-    && mv /tmp/achillesAgentLib-pinned node_modules/achillesAgentLib \
-    && test -d node_modules/achillesAgentLib \
-    && test -d node_modules/mcp-sdk \
-    && rm -rf .git node_modules/achillesAgentLib/.git \
-    && mkdir -p /workspace /home/podman/.local/share/containers \
-    && chown -R podman:podman /workspace /home/podman/.local/share/containers
+# No baked Ploinky core: the ploinky-box wrapper bind-mounts a host checkout
+# read-only at /opt/ploinky and a writable named volume at
+# /opt/ploinky/node_modules. /opt/ploinky stays an empty mountpoint here.
+# /etc/ploinky-box is the in-box marker: bin/ploinky runs the direct CLI when
+# it exists, and ploinky's agent networking downgrades named podman networks.
+# Agent runtimes (e.g. webtty's node-pty) ship in their own agent images,
+# pulled by the nested podman at run time.
+RUN mkdir -p /opt/ploinky /workspace /home/podman/.local/share/containers \
+    && chown -R podman:podman /workspace /home/podman/.local/share/containers \
+    && echo 'assistos/ploinky-box' > /etc/ploinky-box
 
 ENV PATH=/opt/ploinky/bin:$PATH \
     PLOINKY_WORKSPACE_ROOT=/workspace

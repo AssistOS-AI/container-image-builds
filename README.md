@@ -17,11 +17,19 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:podman-node24` | `AssistOS-AI/ploinky` | repo root (`sources/ploinky` checkout) | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:podman-node24` | runtime-only (Ploinky mounted at run time) | repo root | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
-The `bwrap-runner`, `livekit-server-agent`, and `ploinky-box` workflows check out
-their source repositories under `sources/` and build with the Dockerfiles in this
-repository.
+The `bwrap-runner` and `livekit-server-agent` workflows check out their source
+repositories under `sources/` and build with the Dockerfiles in this
+repository. The `ploinky-box` workflow also checks out `AssistOS-AI/ploinky`
+under `sources/`, but only to verify the image: the image itself bakes no
+Ploinky source. It provides the box runtime (Node 24, npm, git, nested podman,
+slirp4netns, and the `/etc/ploinky-box` marker file that switches `ploinky`
+into its in-box direct mode) and expects the ploinky-box wrapper to bind-mount
+a host ploinky checkout read-only at `/opt/ploinky` with a writable dependency
+volume at `/opt/ploinky/node_modules`. Agent runtimes such as WebTTY's
+node-pty ship in their own agent images (`assistos/webtty-agent`), pulled by
+the nested podman at run time.
 
 ## Secrets
 

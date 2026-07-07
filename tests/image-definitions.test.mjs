@@ -197,16 +197,16 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
 
-test('ploinky-box workflow builds pinned ploinky checkout with nested-podman base', () => {
+test('ploinky-box image is runtime-only; ploinky is mounted, verified via the workflow', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const dockerfile = read('images/ploinky-box/Dockerfile');
     const entrypoint = read('images/ploinky-box/entrypoint.sh');
 
+    // workflow still checks out ploinky, but only to mount it during verification
     assert.match(workflow, /repository:\s*AssistOS-AI\/ploinky/);
     assert.match(workflow, /submodules:\s*true/);
     assert.match(workflow, /path:\s*sources\/ploinky/);
     assert.match(workflow, /ref:\s*\$\{\{ inputs\.source_ref \|\| 'master' \}\}/);
-    assert.match(workflow, /git -C sources\/ploinky rev-parse --short=12 HEAD/);
     assert.match(workflow, /file:\s*\.\/images\/ploinky-box\/Dockerfile/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/ploinky-box/);
     assert.match(workflow, /docker\/login-action@v3/);
@@ -215,20 +215,55 @@ test('ploinky-box workflow builds pinned ploinky checkout with nested-podman bas
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
     assert.match(workflow, /--device \/dev\/fuse --device \/dev\/net\/tun --security-opt seccomp=unconfined/);
     assert.match(workflow, /slirp4netns:allow_host_loopback=true/);
-    assert.match(workflow, /test -d \/opt\/ploinky\/node_modules\/achillesAgentLib/);
+    assert.match(workflow, /name:\s*Verify ploinky-box entrypoint self-check/);
+    assert.match(workflow, /docker logs "\$entrypoint_container" \| grep -q 'self-check OK'/);
+    const entrypointStep = workflow.match(/- name: Verify ploinky-box entrypoint self-check[\s\S]*?\n\n      - name:/)?.[0] || '';
+    assert.ok(entrypointStep, 'entrypoint self-check step is present');
+    assert.doesNotMatch(entrypointStep, /continue-on-error:\s*true/);
+    // mount-contract verification instead of baked-content assertions
+    assert.match(workflow, /sources\/ploinky:\/opt\/ploinky:ro/);
+    assert.match(workflow, /ploinky-install-deps/);
+    assert.match(workflow, /Ploinky cannot run until dependencies are installed/);
+    assert.match(workflow, /npx -v/);
+    assert.match(workflow, /verify_deps_volume=/);
+    assert.match(workflow, /docker volume rm -f "\$verify_deps_volume"/);
+    assert.match(workflow, /test -z "\$\(ls -A \/opt\/ploinky\)"/);
+    assert.match(workflow, /test -f \/etc\/ploinky-box/);
+    assert.match(workflow, /webtty-agent:node24/);
+    // image content no longer depends on the ploinky revision
+    assert.doesNotMatch(workflow, /git -C sources\/ploinky rev-parse/);
+    // no baked-content checks left (the mounted-contract step tests
+    // /opt/ploinky/bin/ploinky-install-deps, never `test -x .../bin/ploinky`)
+    assert.doesNotMatch(workflow, /test -x \/opt\/ploinky\/bin\/ploinky\s/);
+    // the removed env var must not sneak back in
+    assert.doesNotMatch(workflow, /PLOINKY_BOX=/);
 
+    // image bakes runtime tools + the box marker - no ploinky source, no npm install
     assert.match(dockerfile, /^ARG PODMAN_BASE=quay\.io\/podman\/stable$/m);
     assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
     assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
-    assert.match(dockerfile, /COPY sources\/ploinky \/opt\/ploinky/);
-    assert.match(dockerfile, /npm install --ignore-scripts/);
+    assert.match(dockerfile, /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npm-cli\.js \/usr\/local\/bin\/npm/);
+    assert.match(dockerfile, /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npx-cli\.js \/usr\/local\/bin\/npx/);
+    assert.match(dockerfile, /dnf install -y git slirp4netns/);
     assert.match(dockerfile, /\bslirp4netns\b/);
+    assert.match(dockerfile, /mkdir -p \/opt\/ploinky \/workspace/);
+    assert.match(dockerfile, /\/etc\/ploinky-box/);
+    assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\$PATH/m);
+    assert.match(dockerfile, /PLOINKY_WORKSPACE_ROOT=\/workspace/);
     assert.match(dockerfile, /^USER podman$/m);
     assert.match(dockerfile, /WORKDIR \/workspace/);
+    assert.doesNotMatch(dockerfile, /COPY sources\/ploinky/);
+    assert.doesNotMatch(dockerfile, /npm install/);
 
+    // entrypoint validates the mount contract, not baked dependencies
     assert.match(entrypoint, /podman info/);
     assert.match(entrypoint, /\/dev\/net\/tun/);
     assert.match(entrypoint, /podman rm -af --time 0/);
+    assert.match(entrypoint, /ploinky source not mounted/);
+    assert.match(entrypoint, /\/opt\/ploinky\/node_modules/);
+    assert.match(entrypoint, /\/etc\/ploinky-box/);
     assert.match(entrypoint, /exec "\$@"/);
     assert.match(entrypoint, /exec sleep infinity/);
+    assert.doesNotMatch(entrypoint, /achillesAgentLib/);
+    assert.doesNotMatch(entrypoint, /mcp-sdk/);
 });
