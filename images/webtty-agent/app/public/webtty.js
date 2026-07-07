@@ -11,6 +11,8 @@
   const containerName = document.getElementById('containerName');
   const runtime = document.getElementById('runtime');
   const requestedDir = new URLSearchParams(window.location.search).get('dir') || '';
+  const sharedStyles = getComputedStyle(document.documentElement);
+  const terminalFontFamily = sharedStyles.getPropertyValue('--mono-font').trim();
   
   containerName.textContent = body.dataset.container || '-';
   runtime.textContent = body.dataset.runtime || '-';
@@ -22,6 +24,8 @@
 
   function setTheme(t) {
     document.body.setAttribute('data-theme', t);
+    document.documentElement.classList.toggle('theme-dark', t === 'dark');
+    document.documentElement.classList.toggle('theme-light', t !== 'dark');
     localStorage.setItem('webtty_theme', t);
     try {
       term?.setOption('theme', t === 'dark' ? darkTheme : lightTheme);
@@ -31,7 +35,7 @@
   themeToggle.onclick = () => { 
     const cur = getTheme(); 
     setTheme(cur === 'dark' ? 'light' : 'dark'); 
-    location.reload();
+    scheduleResize();
   };
   
   setTheme(getTheme());
@@ -118,7 +122,7 @@
     const WebLinksAddon = window.WebLinksAddon.WebLinksAddon; 
     
     term = new Terminal({ 
-      fontFamily: 'Menlo, Monaco, Consolas, monospace', 
+      fontFamily: terminalFontFamily, 
       fontSize: 13, 
       theme: getTheme() === 'dark' ? darkTheme : lightTheme, 
       cursorBlink: true, 
@@ -155,7 +159,20 @@
     */
   }
   
+  let resizeFrame = 0;
+
+  function scheduleResize() {
+    if (resizeFrame) {
+      cancelAnimationFrame(resizeFrame);
+    }
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      sendResize();
+    });
+  }
+
   function sendResize() { 
+    if (!term || !fitAddon) return;
     try { 
       fitAddon.fit(); 
     } catch(_) {} 
@@ -172,8 +189,9 @@
   }
   
   function bindIO() { 
-    window.addEventListener('resize', sendResize); 
-    setTimeout(sendResize, 120); 
+    window.addEventListener('resize', scheduleResize);
+    window.visualViewport?.addEventListener?.('resize', scheduleResize);
+    setTimeout(scheduleResize, 120); 
     
     term.onData(data => { 
       fetch(`input?tabId=${TAB_ID}`, { 

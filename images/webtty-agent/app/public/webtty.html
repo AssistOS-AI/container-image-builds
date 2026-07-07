@@ -4,58 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ploinky Web TTY</title>
+  <link rel="stylesheet" href="/explorer/shared/ui/ui-common.css" />
   <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
   <link rel="stylesheet" href="assets/webtty.css" />
-  <style>
-    .wa-terminal-container {
-      height: calc(100vh - var(--wa-header-height));
-      background: var(--wa-bg-primary);
-      display: flex;
-      flex-direction: column;
-    }
-    
-    .wa-terminal-info {
-      padding: 8px 16px;
-      background: var(--wa-bg-panel);
-      border-bottom: 1px solid var(--wa-border);
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      font-size: 13px;
-      color: var(--wa-text-secondary);
-    }
-
-    .wa-terminal-footer {
-      padding: 8px 16px;
-      background: var(--wa-bg-panel);
-      border-top: 1px solid var(--wa-border);
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      font-size: 13px;
-      color: var(--wa-text-secondary);
-    }
-    
-    .wa-terminal-info-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    
-    .wa-terminal-info-label {
-      color: var(--wa-text-muted);
-    }
-    
-    #term {
-      flex: 1;
-      padding: 12px;
-      background: #0a0b0d;
-    }
-    
-    body[data-theme="light"] #term {
-      background: #ffffff;
-    }
-  </style>
   <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
   <script src="https://unpkg.com/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
   <script src="https://unpkg.com/xterm-addon-web-links/lib/xterm-addon-web-links.js"></script>
@@ -100,7 +51,7 @@
         <span class="wa-terminal-info-label">Size:</span>
         <span id="size">-</span>
       </div>
-      <div style="margin-left: auto; opacity: 0.7;">
+      <div class="wa-terminal-focus-hint">
         Click terminal to focus
       </div>
     </div>
