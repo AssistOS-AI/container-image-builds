@@ -190,6 +190,7 @@ body {
   align-items: center;
   gap: var(--space-xl);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .wa-terminal-info {
