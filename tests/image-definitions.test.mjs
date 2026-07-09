@@ -65,6 +65,32 @@ test('webtty-agent workflow builds and publishes the node-pty terminal image', (
     assert.match(dockerfile, /\bnode-pty\b/);
 });
 
+test('web-publishing-agent workflow builds the nginx and cloudflared image', () => {
+    const workflow = read('.github/workflows/publish-web-publishing-agent-image.yml');
+    const dockerfile = read('images/web-publishing-agent/Dockerfile');
+
+    assert.match(workflow, /images\/web-publishing-agent/);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/web-publishing-agent/);
+    assert.match(workflow, /DEFAULT_IMAGE_TAG:\s*node24-nginx-cloudflared/);
+    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /nginx -v/);
+    assert.match(workflow, /cloudflared --version/);
+
+    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools$/m);
+    assert.match(dockerfile, /^ARG CLOUDFLARED_IMAGE=docker\.io\/cloudflare\/cloudflared:latest$/m);
+    assert.match(dockerfile, /^FROM \$\{CLOUDFLARED_IMAGE\} AS cloudflared$/m);
+    assert.match(dockerfile, /^FROM \$\{BASE_IMAGE\}$/m);
+    assert.match(dockerfile, /COPY --from=cloudflared \/usr\/local\/bin\/cloudflared \/usr\/local\/bin\/cloudflared/);
+    assert.match(dockerfile, /\bnginx\b/);
+    assert.match(dockerfile, /\bca-certificates\b/);
+    assert.match(dockerfile, /\bopenssl\b/);
+    assert.match(dockerfile, /^USER web-publishing$/m);
+    assert.match(dockerfile, /CMD \["node", "\/code\/runtime\/supervisor\.mjs"\]/);
+});
+
 test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     const workflow = read('.github/workflows/publish-llm-runtime-cpu-image.yml');
     const dockerfile = read('images/llm-runtime-cpu/Dockerfile');
