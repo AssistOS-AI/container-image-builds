@@ -94,7 +94,7 @@ jobs:
             --build-arg BASE_IMAGE='${{ steps.image.outputs.base_image }}' \
             -t "$IMAGE_NAME:smoke" \
             images/web-publishing-agent
-          docker run --rm "$IMAGE_NAME:smoke" sh -lc 'node --version && nginx -v && cloudflared --version'
+          docker run --rm "$IMAGE_NAME:smoke" sh -c 'node --version && nginx -v && cloudflared --version'
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

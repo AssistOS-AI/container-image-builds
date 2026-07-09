@@ -76,6 +76,7 @@ test('web-publishing-agent workflow builds the nginx and cloudflared image', () 
     assert.match(workflow, /docker\/build-push-action@v6/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /docker run --rm "\$IMAGE_NAME:smoke" sh -c 'node --version && nginx -v && cloudflared --version'/);
     assert.match(workflow, /nginx -v/);
     assert.match(workflow, /cloudflared --version/);
 
@@ -84,6 +85,7 @@ test('web-publishing-agent workflow builds the nginx and cloudflared image', () 
     assert.match(dockerfile, /^FROM \$\{CLOUDFLARED_IMAGE\} AS cloudflared$/m);
     assert.match(dockerfile, /^FROM \$\{BASE_IMAGE\}$/m);
     assert.match(dockerfile, /COPY --from=cloudflared \/usr\/local\/bin\/cloudflared \/usr\/local\/bin\/cloudflared/);
+    assert.match(dockerfile, /^ENV PATH=\/usr\/local\/sbin:\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin$/m);
     assert.match(dockerfile, /\bnginx\b/);
     assert.match(dockerfile, /\bca-certificates\b/);
     assert.match(dockerfile, /\bopenssl\b/);

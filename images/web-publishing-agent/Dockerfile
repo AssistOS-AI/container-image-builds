@@ -7,6 +7,7 @@ FROM ${BASE_IMAGE}
 
 USER root
 ENV NODE_ENV=production
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 
