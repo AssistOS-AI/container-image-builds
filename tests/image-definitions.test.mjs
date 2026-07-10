@@ -323,6 +323,102 @@ test('ploinky-box image is runtime-only contract v1', () => {
     assert.doesNotMatch(entrypoint, /mcp-sdk/);
 });
 
+test('ploinky-box workflow publishes immutable runtime v1 after required checks', () => {
+    const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
+
+    assert.match(workflow, /IMAGE_TAG:\s*podman-node24-runtime-v1/);
+    assert.doesNotMatch(workflow, /^\s+image_tag:/m);
+    assert.match(workflow, /Verify immutable tag is unused/);
+    assert.match(workflow, /case "\$status" in/);
+    assert.match(workflow, /404\)/);
+    assert.match(workflow, /200\)/);
+    assert.match(workflow, /unexpected registry status/);
+    assert.doesNotMatch(
+        workflow,
+        /imagetools inspect[^\n]*>[\/]dev\/null 2>&1/,
+    );
+    assert.match(workflow, /io\.assistos\.ploinky\.runtime-contract/);
+    assert.match(workflow, /npx (?:--version|-v)/);
+    assert.match(workflow, /podman version/);
+    assert.match(workflow, /podman info/);
+    assert.match(workflow, /nested-ok/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /tags:\s*type=raw,value=podman-node24-runtime-v1/);
+
+    const entrypointStep = workflow.match(
+        /- name: Verify ploinky-box entrypoint self-check[\s\S]*?(?=\n      - name:)/,
+    )?.[0] || '';
+    assert.ok(entrypointStep);
+    assert.match(entrypointStep, /--privileged/);
+    assert.match(entrypointStep, /sources\/ploinky:\/opt\/ploinky:ro/);
+    assert.match(entrypointStep, /node_modules/);
+
+    const mountedSourceStep = workflow.match(
+        /- name: Verify mounted Ploinky source and dependency volume[\s\S]*?(?=\n      - name:)/,
+    )?.[0] || '';
+    assert.ok(mountedSourceStep);
+    assert.match(mountedSourceStep, /ploinky-install-deps/);
+    assert.match(mountedSourceStep, /achillesAgentLib/);
+    assert.match(mountedSourceStep, /mcp-sdk/);
+    const installerIndex = mountedSourceStep.indexOf('ploinky-install-deps');
+    assert.ok(installerIndex > 0);
+    const beforeInstall = mountedSourceStep.slice(0, installerIndex);
+    const afterInstall = mountedSourceStep.slice(installerIndex);
+    assert.doesNotMatch(beforeInstall, /ploinky help/);
+    assert.match(beforeInstall, /output=\$\(docker run/);
+    assert.match(beforeInstall, /ploinky list agents/);
+    assert.match(beforeInstall, /code=\$\?/);
+    assert.match(beforeInstall, /test "\$code" -ne 0/);
+    assert.match(
+        beforeInstall,
+        /Ploinky cannot run until dependencies are installed/,
+    );
+    assert.match(afterInstall, /ploinky help/);
+    assert.match(afterInstall, /ploinky list agents/);
+
+    const nestedStep = workflow.match(
+        /- name: Nested podman contract check[\s\S]*?(?=\n      - name:)/,
+    )?.[0] || '';
+    assert.ok(nestedStep);
+    assert.match(nestedStep, /--privileged/);
+    assert.match(nestedStep, /docker\.io\/library\/alpine echo nested-ok/);
+    assert.doesNotMatch(nestedStep, /continue-on-error:\s*true/);
+
+    const manifestStep = workflow.match(
+        /- name: Verify published multi-architecture manifest[\s\S]*?(?=\n      - name:|\s*$)/,
+    )?.[0] || '';
+    assert.ok(manifestStep);
+    assert.match(manifestStep, /docker buildx imagetools inspect/);
+    assert.match(manifestStep, /linux\/amd64/);
+    assert.match(manifestStep, /linux\/arm64/);
+
+    const buildAndPushStep = workflow.match(
+        /- name: Build and push[\s\S]*?(?=\n      - name:|\s*$)/,
+    )?.[0] || '';
+    assert.ok(buildAndPushStep);
+    assert.match(
+        buildAndPushStep,
+        /^\s+uses:\s*docker\/build-push-action@v6\s*$/m,
+    );
+    assert.match(buildAndPushStep, /^\s+context:\s*\.\s*$/m);
+    assert.match(
+        buildAndPushStep,
+        /^\s+file:\s*\.\/images\/ploinky-box\/Dockerfile\s*$/m,
+    );
+    assert.match(
+        buildAndPushStep,
+        /^\s+platforms:\s*linux\/amd64,linux\/arm64\s*$/m,
+    );
+    assert.match(buildAndPushStep, /^\s+push:\s*true\s*$/m);
+    assert.match(
+        buildAndPushStep,
+        /^\s+tags:\s*\$\{\{\s*steps\.meta\.outputs\.tags\s*\}\}\s*$/m,
+    );
+    assert.ok(
+        workflow.indexOf(buildAndPushStep) < workflow.indexOf(manifestStep),
+    );
+});
+
 test('ploinky-node does not install a container engine or client', () => {
     const dockerfile = read('images/ploinky-node/Dockerfile');
     const forbiddenTokens = [

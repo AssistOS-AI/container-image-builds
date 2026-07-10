@@ -4,14 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'AssistOS-AI/ploinky ref to build from'
+        description: AssistOS-AI/ploinky ref mounted during verification
         required: false
-        default: 'master'
-        type: string
-      image_tag:
-        description: 'Docker Hub tag to publish'
-        required: false
-        default: 'podman-node24'
+        default: master
         type: string
 
 permissions:
@@ -23,7 +18,7 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/ploinky-box
-  IMAGE_TAG: ${{ inputs.image_tag || 'podman-node24' }}
+  IMAGE_TAG: podman-node24-runtime-v1
 
 jobs:
   publish:
@@ -42,10 +37,6 @@ jobs:
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Resolve source revision
-        id: source
-        run: echo "sha=$(git -C sources/ploinky rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -58,6 +49,40 @@ jobs:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Verify immutable tag is unused
+        run: |
+          token=$(curl --fail --silent --show-error --get \
+            --data-urlencode service=registry.docker.io \
+            --data-urlencode scope="repository:$IMAGE_NAME:pull" \
+            https://auth.docker.io/token | jq -er '.token')
+          body=$(mktemp)
+          trap 'rm -f "$body"' EXIT
+          if ! status=$(curl --silent --show-error \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            --head \
+            --header "Authorization: Bearer $token" \
+            --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://registry-1.docker.io/v2/$IMAGE_NAME/manifests/$IMAGE_TAG"); then
+            echo "Registry query failed; refusing to publish $IMAGE_NAME:$IMAGE_TAG" >&2
+            cat "$body" >&2
+            exit 1
+          fi
+          case "$status" in
+            404)
+              echo "Immutable tag is unused: $IMAGE_NAME:$IMAGE_TAG"
+              ;;
+            200)
+              echo "Refusing to overwrite immutable runtime tag $IMAGE_NAME:$IMAGE_TAG" >&2
+              exit 1
+              ;;
+            *)
+              echo "Refusing to publish after unexpected registry status $status" >&2
+              cat "$body" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Build verification image
         uses: docker/build-push-action@v6
         with:
@@ -68,40 +93,114 @@ jobs:
           push: false
           tags: ploinky-box:verify
 
-      - name: Verify image contents
+      - name: Verify runtime-only image contract
         run: |
+          contract=$(docker image inspect \
+            --format '{{ index .Config.Labels "io.assistos.ploinky.runtime-contract" }}' \
+            ploinky-box:verify)
+          test "$contract" = "1"
+          docker run --rm --entrypoint bash ploinky-box:verify -lc '
+            set -e
+            command -v bash
+            node -v
+            npm -v
+            npx --version
+            git --version
+            podman --version
+            test -f /etc/ploinky-box
+            test -z "$(ls -A /opt/ploinky)"
+            echo IMAGE-OK
+          '
+
+      - name: Verify ploinky-box entrypoint self-check
+        run: |
+          deps_volume="ploinky-box-entrypoint-deps-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          container_name="ploinky-box-entrypoint-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker rm -f "$container_name" >/dev/null 2>&1 || true
+          docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true
+          docker volume create "$deps_volume"
+          trap 'docker rm -f "$container_name" >/dev/null 2>&1 || true; docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --user root --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            ploinky-box:verify -lc 'chown podman:podman /opt/ploinky/node_modules'
+          docker run -d --name "$container_name" --user podman \
+            --privileged \
+            --device /dev/fuse \
+            --device /dev/net/tun \
+            --security-opt seccomp=unconfined \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            ploinky-box:verify
+          for attempt in $(seq 1 30); do
+            if docker logs "$container_name" 2>&1 | grep -q 'self-check OK'; then
+              break
+            fi
+            sleep 1
+          done
+          docker logs "$container_name" 2>&1 | grep -q 'self-check OK'
+
+      - name: Verify mounted Ploinky source and dependency volume
+        run: |
+          deps_volume="ploinky-box-source-deps-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true
+          docker volume create "$deps_volume"
+          trap 'docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --user root --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            ploinky-box:verify -lc 'chown podman:podman /opt/ploinky/node_modules'
+          set +e
+          output=$(docker run --rm --user podman --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            ploinky-box:verify -lc 'ploinky list agents' 2>&1)
+          code=$?
+          set -e
+          echo "$output"
+          test "$code" -ne 0
+          echo "$output" | grep -q 'Ploinky cannot run until dependencies are installed'
           docker run --rm --user podman --entrypoint bash \
-            --device /dev/fuse --device /dev/net/tun --security-opt seccomp=unconfined \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            ploinky-box:verify -lc '/opt/ploinky/bin/ploinky-install-deps'
+          docker run --rm --user podman --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
             ploinky-box:verify -lc '
               set -e
-              node -v
-              git --version
-              podman --version
-              test -x /opt/ploinky/bin/ploinky
-              test -x /opt/ploinky/bin/p-cli
               test -d /opt/ploinky/node_modules/achillesAgentLib
               test -d /opt/ploinky/node_modules/mcp-sdk
-              echo IMAGE-OK
+              ploinky help >/dev/null
+              ploinky list agents >/dev/null
+              echo MOUNT-OK
             '
 
-      - name: Nested podman check (best effort)
-        continue-on-error: true
+      - name: Nested podman contract check
         run: |
           docker run --rm --user podman \
-            --device /dev/fuse --device /dev/net/tun --security-opt seccomp=unconfined \
+            --privileged \
+            --device /dev/fuse \
+            --device /dev/net/tun \
+            --security-opt seccomp=unconfined \
             --security-opt label=disable \
+            --volume "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            --volume /opt/ploinky/node_modules \
             ploinky-box:verify \
-            podman run --network slirp4netns:allow_host_loopback=true \
-              --rm docker.io/library/alpine echo nested-ok
+            bash -lc '
+              set -e
+              podman version
+              podman info
+              podman run --network slirp4netns:allow_host_loopback=true \
+                --rm docker.io/library/alpine echo nested-ok
+            '
 
       - name: Build metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ env.IMAGE_TAG }}
-            type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.source.outputs.sha }}
+          images: assistos/ploinky-box
+          tags: type=raw,value=podman-node24-runtime-v1
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -113,3 +212,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
+
+      - name: Verify published multi-architecture manifest
+        run: |
+          manifest=$(docker buildx imagetools inspect "$IMAGE_NAME:$IMAGE_TAG")
+          echo "$manifest"
+          grep -q 'linux/amd64' <<<"$manifest"
+          grep -q 'linux/arm64' <<<"$manifest"

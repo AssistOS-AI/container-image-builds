@@ -19,11 +19,12 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:podman-node24` | `AssistOS-AI/ploinky` | repo root (`sources/ploinky` checkout) | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:podman-node24-runtime-v1` | this repo; `AssistOS-AI/ploinky` is mounted for verification | repo root; runtime-only, with Ploinky source mounted at `/opt/ploinky`, dependencies mounted at `/opt/ploinky/node_modules`, and runtime contract `1` | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
-The `bwrap-runner`, `livekit-server-agent`, and `ploinky-box` workflows check out
-their source repositories under `sources/` and build with the Dockerfiles in this
-repository.
+The `bwrap-runner` and `livekit-server-agent` workflows check out their source
+repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
+out Ploinky source only for bind-mounted verification; the published runtime
+image remains source-free.
 
 ## Secrets
 
@@ -99,9 +100,12 @@ gh workflow run publish-soul-gateway-image.yml \
 
 gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref=master \
-  -f image_tag=podman-node24
+  -f source_ref=ploinky-box
 ```
+
+`podman-node24-runtime-v1` is immutable. A future incompatible generation must
+use a `runtime-v2` tag, such as `podman-node24-runtime-v2`, together with runtime
+contract value `2`.
 
 `publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`,
 `publish-cloudflared-agent-image.yml`, `publish-web-publishing-agent-image.yml`,
