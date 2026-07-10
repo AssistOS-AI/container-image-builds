@@ -12,6 +12,33 @@ function read(relativePath) {
     return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+function dockerfileInstructions(dockerfile) {
+    const instructions = [];
+    let logicalInstruction = '';
+
+    for (const line of dockerfile.split(/\r?\n/)) {
+        if (!logicalInstruction && /^\s*(?:#.*)?$/.test(line)) {
+            continue;
+        }
+
+        logicalInstruction += logicalInstruction ? `\n${line}` : line;
+        if (/\\\s*$/.test(line)) {
+            continue;
+        }
+
+        const keyword = logicalInstruction.match(/^\s*([A-Za-z]+)\b/)?.[1];
+        if (keyword) {
+            instructions.push({
+                keyword: keyword.toUpperCase(),
+                source: logicalInstruction,
+            });
+        }
+        logicalInstruction = '';
+    }
+
+    return instructions;
+}
+
 test('ploinky-node workflow builds the local image definition', () => {
     const workflow = read('.github/workflows/publish-ploinky-node-image.yml');
     const dockerfile = read('images/ploinky-node/Dockerfile');
@@ -225,38 +252,121 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
 
-test('ploinky-box workflow builds pinned ploinky checkout with nested-podman base', () => {
-    const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
+test('ploinky-box image is runtime-only contract v1', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
     const entrypoint = read('images/ploinky-box/entrypoint.sh');
 
-    assert.match(workflow, /repository:\s*AssistOS-AI\/ploinky/);
-    assert.match(workflow, /submodules:\s*true/);
-    assert.match(workflow, /path:\s*sources\/ploinky/);
-    assert.match(workflow, /ref:\s*\$\{\{ inputs\.source_ref \|\| 'master' \}\}/);
-    assert.match(workflow, /git -C sources\/ploinky rev-parse --short=12 HEAD/);
-    assert.match(workflow, /file:\s*\.\/images\/ploinky-box\/Dockerfile/);
-    assert.match(workflow, /IMAGE_NAME:\s*assistos\/ploinky-box/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
-    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(workflow, /--device \/dev\/fuse --device \/dev\/net\/tun --security-opt seccomp=unconfined/);
-    assert.match(workflow, /slirp4netns:allow_host_loopback=true/);
-    assert.match(workflow, /test -d \/opt\/ploinky\/node_modules\/achillesAgentLib/);
-
     assert.match(dockerfile, /^ARG PODMAN_BASE=quay\.io\/podman\/stable$/m);
-    assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
-    assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
-    assert.match(dockerfile, /COPY sources\/ploinky \/opt\/ploinky/);
-    assert.match(dockerfile, /npm install --ignore-scripts/);
-    assert.match(dockerfile, /\bslirp4netns\b/);
+    assert.match(
+        dockerfile,
+        /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m,
+    );
+    assert.match(
+        dockerfile,
+        /^COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node$/m,
+    );
+    assert.match(
+        dockerfile,
+        /^COPY --from=node-runtime \/usr\/local\/lib\/node_modules \/usr\/local\/lib\/node_modules$/m,
+    );
+    assert.match(
+        dockerfile,
+        /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npm-cli\.js \/usr\/local\/bin\/npm/,
+    );
+    assert.match(
+        dockerfile,
+        /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npx-cli\.js \/usr\/local\/bin\/npx/,
+    );
+    assert.match(dockerfile, /dnf install -y git slirp4netns/);
+    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="1"$/m);
+    assert.match(dockerfile, /mkdir -p \/opt\/ploinky \/workspace/);
+    assert.match(dockerfile, /echo 'assistos\/ploinky-box' > \/etc\/ploinky-box/);
+    assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\$PATH \\$/m);
+    assert.match(dockerfile, /^\s+PLOINKY_WORKSPACE_ROOT=\/workspace$/m);
+    assert.match(
+        dockerfile,
+        /^COPY images\/ploinky-box\/entrypoint\.sh \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
+    );
+    assert.match(
+        dockerfile,
+        /^RUN chmod 0755 \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
+    );
     assert.match(dockerfile, /^USER podman$/m);
-    assert.match(dockerfile, /WORKDIR \/workspace/);
+    assert.match(dockerfile, /^WORKDIR \/workspace$/m);
+    assert.match(
+        dockerfile,
+        /^ENTRYPOINT \["\/usr\/local\/bin\/ploinky-box-entrypoint"\]$/m,
+    );
+    assert.doesNotMatch(dockerfile, /COPY sources\/ploinky/);
+    assert.doesNotMatch(dockerfile, /npm install/);
 
-    assert.match(entrypoint, /podman info/);
-    assert.match(entrypoint, /\/dev\/net\/tun/);
-    assert.match(entrypoint, /podman rm -af --time 0/);
-    assert.match(entrypoint, /exec "\$@"/);
-    assert.match(entrypoint, /exec sleep infinity/);
+    for (const command of ['bash', 'node', 'npm', 'git', 'podman']) {
+        assert.match(
+            entrypoint,
+            new RegExp(
+                '^command -v ' + command + ' >\\/dev\\/null 2>&1 \\|\\| fail "[^"\\n]+"$',
+                'm',
+            ),
+        );
+    }
+    assert.match(entrypoint, /^test -f \/etc\/ploinky-box \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^test -x \/opt\/ploinky\/bin\/ploinky \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^test -d \/opt\/ploinky\/node_modules \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^test -w \/workspace \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^test -e \/dev\/fuse \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^test -e \/dev\/net\/tun \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^podman info >\/dev\/null 2>&1 \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^podman rm -af --time 0 >\/dev\/null 2>&1 \|\| true$/m);
+    assert.match(entrypoint, /^\s+exec "\$@"$/m);
+    assert.match(entrypoint, /^exec sleep infinity$/m);
+    assert.doesNotMatch(entrypoint, /achillesAgentLib/);
+    assert.doesNotMatch(entrypoint, /mcp-sdk/);
+});
+
+test('ploinky-node does not install a container engine or client', () => {
+    const dockerfile = read('images/ploinky-node/Dockerfile');
+    const forbiddenTokens = [
+        'podman',
+        'docker-cli',
+        'docker-ce',
+        'docker-ce-cli',
+        'docker.io',
+        'moby-engine',
+        'moby-cli',
+    ];
+    const forbiddenContainerEngine =
+        /\b(?:podman|docker-cli|docker-ce|docker-ce-cli|docker\.io|moby-engine|moby-cli)\b/i;
+    const runInstructions = dockerfileInstructions(dockerfile)
+        .filter(({ keyword }) => keyword === 'RUN')
+        .map(({ source }) => source)
+        .join('\n');
+
+    assert.doesNotMatch(runInstructions, forbiddenContainerEngine);
+
+    const registryOnlyProbe = [
+        'ARG NODE_BASE=docker.io/library/node:24-bookworm-slim',
+        'FROM docker.io/library/node:24-bookworm-slim',
+    ].join('\n');
+    assert.deepEqual(
+        dockerfileInstructions(registryOnlyProbe).filter(({ keyword }) => keyword === 'RUN'),
+        [],
+    );
+
+    for (const token of forbiddenTokens) {
+        const leadingWhitespaceProbe = dockerfileInstructions(
+            `  RUN apt-get install -y ${token}`,
+        )
+            .filter(({ keyword }) => keyword === 'RUN')
+            .map(({ source }) => source)
+            .join('\n');
+        assert.match(leadingWhitespaceProbe, forbiddenContainerEngine);
+    }
+
+    const continuationProbe = dockerfileInstructions(
+        ['  RUN apt-get update \\', '    && apt-get install -y moby-cli'].join('\n'),
+    )
+        .filter(({ keyword }) => keyword === 'RUN')
+        .map(({ source }) => source)
+        .join('\n');
+    assert.match(continuationProbe, forbiddenContainerEngine);
 });
