@@ -19,12 +19,85 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:podman-node24-runtime-v1` | this repo; `AssistOS-AI/ploinky` is mounted for verification | repo root; runtime-only, with Ploinky source mounted at `/opt/ploinky`, dependencies mounted at `/opt/ploinky/node_modules`, and runtime contract `1` | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:runtime` | this repo; one immutable `AssistOS-AI/ploinky` commit is mounted for verification | repo root; source-free nested-Podman runtime contract `2` | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
 out Ploinky source only for bind-mounted verification; the published runtime
 image remains source-free.
+
+## Ploinky box runtime contract
+
+`docker.io/assistos/ploinky-box:runtime` is the mutable release channel for
+runtime contract 2. The image contains Podman, Node 24, npm/npx, Bash, Git, and
+the rootless networking helpers. Ploinky source is not baked into the image; the
+outer supervisor mounts it read-only at `/opt/ploinky` and mounts writable named
+volumes at `/workspace`, `/opt/ploinky/node_modules`, and
+`/home/podman/.local/share/containers`.
+
+The final image is reconstructed from a prepared Podman filesystem through a
+clean `FROM scratch` stage. Its contract metadata is exact:
+
+| Field | Value |
+| --- | --- |
+| Contract label | `io.assistos.ploinky.runtime-contract=2` |
+| User | `podman` |
+| Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
+| `PATH` | `/opt/ploinky/bin:/usr/local/bin:/usr/bin` |
+| Working directory | `/workspace` |
+| Entrypoint | `/usr/local/bin/ploinky-box-entrypoint` |
+| Default command | Absent or empty |
+| Declared image volumes | Absent or empty |
+
+The entrypoint validates its identity, mounts, devices, helper privileges,
+subordinate UID/GID mappings, and nested Podman before becoming ready. It first
+resets only the Podman user's ephemeral run directories left by the prior outer
+process; persistent container records, images, and volumes remain in the named
+storage volume. On every outer-box boot it then removes running and stopped
+nested containers carrying this exact ownership label:
+
+```text
+io.assistos.ploinky.managed=1
+```
+
+It does not use an all-container selector. Unlabelled containers, labels with
+another value or key, nested images, and nested named volumes remain untouched.
+Enumeration or removal failure stops the entrypoint with a diagnostic instead
+of continuing with ambiguous nested state.
+
+Ordinary Ploinky destroy/recreate preserves the outer nested-storage volume. If
+corrupt nested state prevents boot, inspect and back up that volume before
+manual recovery. Removing it deletes the cached nested images, container
+records, and nested volumes it contains:
+
+```sh
+ENGINE=podman # or docker, matching the owning outer runtime
+INSTANCE=ploinky-box-WORKSPACE-PATHHASH
+
+$ENGINE volume inspect "$INSTANCE-containers"
+$ENGINE rm -f "$INSTANCE" 2>/dev/null || true
+$ENGINE volume rm "$INSTANCE-containers"
+```
+
+The next permitted create reconstructs that one volume. Do not use this as the
+normal destroy path, and do not remove it until its retained data is understood.
+
+## Ploinky box publication
+
+The publication workflow resolves `source_ref` once to a full Ploinky commit
+SHA. Native `linux/amd64` and `linux/arm64` jobs check out that same SHA, push
+untagged candidates by digest, and independently gate exact metadata, mounted
+source/dependency installation, rootless mappings, nested Alpine execution,
+selective cleanup, failure diagnostics, and nested image/volume preservation.
+
+Each job uploads its digest only after every native gate passes. The merge job
+requires exactly two nonempty, distinct digest artifacts before atomically
+moving the sole public tag, `runtime`, to their multiarchitecture manifest. It
+then prints the final manifest digest and verified source SHA. Workflow-level
+concurrency prevents two dispatches from racing the mutable channel.
+
+Publication remains a separately authorized operation. A failed candidate job
+can leave untagged registry content, but it cannot move `:runtime`.
 
 ## Secrets
 
@@ -103,9 +176,11 @@ gh workflow run publish-ploinky-box-image.yml \
   -f source_ref=ploinky-box
 ```
 
-`podman-node24-runtime-v1` is immutable. A future incompatible generation must
-use a `runtime-v2` tag, such as `podman-node24-runtime-v2`, together with runtime
-contract value `2`.
+`runtime` is intentionally mutable, but already-created compatible Ploinky
+boxes stay on their inspected image ID. The channel is consulted only when the
+supervisor creates or intentionally replaces an outer box. Rollback moves
+`runtime` to a previously verified contract-2 manifest digest; it never points
+the channel back to contract 1.
 
 `publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`,
 `publish-cloudflared-agent-image.yml`, `publish-web-publishing-agent-image.yml`,

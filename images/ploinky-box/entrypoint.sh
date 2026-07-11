@@ -1,25 +1,131 @@
 #!/usr/bin/env bash
 set -u
 
+MANAGED_LABEL='io.assistos.ploinky.managed=1'
+
 fail() {
     echo "[ploinky-box] SELF-CHECK FAILED: $1" >&2
     exit 1
 }
 
+require_value() {
+    local name="$1"
+    local expected="$2"
+    local actual="${!name-}"
+    test "$actual" = "$expected" \
+        || fail "$name must be '$expected' (observed '${actual:-<empty>}')"
+}
+
+require_helper_privilege() {
+    local helper="$1"
+    local capability="$2"
+    local path
+    local capabilities
+
+    path="$(command -v "$helper" 2>/dev/null)" \
+        || fail "$helper not on PATH"
+    test "$(stat -c '%u' "$path" 2>/dev/null)" = '0' \
+        || fail "$helper must be owned by root"
+    capabilities="$(getcap "$path" 2>/dev/null || true)"
+    if [[ "$capabilities" == *"${capability}=ep"* ]] \
+        || [[ "$capabilities" == *"${capability}+ep"* ]] \
+        || test -u "$path"; then
+        return
+    fi
+    fail "$helper requires ${capability}=ep file capability or setuid-root"
+}
+
+configured_subid_count() {
+    local file="$1"
+    awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' "$file"
+}
+
+mapped_id_count() {
+    awk '{ total += $3 } END { print total + 0 }'
+}
+
+require_full_mapping() {
+    local kind="$1"
+    local subid_file="/etc/sub${kind}"
+    local proc_file="/proc/self/${kind}_map"
+    local configured
+    local mapping
+    local mapped
+
+    configured="$(configured_subid_count "$subid_file")" \
+        || fail "cannot read $subid_file"
+    test "$configured" -gt 0 \
+        || fail "podman has no configured subordinate ${kind^^} range"
+    mapping="$(podman unshare cat "$proc_file" 2>&1)" \
+        || fail "cannot inspect Podman ${kind^^} mapping: $mapping"
+    mapped="$(printf '%s\n' "$mapping" | mapped_id_count)"
+    test "$mapped" -ge "$((configured + 1))" \
+        || fail "Podman ${kind^^} mapping is degraded (mapped=$mapped configured-subids=$configured)"
+}
+
+reset_ephemeral_podman_runtime() {
+    local uid
+    local path
+
+    uid="$(id -u)"
+    for path in \
+        "/tmp/storage-run-$uid" \
+        "/tmp/podman-run-$uid"; do
+        test -e "$path" || continue
+        rm -rf -- "$path" \
+            || fail "cannot reset stale nested Podman runtime path $path"
+    done
+}
+
+remove_managed_containers() {
+    local managed_ids
+    local id
+    local removal_output
+
+    if ! managed_ids="$(podman ps --all --quiet --filter "label=$MANAGED_LABEL" 2>&1)"; then
+        fail "cannot enumerate Ploinky-managed nested containers: ${managed_ids:-no diagnostic}"
+    fi
+
+    while IFS= read -r id; do
+        test -n "$id" || continue
+        if ! removal_output="$(podman rm --force --time 0 "$id" 2>&1)"; then
+            fail "cannot remove Ploinky-managed nested container $id: ${removal_output:-no diagnostic}"
+        fi
+    done <<< "$managed_ids"
+}
+
 command -v bash >/dev/null 2>&1 || fail "bash not on PATH"
 command -v node >/dev/null 2>&1 || fail "node not on PATH"
 command -v npm >/dev/null 2>&1 || fail "npm not on PATH"
+command -v npx >/dev/null 2>&1 || fail "npx not on PATH"
 command -v git >/dev/null 2>&1 || fail "git not on PATH"
 command -v podman >/dev/null 2>&1 || fail "podman not on PATH"
+test "$(id -un 2>/dev/null)" = 'podman' || fail "process user must be podman"
+require_value USER podman
+require_value HOME /home/podman
+require_value PLOINKY_WORKSPACE_ROOT /workspace
+require_value PLOINKY_DISABLE_HOST_SANDBOX 1
+require_value container oci
+require_value _CONTAINERS_USERNS_CONFIGURED ''
+require_value BUILDAH_ISOLATION chroot
 test -f /etc/ploinky-box || fail "/etc/ploinky-box marker missing"
 test -x /opt/ploinky/bin/ploinky || fail "ploinky source not mounted read-only at /opt/ploinky"
 test -d /opt/ploinky/node_modules || fail "dependency volume not mounted at /opt/ploinky/node_modules"
+test -w /opt/ploinky/node_modules || fail "dependency volume not writable at /opt/ploinky/node_modules"
 test -w /workspace || fail "/workspace not writable"
 test -e /dev/fuse || fail "/dev/fuse not present"
 test -e /dev/net/tun || fail "/dev/net/tun not present"
-podman info >/dev/null 2>&1 || fail "inner podman not functional"
+require_helper_privilege newuidmap cap_setuid
+require_helper_privilege newgidmap cap_setgid
+reset_ephemeral_podman_runtime
+podman version >/dev/null 2>&1 || fail "inner podman version check failed"
+if ! podman_info="$(podman info 2>&1)"; then
+    fail "inner podman not functional: ${podman_info:-no diagnostic}"
+fi
+require_full_mapping uid
+require_full_mapping gid
 
-podman rm -af --time 0 >/dev/null 2>&1 || true
+remove_managed_containers
 echo "[ploinky-box] self-check OK"
 
 if [ "$#" -gt 0 ]; then

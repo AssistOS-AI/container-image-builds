@@ -252,9 +252,11 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
 
-test('ploinky-box image is runtime-only contract v1', () => {
+test('ploinky-box image is a source-free contract-2 scratch runtime', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
     const entrypoint = read('images/ploinky-box/entrypoint.sh');
+    const instructions = dockerfileInstructions(dockerfile);
+    const fromInstructions = instructions.filter(({ keyword }) => keyword === 'FROM');
 
     assert.match(dockerfile, /^ARG PODMAN_BASE=quay\.io\/podman\/stable$/m);
     assert.match(
@@ -277,12 +279,25 @@ test('ploinky-box image is runtime-only contract v1', () => {
         dockerfile,
         /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npx-cli\.js \/usr\/local\/bin\/npx/,
     );
-    assert.match(dockerfile, /dnf install -y git slirp4netns/);
-    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="1"$/m);
-    assert.match(dockerfile, /mkdir -p \/opt\/ploinky \/workspace/);
+    assert.match(dockerfile, /dnf install -y git libcap slirp4netns/);
+    assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
+    assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
+    assert.match(dockerfile, /rpm --setcaps shadow-utils/);
+    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="2"$/m);
+    assert.match(dockerfile, /\/opt\/ploinky\/node_modules/);
     assert.match(dockerfile, /echo 'assistos\/ploinky-box' > \/etc\/ploinky-box/);
-    assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\$PATH \\$/m);
-    assert.match(dockerfile, /^\s+PLOINKY_WORKSPACE_ROOT=\/workspace$/m);
+    assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
+    for (const requiredEnv of [
+        'USER=podman',
+        'HOME=/home/podman',
+        'PLOINKY_WORKSPACE_ROOT=/workspace',
+        'PLOINKY_DISABLE_HOST_SANDBOX=1',
+        'container=oci',
+        '_CONTAINERS_USERNS_CONFIGURED=""',
+        'BUILDAH_ISOLATION=chroot',
+    ]) {
+        assert.ok(dockerfile.includes(requiredEnv), `missing exact ENV ${requiredEnv}`);
+    }
     assert.match(
         dockerfile,
         /^COPY images\/ploinky-box\/entrypoint\.sh \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
@@ -299,8 +314,10 @@ test('ploinky-box image is runtime-only contract v1', () => {
     );
     assert.doesNotMatch(dockerfile, /COPY sources\/ploinky/);
     assert.doesNotMatch(dockerfile, /npm install/);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'VOLUME').length, 0);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 
-    for (const command of ['bash', 'node', 'npm', 'git', 'podman']) {
+    for (const command of ['bash', 'node', 'npm', 'npx', 'git', 'podman']) {
         assert.match(
             entrypoint,
             new RegExp(
@@ -312,111 +329,121 @@ test('ploinky-box image is runtime-only contract v1', () => {
     assert.match(entrypoint, /^test -f \/etc\/ploinky-box \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -x \/opt\/ploinky\/bin\/ploinky \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -d \/opt\/ploinky\/node_modules \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /^test -w \/opt\/ploinky\/node_modules \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -w \/workspace \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -e \/dev\/fuse \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -e \/dev\/net\/tun \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^podman info >\/dev\/null 2>&1 \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^podman rm -af --time 0 >\/dev\/null 2>&1 \|\| true$/m);
+    assert.match(entrypoint, /require_value PLOINKY_DISABLE_HOST_SANDBOX 1/);
+    assert.match(entrypoint, /require_value _CONTAINERS_USERNS_CONFIGURED ''/);
+    assert.match(entrypoint, /require_helper_privilege newuidmap cap_setuid/);
+    assert.match(entrypoint, /require_helper_privilege newgidmap cap_setgid/);
+    assert.match(entrypoint, /reset_ephemeral_podman_runtime/);
+    assert.match(entrypoint, /\/tmp\/storage-run-\$uid/);
+    assert.match(entrypoint, /\/tmp\/podman-run-\$uid/);
+    assert.match(entrypoint, /podman unshare cat "\$proc_file"/);
+    assert.match(entrypoint, /configured \+ 1/);
+    assert.match(entrypoint, /^podman version >\/dev\/null 2>&1 \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /inner podman not functional: \$\{podman_info:-no diagnostic\}/);
+    assert.match(entrypoint, /^MANAGED_LABEL='io\.assistos\.ploinky\.managed=1'$/m);
+    assert.match(
+        entrypoint,
+        /podman ps --all --quiet --filter "label=\$MANAGED_LABEL"/,
+    );
+    assert.match(entrypoint, /podman rm --force --time 0 "\$id"/);
+    assert.match(entrypoint, /cannot enumerate Ploinky-managed nested containers/);
+    assert.match(entrypoint, /cannot remove Ploinky-managed nested container/);
+    assert.doesNotMatch(entrypoint, /podman rm (?:-a|--all|-af)\b/);
+    assert.doesNotMatch(entrypoint, /podman rm[^\n]*--volumes/);
     assert.match(entrypoint, /^\s+exec "\$@"$/m);
     assert.match(entrypoint, /^exec sleep infinity$/m);
     assert.doesNotMatch(entrypoint, /achillesAgentLib/);
     assert.doesNotMatch(entrypoint, /mcp-sdk/);
 });
 
-test('ploinky-box workflow publishes immutable runtime v1 after required checks', () => {
+test('ploinky-box workflow gates native contract-2 digests before moving runtime', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
+    const resolveJob = workflow.match(/\n  resolve-source:[\s\S]*?(?=\n  build:)/)?.[0] || '';
+    const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
+    const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
+    const metadataGate = buildJob.match(
+        /- name: Inspect exact contract-2 metadata and platform[\s\S]*?(?=\n      - name:)/,
+    )?.[0] || '';
 
-    assert.match(workflow, /IMAGE_TAG:\s*podman-node24-runtime-v1/);
+    assert.ok(resolveJob);
+    assert.ok(buildJob);
+    assert.ok(mergeJob);
+    assert.match(workflow, /IMAGE_TAG:\s*runtime/);
+    assert.doesNotMatch(workflow, /podman-node24-runtime-v1/);
     assert.doesNotMatch(workflow, /^\s+image_tag:/m);
-    assert.match(workflow, /Verify immutable tag is unused/);
-    assert.match(workflow, /case "\$status" in/);
-    assert.match(workflow, /404\)/);
-    assert.match(workflow, /200\)/);
-    assert.match(workflow, /unexpected registry status/);
-    assert.doesNotMatch(
-        workflow,
-        /imagetools inspect[^\n]*>[\/]dev\/null 2>&1/,
-    );
-    assert.match(workflow, /io\.assistos\.ploinky\.runtime-contract/);
-    assert.match(workflow, /npx (?:--version|-v)/);
-    assert.match(workflow, /podman version/);
-    assert.match(workflow, /podman info/);
-    assert.match(workflow, /nested-ok/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(workflow, /tags:\s*type=raw,value=podman-node24-runtime-v1/);
+    assert.doesNotMatch(workflow, /Verify immutable tag is unused/);
+    assert.match(resolveJob, /source_sha:\s*\$\{\{ steps\.source\.outputs\.sha \}\}/);
+    assert.match(resolveJob, /git -C sources\/ploinky rev-parse HEAD/);
+    assert.match(buildJob, /ref:\s*\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(buildJob, /platform:\s*linux\/amd64/);
+    assert.match(buildJob, /platform:\s*linux\/arm64/);
+    assert.doesNotMatch(buildJob, /setup-qemu-action/);
+    assert.match(buildJob, /push-by-digest=true/);
+    assert.match(buildJob, /name-canonical=true/);
+    assert.ok(metadataGate);
+    assert.match(metadataGate, /io\.assistos\.ploinky\.runtime-contract/);
+    assert.match(metadataGate, /\(\$env \| length\) == 8/);
+    for (const exactCheck of [
+        '$env.PATH == "/opt/ploinky/bin:/usr/local/bin:/usr/bin"',
+        '$env.USER == "podman"',
+        '$env.HOME == "/home/podman"',
+        '$env.PLOINKY_WORKSPACE_ROOT == "/workspace"',
+        '$env.PLOINKY_DISABLE_HOST_SANDBOX == "1"',
+        '$env.container == "oci"',
+        '$env._CONTAINERS_USERNS_CONFIGURED == ""',
+        '$env.BUILDAH_ISOLATION == "chroot"',
+    ]) {
+        assert.ok(metadataGate.includes(exactCheck), `metadata gate lacks exact check: ${exactCheck}`);
+    }
+    assert.match(metadataGate, /Config\.Cmd == null/);
+    assert.match(metadataGate, /Config\.Volumes == null/);
+    assert.match(buildJob, /ploinky-install-deps/);
+    assert.match(buildJob, /sources\/ploinky:\/opt\/ploinky:ro/);
+    assert.match(buildJob, /podman version/);
+    assert.match(buildJob, /podman info/);
+    assert.match(buildJob, /newuidmap/);
+    assert.match(buildJob, /newgidmap/);
+    assert.match(buildJob, /\/proc\/self\/uid_map/);
+    assert.match(buildJob, /\/proc\/self\/gid_map/);
+    assert.match(buildJob, /docker\.io\/library\/alpine echo nested-ok/);
+    assert.match(buildJob, /managed-running/);
+    assert.match(buildJob, /managed-stopped/);
+    assert.match(buildJob, /manual-running/);
+    assert.match(buildJob, /io\.assistos\.ploinky\.managed=0/);
+    assert.match(buildJob, /io\.assistos\.ploinky\.managed=10/);
+    assert.match(buildJob, /io\.assistos\.ploinky\.managed-extra=1/);
+    assert.match(buildJob, /sentinel-volume/);
+    assert.match(buildJob, /injected managed-container enumeration failure/);
+    assert.match(buildJob, /injected managed-container removal failure/);
+    const descriptorIndex = buildJob.indexOf('Export gated candidate digest');
+    const uploadIndex = buildJob.indexOf('Upload gated candidate digest');
+    assert.ok(descriptorIndex > 0 && descriptorIndex < uploadIndex);
+    assert.match(buildJob, /docker image inspect --format '\{\{\.Os\}\}\/\{\{\.Architecture\}\}'/);
+    assert.match(buildJob, /actions\/upload-artifact@v4/);
 
-    const entrypointStep = workflow.match(
-        /- name: Verify ploinky-box entrypoint self-check[\s\S]*?(?=\n      - name:)/,
-    )?.[0] || '';
-    assert.ok(entrypointStep);
-    assert.match(entrypointStep, /--privileged/);
-    assert.match(entrypointStep, /sources\/ploinky:\/opt\/ploinky:ro/);
-    assert.match(entrypointStep, /node_modules/);
-
-    const mountedSourceStep = workflow.match(
-        /- name: Verify mounted Ploinky source and dependency volume[\s\S]*?(?=\n      - name:)/,
-    )?.[0] || '';
-    assert.ok(mountedSourceStep);
-    assert.match(mountedSourceStep, /ploinky-install-deps/);
-    assert.match(mountedSourceStep, /achillesAgentLib/);
-    assert.match(mountedSourceStep, /mcp-sdk/);
-    const installerIndex = mountedSourceStep.indexOf('ploinky-install-deps');
-    assert.ok(installerIndex > 0);
-    const beforeInstall = mountedSourceStep.slice(0, installerIndex);
-    const afterInstall = mountedSourceStep.slice(installerIndex);
-    assert.doesNotMatch(beforeInstall, /ploinky help/);
-    assert.match(beforeInstall, /output=\$\(docker run/);
-    assert.match(beforeInstall, /ploinky list agents/);
-    assert.match(beforeInstall, /code=\$\?/);
-    assert.match(beforeInstall, /test "\$code" -ne 0/);
-    assert.match(
-        beforeInstall,
-        /Ploinky cannot run until dependencies are installed/,
-    );
-    assert.match(afterInstall, /ploinky help/);
-    assert.match(afterInstall, /ploinky list agents/);
-
-    const nestedStep = workflow.match(
-        /- name: Nested podman contract check[\s\S]*?(?=\n      - name:)/,
-    )?.[0] || '';
-    assert.ok(nestedStep);
-    assert.match(nestedStep, /--privileged/);
-    assert.match(nestedStep, /docker\.io\/library\/alpine echo nested-ok/);
-    assert.doesNotMatch(nestedStep, /continue-on-error:\s*true/);
-
-    const manifestStep = workflow.match(
-        /- name: Verify published multi-architecture manifest[\s\S]*?(?=\n      - name:|\s*$)/,
-    )?.[0] || '';
-    assert.ok(manifestStep);
-    assert.match(manifestStep, /docker buildx imagetools inspect/);
-    assert.match(manifestStep, /linux\/amd64/);
-    assert.match(manifestStep, /linux\/arm64/);
-
-    const buildAndPushStep = workflow.match(
-        /- name: Build and push[\s\S]*?(?=\n      - name:|\s*$)/,
-    )?.[0] || '';
-    assert.ok(buildAndPushStep);
-    assert.match(
-        buildAndPushStep,
-        /^\s+uses:\s*docker\/build-push-action@v6\s*$/m,
-    );
-    assert.match(buildAndPushStep, /^\s+context:\s*\.\s*$/m);
-    assert.match(
-        buildAndPushStep,
-        /^\s+file:\s*\.\/images\/ploinky-box\/Dockerfile\s*$/m,
-    );
-    assert.match(
-        buildAndPushStep,
-        /^\s+platforms:\s*linux\/amd64,linux\/arm64\s*$/m,
-    );
-    assert.match(buildAndPushStep, /^\s+push:\s*true\s*$/m);
-    assert.match(
-        buildAndPushStep,
-        /^\s+tags:\s*\$\{\{\s*steps\.meta\.outputs\.tags\s*\}\}\s*$/m,
-    );
-    assert.ok(
-        workflow.indexOf(buildAndPushStep) < workflow.indexOf(manifestStep),
-    );
+    assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build/);
+    assert.match(mergeJob, /actions\/download-artifact@v4/);
+    assert.match(mergeJob, /test "\$\{#files\[@\]\}" -eq 2/);
+    assert.match(mergeJob, /amd64_file=\/tmp\/ploinky-box-digests\/amd64\.txt/);
+    assert.match(mergeJob, /arm64_file=\/tmp\/ploinky-box-digests\/arm64\.txt/);
+    assert.match(mergeJob, /echo "amd64_digest=\$amd64_digest"/);
+    assert.match(mergeJob, /echo "arm64_digest=\$arm64_digest"/);
+    assert.match(mergeJob, /test "\$amd64_digest" != "\$arm64_digest"/);
+    assert.match(mergeJob, /steps\.candidates\.outputs\.amd64_digest/);
+    assert.match(mergeJob, /steps\.candidates\.outputs\.arm64_digest/);
+    assert.match(mergeJob, /docker buildx imagetools create/);
+    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}/);
+    assert.match(mergeJob, /docker buildx imagetools inspect/);
+    assert.match(mergeJob, /linux\/amd64/);
+    assert.match(mergeJob, /linux\/arm64/);
+    assert.match(mergeJob, /runtime_digest/);
+    assert.doesNotMatch(buildJob, /Move runtime tag/);
 });
 
 test('ploinky-node does not install a container engine or client', () => {

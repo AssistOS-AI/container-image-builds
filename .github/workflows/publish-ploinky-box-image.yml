@@ -18,27 +18,66 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/ploinky-box
-  IMAGE_TAG: podman-node24-runtime-v1
+  IMAGE_TAG: runtime
 
 jobs:
-  publish:
-    name: Build and push Docker Hub image
-    runs-on: ubuntu-latest
+  resolve-source:
+    name: Resolve Ploinky source
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Checkout ploinky source
+      - name: Checkout requested Ploinky source
         uses: actions/checkout@v4
         with:
           repository: AssistOS-AI/ploinky
           ref: ${{ inputs.source_ref || 'master' }}
           path: sources/ploinky
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Record immutable Ploinky commit
+        id: source
+        run: |
+          set -euo pipefail
+          sha=$(git -C sources/ploinky rev-parse HEAD)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Ploinky source: $sha"
+
+  build:
+    name: Build and gate ${{ matrix.platform }}
+    needs: resolve-source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@v4
+
+      - name: Checkout immutable Ploinky source
+        uses: actions/checkout@v4
+        with:
+          repository: AssistOS-AI/ploinky
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          path: sources/ploinky
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Verify Ploinky source commit
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C sources/ploinky rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -49,126 +88,109 @@ jobs:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Verify immutable tag is unused
-        run: |
-          token=$(curl --fail --silent --show-error --get \
-            --data-urlencode service=registry.docker.io \
-            --data-urlencode scope="repository:$IMAGE_NAME:pull" \
-            https://auth.docker.io/token | jq -er '.token')
-          body=$(mktemp)
-          trap 'rm -f "$body"' EXIT
-          if ! status=$(curl --silent --show-error \
-            --output "$body" \
-            --write-out '%{http_code}' \
-            --head \
-            --header "Authorization: Bearer $token" \
-            --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-            "https://registry-1.docker.io/v2/$IMAGE_NAME/manifests/$IMAGE_TAG"); then
-            echo "Registry query failed; refusing to publish $IMAGE_NAME:$IMAGE_TAG" >&2
-            cat "$body" >&2
-            exit 1
-          fi
-          case "$status" in
-            404)
-              echo "Immutable tag is unused: $IMAGE_NAME:$IMAGE_TAG"
-              ;;
-            200)
-              echo "Refusing to overwrite immutable runtime tag $IMAGE_NAME:$IMAGE_TAG" >&2
-              exit 1
-              ;;
-            *)
-              echo "Refusing to publish after unexpected registry status $status" >&2
-              cat "$body" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Build verification image
+      - name: Build and push candidate by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./images/ploinky-box/Dockerfile
-          platforms: linux/amd64
-          load: true
-          push: false
-          tags: ploinky-box:verify
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
 
-      - name: Verify runtime-only image contract
+      - name: Resolve candidate reference
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          contract=$(docker image inspect \
-            --format '{{ index .Config.Labels "io.assistos.ploinky.runtime-contract" }}' \
-            ploinky-box:verify)
-          test "$contract" = "1"
-          docker run --rm --entrypoint bash ploinky-box:verify -lc '
-            set -e
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=docker.io/${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Inspect exact contract-2 metadata and platform
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE_REF"
+          docker image inspect "$IMAGE_REF" > /tmp/ploinky-box-inspect.json
+          jq -e --arg platform "$EXPECTED_PLATFORM" '
+            .[0] as $image
+            | ($image.Config.Env // []
+                | map(split("=") | {(.[0]): (.[1:] | join("="))})
+                | add // {}) as $env
+            | ($image.Os + "/" + $image.Architecture) == $platform
+              and $image.Config.User == "podman"
+              and ($image.Config.Labels["io.assistos.ploinky.runtime-contract"] == "2")
+              and $image.Config.WorkingDir == "/workspace"
+              and $image.Config.Entrypoint == ["/usr/local/bin/ploinky-box-entrypoint"]
+              and (($image.Config.Cmd == null) or ($image.Config.Cmd == []))
+              and (($image.Config.Volumes == null) or (($image.Config.Volumes | length) == 0))
+              and (($env | length) == 8)
+              and $env.PATH == "/opt/ploinky/bin:/usr/local/bin:/usr/bin"
+              and $env.USER == "podman"
+              and $env.HOME == "/home/podman"
+              and $env.PLOINKY_WORKSPACE_ROOT == "/workspace"
+              and $env.PLOINKY_DISABLE_HOST_SANDBOX == "1"
+              and $env.container == "oci"
+              and $env._CONTAINERS_USERNS_CONFIGURED == ""
+              and $env.BUILDAH_ISOLATION == "chroot"
+          ' /tmp/ploinky-box-inspect.json
+
+      - name: Verify source-free runtime filesystem
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint bash "$IMAGE_REF" -c '
+            set -euo pipefail
+            test "$(id -un)" = podman
+            test "$USER" = podman
+            test "$HOME" = /home/podman
+            test "$PLOINKY_WORKSPACE_ROOT" = /workspace
+            test "$PLOINKY_DISABLE_HOST_SANDBOX" = 1
+            test "$container" = oci
+            test "${_CONTAINERS_USERNS_CONFIGURED+x}" = x
+            test -z "$_CONTAINERS_USERNS_CONFIGURED"
+            test "$BUILDAH_ISOLATION" = chroot
+            test "$PATH" = /opt/ploinky/bin:/usr/local/bin:/usr/bin
+            test "$(pwd)" = /workspace
             command -v bash
-            node -v
+            node -v | grep -E "^v24\\."
             npm -v
             npx --version
             git --version
             podman --version
+            getcap /usr/bin/newuidmap
+            getcap /usr/bin/newgidmap
             test -f /etc/ploinky-box
-            test -z "$(ls -A /opt/ploinky)"
+            test -d /opt/ploinky/node_modules
+            test -z "$(ls -A /opt/ploinky/node_modules)"
+            test -z "$(find /opt/ploinky -mindepth 1 -maxdepth 1 ! -name node_modules -print -quit)"
             echo IMAGE-OK
           '
 
-      - name: Verify ploinky-box entrypoint self-check
-        run: |
-          deps_volume="ploinky-box-entrypoint-deps-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          container_name="ploinky-box-entrypoint-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          docker rm -f "$container_name" >/dev/null 2>&1 || true
-          docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true
-          docker volume create "$deps_volume"
-          trap 'docker rm -f "$container_name" >/dev/null 2>&1 || true; docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true' EXIT
-          docker run --rm --user root --entrypoint bash \
-            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
-            -v "$deps_volume:/opt/ploinky/node_modules" \
-            ploinky-box:verify -lc 'chown podman:podman /opt/ploinky/node_modules'
-          docker run -d --name "$container_name" --user podman \
-            --privileged \
-            --device /dev/fuse \
-            --device /dev/net/tun \
-            --security-opt seccomp=unconfined \
-            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
-            -v "$deps_volume:/opt/ploinky/node_modules" \
-            ploinky-box:verify
-          for attempt in $(seq 1 30); do
-            if docker logs "$container_name" 2>&1 | grep -q 'self-check OK'; then
-              break
-            fi
-            sleep 1
-          done
-          docker logs "$container_name" 2>&1 | grep -q 'self-check OK'
-
       - name: Verify mounted Ploinky source and dependency volume
         run: |
-          deps_volume="ploinky-box-source-deps-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true
-          docker volume create "$deps_volume"
-          trap 'docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true' EXIT
+          set -euo pipefail
+          deps_volume="ploinky-box-deps-${{ matrix.arch }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cleanup() {
+            docker volume rm -f "$deps_volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          cleanup
+          docker volume create "$deps_volume" >/dev/null
           docker run --rm --user root --entrypoint bash \
             -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
             -v "$deps_volume:/opt/ploinky/node_modules" \
-            ploinky-box:verify -lc 'chown podman:podman /opt/ploinky/node_modules'
-          set +e
-          output=$(docker run --rm --user podman --entrypoint bash \
-            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
-            -v "$deps_volume:/opt/ploinky/node_modules" \
-            ploinky-box:verify -lc 'ploinky list agents' 2>&1)
-          code=$?
-          set -e
-          echo "$output"
-          test "$code" -ne 0
-          echo "$output" | grep -q 'Ploinky cannot run until dependencies are installed'
+            "$IMAGE_REF" -c 'chown podman:podman /opt/ploinky/node_modules'
           docker run --rm --user podman --entrypoint bash \
             -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
             -v "$deps_volume:/opt/ploinky/node_modules" \
-            ploinky-box:verify -lc '/opt/ploinky/bin/ploinky-install-deps'
-          docker run --rm --user podman --entrypoint bash \
-            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
-            -v "$deps_volume:/opt/ploinky/node_modules" \
-            ploinky-box:verify -lc '
-              set -e
+            "$IMAGE_REF" -c '
+              set -euo pipefail
+              test -x /opt/ploinky/bin/ploinky
+              test -w /opt/ploinky/node_modules
+              test ! -d /opt/ploinky/node_modules/achillesAgentLib
+              /opt/ploinky/bin/ploinky-install-deps
               test -d /opt/ploinky/node_modules/achillesAgentLib
               test -d /opt/ploinky/node_modules/mcp-sdk
               ploinky help >/dev/null
@@ -176,46 +198,308 @@ jobs:
               echo MOUNT-OK
             '
 
-      - name: Nested podman contract check
+      - name: Gate nested Podman and exact-label boot cleanup
         run: |
-          docker run --rm --user podman \
+          set -euo pipefail
+          prefix="ploinky-box-gate-${{ matrix.arch }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          outer="$prefix"
+          workspace_volume="$prefix-workspace"
+          storage_volume="$prefix-containers"
+          deps_volume="$prefix-deps"
+          cleanup() {
+            docker rm -f "$outer" >/dev/null 2>&1 || true
+            docker volume rm -f \
+              "$workspace_volume" "$storage_volume" "$deps_volume" \
+              >/dev/null 2>&1 || true
+          }
+          wait_for_check_count() {
+            local expected="$1"
+            local count state
+            for _ in $(seq 1 60); do
+              count=$(docker logs "$outer" 2>&1 | grep -c 'self-check OK' || true)
+              if test "$count" -ge "$expected"; then
+                return 0
+              fi
+              state=$(docker inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
+              if test "$state" = exited; then
+                docker logs "$outer" >&2
+                return 1
+              fi
+              sleep 1
+            done
+            docker logs "$outer" >&2
+            return 1
+          }
+          trap cleanup EXIT
+          cleanup
+          docker volume create "$workspace_volume" >/dev/null
+          docker volume create "$storage_volume" >/dev/null
+          docker volume create "$deps_volume" >/dev/null
+          docker run --rm --user root --entrypoint bash \
+            -v "$workspace_volume:/workspace" \
+            -v "$storage_volume:/home/podman/.local/share/containers" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            "$IMAGE_REF" -lc '
+              chown podman:podman \
+                /workspace \
+                /home/podman/.local/share/containers \
+                /opt/ploinky/node_modules
+            '
+          docker run -d --name "$outer" --user podman \
             --privileged \
             --device /dev/fuse \
             --device /dev/net/tun \
             --security-opt seccomp=unconfined \
-            --security-opt label=disable \
-            --volume "$PWD/sources/ploinky:/opt/ploinky:ro" \
-            --volume /opt/ploinky/node_modules \
-            ploinky-box:verify \
-            bash -lc '
-              set -e
-              podman version
-              podman info
-              podman run --network slirp4netns:allow_host_loopback=true \
-                --rm docker.io/library/alpine echo nested-ok
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$workspace_volume:/workspace" \
+            -v "$storage_volume:/home/podman/.local/share/containers" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            "$IMAGE_REF" >/dev/null
+          wait_for_check_count 1
+          docker exec "$outer" bash -lc '
+            set -euo pipefail
+            podman version
+            podman info
+            uid_configured=$(awk -F: '\''$1 == "podman" { total += $3 } END { print total + 0 }'\'' /etc/subuid)
+            gid_configured=$(awk -F: '\''$1 == "podman" { total += $3 } END { print total + 0 }'\'' /etc/subgid)
+            uid_mapped=$(podman unshare cat /proc/self/uid_map | awk '\''{ total += $3 } END { print total + 0 }'\'')
+            gid_mapped=$(podman unshare cat /proc/self/gid_map | awk '\''{ total += $3 } END { print total + 0 }'\'')
+            test "$uid_mapped" -ge "$((uid_configured + 1))"
+            test "$gid_mapped" -ge "$((gid_configured + 1))"
+            uid_caps=$(getcap /usr/bin/newuidmap || true)
+            gid_caps=$(getcap /usr/bin/newgidmap || true)
+            { [[ "$uid_caps" == *cap_setuid=ep* ]] || [[ "$uid_caps" == *cap_setuid+ep* ]] || test -u /usr/bin/newuidmap; }
+            { [[ "$gid_caps" == *cap_setgid=ep* ]] || [[ "$gid_caps" == *cap_setgid+ep* ]] || test -u /usr/bin/newgidmap; }
+            podman run --network slirp4netns:allow_host_loopback=true \
+              --rm docker.io/library/alpine echo nested-ok
+            podman run -d --name managed-running \
+              --label io.assistos.ploinky.managed=1 \
+              docker.io/library/alpine sleep 600
+            podman run --name managed-stopped \
+              --label io.assistos.ploinky.managed=1 \
+              docker.io/library/alpine true
+            podman run -d --name manual-running \
+              docker.io/library/alpine sleep 600
+            podman create --name manual-stopped docker.io/library/alpine true
+            podman create --name managed-zero \
+              --label io.assistos.ploinky.managed=0 \
+              docker.io/library/alpine true
+            podman create --name managed-near-value \
+              --label io.assistos.ploinky.managed=10 \
+              docker.io/library/alpine true
+            podman create --name managed-near-key \
+              --label io.assistos.ploinky.managed-extra=1 \
+              docker.io/library/alpine true
+            podman volume create sentinel-volume
+            podman run --rm -v sentinel-volume:/sentinel \
+              docker.io/library/alpine sh -c "echo retained > /sentinel/value"
+          '
+          docker restart "$outer" >/dev/null
+          wait_for_check_count 2
+          docker exec "$outer" bash -lc '
+            set -euo pipefail
+            ! podman container exists managed-running
+            ! podman container exists managed-stopped
+            podman container exists manual-running
+            podman container exists manual-stopped
+            podman container exists managed-zero
+            podman container exists managed-near-value
+            podman container exists managed-near-key
+            podman image exists docker.io/library/alpine
+            podman volume exists sentinel-volume
+            test "$(podman run --rm -v sentinel-volume:/sentinel \
+              docker.io/library/alpine cat /sentinel/value)" = retained
+            echo CLEANUP-OK
+          '
+
+      - name: Gate cleanup enumeration and removal failures
+        run: |
+          set -euo pipefail
+          prefix="ploinky-box-failure-${{ matrix.arch }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          outer="$prefix"
+          workspace_volume="$prefix-workspace"
+          storage_volume="$prefix-containers"
+          deps_volume="$prefix-deps"
+          wrapper_dir="$RUNNER_TEMP/$prefix-wrapper"
+          mode_dir="$RUNNER_TEMP/$prefix-mode"
+          cleanup() {
+            docker rm -f "$outer" >/dev/null 2>&1 || true
+            docker volume rm -f \
+              "$workspace_volume" "$storage_volume" "$deps_volume" \
+              >/dev/null 2>&1 || true
+            rm -rf "$wrapper_dir" "$mode_dir"
+          }
+          wait_for_exit() {
+            local state
+            for _ in $(seq 1 45); do
+              state=$(docker inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
+              test "$state" = exited && return 0
+              sleep 1
+            done
+            docker logs "$outer" >&2
+            return 1
+          }
+          run_outer() {
+            docker run -d --name "$outer" --user podman \
+              --privileged \
+              --device /dev/fuse \
+              --device /dev/net/tun \
+              --security-opt seccomp=unconfined \
+              --env 'PATH=/failure-bin:/opt/ploinky/bin:/usr/local/bin:/usr/bin' \
+              -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+              -v "$workspace_volume:/workspace" \
+              -v "$storage_volume:/home/podman/.local/share/containers" \
+              -v "$deps_volume:/opt/ploinky/node_modules" \
+              -v "$wrapper_dir:/failure-bin:ro" \
+              -v "$mode_dir:/failure-mode:ro" \
+              "$IMAGE_REF" >/dev/null
+          }
+          trap cleanup EXIT
+          cleanup
+          mkdir -p "$wrapper_dir" "$mode_dir"
+          cat > "$wrapper_dir/podman" <<'WRAPPER'
+          #!/usr/bin/env bash
+          set -u
+          mode=$(cat /failure-mode/mode 2>/dev/null || true)
+          if test "$mode" = enumerate && test "${1-}" = ps; then
+            echo 'injected managed-container enumeration failure' >&2
+            exit 86
+          fi
+          if test "$mode" = remove && test "${1-}" = rm; then
+            echo 'injected managed-container removal failure' >&2
+            exit 87
+          fi
+          exec /usr/bin/podman "$@"
+          WRAPPER
+          chmod 0755 "$wrapper_dir/podman"
+          docker volume create "$workspace_volume" >/dev/null
+          docker volume create "$storage_volume" >/dev/null
+          docker volume create "$deps_volume" >/dev/null
+          docker run --rm --user root --entrypoint bash \
+            -v "$workspace_volume:/workspace" \
+            -v "$storage_volume:/home/podman/.local/share/containers" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            "$IMAGE_REF" -lc '
+              chown podman:podman \
+                /workspace \
+                /home/podman/.local/share/containers \
+                /opt/ploinky/node_modules
             '
 
-      - name: Build metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: assistos/ploinky-box
-          tags: type=raw,value=podman-node24-runtime-v1
+          printf '%s\n' enumerate > "$mode_dir/mode"
+          run_outer
+          wait_for_exit
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
+          docker logs "$outer" 2>&1 | grep -q 'cannot enumerate Ploinky-managed nested containers'
+          docker logs "$outer" 2>&1 | grep -q 'injected managed-container enumeration failure'
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./images/ploinky-box/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
+          docker rm -f "$outer" >/dev/null
+          printf '%s\n' normal > "$mode_dir/mode"
+          run_outer
+          for _ in $(seq 1 60); do
+            docker logs "$outer" 2>&1 | grep -q 'self-check OK' && break
+            sleep 1
+          done
+          docker logs "$outer" 2>&1 | grep -q 'self-check OK'
+          docker exec "$outer" /usr/bin/podman run -d --name removal-target \
+            --label io.assistos.ploinky.managed=1 \
+            docker.io/library/alpine sleep 600 >/dev/null
+          printf '%s\n' remove > "$mode_dir/mode"
+          docker restart "$outer" >/dev/null 2>&1 || true
+          wait_for_exit
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
+          docker logs "$outer" 2>&1 | grep -q 'cannot remove Ploinky-managed nested container'
+          docker logs "$outer" 2>&1 | grep -q 'injected managed-container removal failure'
 
-      - name: Verify published multi-architecture manifest
+      - name: Export gated candidate digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          manifest=$(docker buildx imagetools inspect "$IMAGE_NAME:$IMAGE_TAG")
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_REF")" = '${{ matrix.platform }}'
+          mkdir -p /tmp/ploinky-box-digest
+          printf '%s\n' "$DIGEST" > "/tmp/ploinky-box-digest/${{ matrix.arch }}.txt"
+          test -s "/tmp/ploinky-box-digest/${{ matrix.arch }}.txt"
+
+      - name: Upload gated candidate digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ploinky-box-digest-${{ matrix.arch }}
+          path: /tmp/ploinky-box-digest/${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish mutable multiarchitecture runtime
+    needs:
+      - resolve-source
+      - build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download both gated digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/ploinky-box-digests
+          pattern: ploinky-box-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Validate exactly two distinct candidates
+        id: candidates
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find /tmp/ploinky-box-digests -maxdepth 1 -type f -name '*.txt' -print | sort)
+          test "${#files[@]}" -eq 2
+          amd64_file=/tmp/ploinky-box-digests/amd64.txt
+          arm64_file=/tmp/ploinky-box-digests/arm64.txt
+          test "${files[0]}" = "$amd64_file"
+          test "${files[1]}" = "$arm64_file"
+          test -s "$amd64_file"
+          test -s "$arm64_file"
+          IFS= read -r amd64_digest < "$amd64_file"
+          IFS= read -r arm64_digest < "$arm64_file"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$amd64_digest" != "$arm64_digest"
+          echo "amd64_digest=$amd64_digest" >> "$GITHUB_OUTPUT"
+          echo "arm64_digest=$arm64_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Move runtime tag to gated manifest
+        env:
+          AMD64_DIGEST: ${{ steps.candidates.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidates.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
+            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+
+      - name: Inspect final runtime manifest and print digest
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          manifest=$(docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}")
           echo "$manifest"
-          grep -q 'linux/amd64' <<<"$manifest"
-          grep -q 'linux/arm64' <<<"$manifest"
+          grep -q 'linux/amd64' <<< "$manifest"
+          grep -q 'linux/arm64' <<< "$manifest"
+          runtime_digest=$(awk '$1 == "Digest:" { print $2; exit }' <<< "$manifest")
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "Published docker.io/${IMAGE_NAME}:${IMAGE_TAG} at $runtime_digest"
+          {
+            echo '### ploinky-box runtime publication'
+            echo
+            echo "- Manifest: \`docker.io/${IMAGE_NAME}:${IMAGE_TAG}@${runtime_digest}\`"
+            echo "- Verified Ploinky source: \`${SOURCE_SHA}\`"
+            echo '- Platforms: `linux/amd64`, `linux/arm64`'
+          } >> "$GITHUB_STEP_SUMMARY"
