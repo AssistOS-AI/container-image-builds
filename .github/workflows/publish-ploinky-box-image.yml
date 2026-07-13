@@ -217,7 +217,7 @@ jobs:
           storage_volume="$prefix-containers"
           deps_volume="$prefix-deps"
           cleanup() {
-            podman rm -f "$outer" >/dev/null 2>&1 || true
+            podman rm -f --time 0 "$outer" >/dev/null 2>&1 || true
             podman volume rm -f \
               "$workspace_volume" "$storage_volume" "$deps_volume" \
               >/dev/null 2>&1 || true
@@ -240,9 +240,10 @@ jobs:
             podman logs "$outer" >&2
             return 1
           }
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman pull "$IMAGE_REF"
           trap cleanup EXIT
           cleanup
-          podman pull "$IMAGE_REF" >/dev/null
           podman volume create "$workspace_volume" >/dev/null
           podman volume create "$storage_volume" >/dev/null
           podman volume create "$deps_volume" >/dev/null
@@ -336,7 +337,7 @@ jobs:
           wrapper_dir="$RUNNER_TEMP/$prefix-wrapper"
           mode_dir="$RUNNER_TEMP/$prefix-mode"
           cleanup() {
-            podman rm -f "$outer" >/dev/null 2>&1 || true
+            podman rm -f --time 0 "$outer" >/dev/null 2>&1 || true
             podman volume rm -f \
               "$workspace_volume" "$storage_volume" "$deps_volume" \
               >/dev/null 2>&1 || true
@@ -366,6 +367,8 @@ jobs:
               -v "$mode_dir:/failure-mode:ro" \
               "$IMAGE_REF" >/dev/null
           }
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman pull "$IMAGE_REF"
           trap cleanup EXIT
           cleanup
           mkdir -p "$wrapper_dir" "$mode_dir"
@@ -384,7 +387,6 @@ jobs:
           exec /usr/bin/podman "$@"
           WRAPPER
           chmod 0755 "$wrapper_dir/podman"
-          podman pull "$IMAGE_REF" >/dev/null
           podman volume create "$workspace_volume" >/dev/null
           podman volume create "$storage_volume" >/dev/null
           podman volume create "$deps_volume" >/dev/null
@@ -406,7 +408,7 @@ jobs:
           podman logs "$outer" 2>&1 | grep -q 'cannot enumerate Ploinky-managed nested containers'
           podman logs "$outer" 2>&1 | grep -q 'injected managed-container enumeration failure'
 
-          podman rm -f "$outer" >/dev/null
+          podman rm -f --time 0 "$outer" >/dev/null
           printf '%s\n' normal > "$mode_dir/mode"
           run_outer
           for _ in $(seq 1 60); do
@@ -440,7 +442,6 @@ jobs:
         with:
           name: ploinky-box-digest-${{ matrix.arch }}
           path: /tmp/ploinky-box-digest/${{ matrix.arch }}.txt
-          if-no-files-found: error
           retention-days: 1
 
   merge:

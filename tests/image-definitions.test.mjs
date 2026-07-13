@@ -531,6 +531,7 @@ test('ploinky-box workflow gates native contract-3 digests before moving runtime
     assert.match(buildJob, /name-canonical=true/);
     assert.ok(metadataGate);
     assert.match(metadataGate, /io\.assistos\.ploinky\.runtime-contract/);
+    assert.match(metadataGate, /runtime-contract"\] == "3"/);
     assert.match(metadataGate, /\(\$env \| length\) == 8/);
     for (const exactCheck of [
         '$env.PATH == "/opt/ploinky/bin:/usr/local/bin:/usr/bin"',
@@ -550,6 +551,13 @@ test('ploinky-box workflow gates native contract-3 digests before moving runtime
     assert.match(buildJob, /sources\/ploinky:\/opt\/ploinky:ro/);
     assert.match(buildJob, /podman version/);
     assert.match(buildJob, /podman info/);
+    assert.match(buildJob, /Host\.Security\.Rootless/);
+    assert.match(buildJob, /--user podman/);
+    assert.match(buildJob, /--device \/dev\/fuse/);
+    assert.match(buildJob, /--device \/dev\/net\/tun/);
+    assert.match(buildJob, /--security-opt unmask=ALL/);
+    assert.doesNotMatch(buildJob, /--privileged/);
+    assert.doesNotMatch(buildJob, /seccomp=unconfined/);
     assert.match(buildJob, /newuidmap/);
     assert.match(buildJob, /newgidmap/);
     assert.match(buildJob, /\/proc\/self\/uid_map/);
