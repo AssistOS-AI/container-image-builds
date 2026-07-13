@@ -18,6 +18,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
+| `assistos/ploinky-network-gateway:1` | this repo | `images/ploinky-network-gateway` | `images/ploinky-network-gateway/Dockerfile` | `publish-ploinky-network-gateway.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:runtime` | this repo; one immutable `AssistOS-AI/ploinky` commit is mounted for verification | repo root; source-free nested-Podman runtime contract `2` | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
@@ -26,10 +27,60 @@ repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
 out Ploinky source only for bind-mounted verification; the published runtime
 image remains source-free.
 
+The LiveKit workflow accepts only the exact 40-character commit SHA at the
+current tip of `webmeetInfra/ploinky-box`. It builds and smoke-tests the local
+architecture before authenticating and publishing the multiarchitecture image.
+Its three base images are pinned by manifest-list digest, and Ubuntu package
+resolution is pinned to a dated repository snapshot with exact direct-package
+versions. The pinned `libc-bin` package and both build-time and workflow smoke
+gates guarantee that the startup script's `getent` dependency is present.
+The workflow also verifies that LiveKit API credentials and the shared TURN
+credential are declared `sharedGeneratedSecret: true` and `runtime: false` in
+the checked-out manifests. Ploinky therefore keeps them out of OCI
+`Config.Env`; the image-level entrypoint scrub remains defense in depth for
+non-Ploinky callers.
+
+The Web Publishing image likewise pins its Ploinky Node base and cloudflared
+source by multiarchitecture manifest digest. Its Nginx, CA certificates, and
+OpenSSL packages resolve at exact versions from a dated Debian Bookworm
+snapshot. Manual source-image overrides must use a complete
+`tag@sha256:<64-lowercase-hex>` reference; tag-only and malformed inputs fail
+before the smoke build or registry login. The workflow also inspects each
+resolved index and requires both `linux/amd64` and `linux/arm64` entries.
+
+The LiveKit and Web Publishing workflows keep their stable release tags and
+also expose the pushed multiarchitecture manifest digest as the `publish` job's
+`digest` output. Each workflow validates that build output as an exact sha256
+digest and writes the resulting `docker.io/assistos/...@sha256:...` reference
+to both the log and GitHub job summary. Publishing and pinning consumer
+manifests remain separate authorized operations.
+
+## Ploinky network gateway contract
+
+`docker.io/assistos/ploinky-network-gateway:1` is a generic, source-free
+runtime helper for managed Ploinky bridges. Its statically linked binary
+listens on IPv4 TCP port `8080` and proxies raw bytes to the one fixed Unix
+socket path `/run/ploinky/router.sock`. Ploinky mounts the workspace-owned
+`.ploinky/run/router.sock` at that destination. The binary accepts no command
+arguments, reads no destination environment variable, performs no HTTP or
+agent processing, and cannot select another target.
+
+The final image is `FROM scratch`, runs as numeric non-root user
+`65532:65532`, declares no volumes, command, or environment. Ploinky launches
+it with a read-only root filesystem, all capabilities dropped,
+`no-new-privileges`, a private `/tmp` tmpfs, and
+`net.ipv4.ip_forward=0`. The router socket is its only bind mount; workspace
+directories and Docker or Podman sockets are forbidden. The publication
+workflow smoke-tests that runtime shape and the byte-for-byte TCP-to-Unix
+path before publishing `linux/amd64` and `linux/arm64`, then reports the final
+manifest digest for immutable Ploinky pinning. Publication remains a separate
+authorized operation. On an enforcing SELinux Podman host, Ploinky may add
+`label=disable` after its engine probe; it is omitted elsewhere.
+
 ## Ploinky box runtime contract
 
 `docker.io/assistos/ploinky-box:runtime` is the mutable release channel for
-runtime contract 2. The image contains Podman, Node 24, npm/npx, Bash, Git, and
+runtime contract 3. The image contains Podman, Node 24, npm/npx, Bash, Git, and
 the rootless networking helpers. Ploinky source is not baked into the image; the
 outer supervisor mounts it read-only at `/opt/ploinky` and mounts writable named
 volumes at `/workspace`, `/opt/ploinky/node_modules`, and
@@ -40,7 +91,7 @@ clean `FROM scratch` stage. Its contract metadata is exact:
 
 | Field | Value |
 | --- | --- |
-| Contract label | `io.assistos.ploinky.runtime-contract=2` |
+| Contract label | `io.assistos.ploinky.runtime-contract=3` |
 | User | `podman` |
 | Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
 | `PATH` | `/opt/ploinky/bin:/usr/local/bin:/usr/bin` |
@@ -50,7 +101,9 @@ clean `FROM scratch` stage. Its contract metadata is exact:
 | Declared image volumes | Absent or empty |
 
 The entrypoint validates its identity, mounts, devices, helper privileges,
-subordinate UID/GID mappings, and nested Podman before becoming ready. It first
+inner Podman's rootless state, exactly 65,534 subordinate UIDs/GIDs, and exact
+65,535-ID active mappings before becoming ready. The mapping covers inner root
+plus UIDs/GIDs through 65,534, including Coturn's fixed UID. It first
 resets only the Podman user's ephemeral run directories left by the prior outer
 process; persistent container records, images, and volumes remain in the named
 storage volume. On every outer-box boot it then removes running and stopped
@@ -71,7 +124,7 @@ manual recovery. Removing it deletes the cached nested images, container
 records, and nested volumes it contains:
 
 ```sh
-ENGINE=podman # or docker, matching the owning outer runtime
+ENGINE=podman # contract 3 requires a rootless outer Podman engine
 INSTANCE=ploinky-box-WORKSPACE-PATHHASH
 
 $ENGINE volume inspect "$INSTANCE-containers"
@@ -87,8 +140,13 @@ normal destroy path, and do not remove it until its retained data is understood.
 The publication workflow resolves `source_ref` once to a full Ploinky commit
 SHA. Native `linux/amd64` and `linux/arm64` jobs check out that same SHA, push
 untagged candidates by digest, and independently gate exact metadata, mounted
-source/dependency installation, rootless mappings, nested Alpine execution,
+source/dependency installation, a rootless outer Podman launch, exact full
+inner mappings, nested Alpine execution,
 selective cleanup, failure diagnostics, and nested image/volume preservation.
+The runtime gates use only `--user podman`, `/dev/fuse`, `/dev/net/tun`, and
+`--security-opt unmask=ALL`. They do not use privilege, added capabilities, or
+an unconfined seccomp profile. Ploinky adds `label=disable` only when an SELinux
+host requires it.
 
 Each job uploads its digest only after every native gate passes. The merge job
 requires exactly two nonempty, distinct digest artifacts before atomically
@@ -163,8 +221,12 @@ gh workflow run publish-bwrap-runner.yml \
 
 gh workflow run publish-livekit-server-agent.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref=main \
+  -f source_ref="$(git -C ../webmeetInfra rev-parse HEAD)" \
   -f image_tag=webmeet-infra
+
+gh workflow run publish-ploinky-network-gateway.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f image_tag=1
 
 gh workflow run publish-soul-gateway-image.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -178,9 +240,9 @@ gh workflow run publish-ploinky-box-image.yml \
 
 `runtime` is intentionally mutable, but already-created compatible Ploinky
 boxes stay on their inspected image ID. The channel is consulted only when the
-supervisor creates or intentionally replaces an outer box. Rollback moves
-`runtime` to a previously verified contract-2 manifest digest; it never points
-the channel back to contract 1.
+supervisor creates or intentionally replaces an outer box. Contract-2 boxes
+are never reused. Rollback moves `runtime` only to a previously verified
+contract-3 manifest digest; it never points the channel to an older contract.
 
 `publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`,
 `publish-cloudflared-agent-image.yml`, `publish-web-publishing-agent-image.yml`,

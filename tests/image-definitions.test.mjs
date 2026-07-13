@@ -100,15 +100,26 @@ test('web-publishing-agent workflow builds the nginx and cloudflared image', () 
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/web-publishing-agent/);
     assert.match(workflow, /DEFAULT_IMAGE_TAG:\s*node24-nginx-cloudflared/);
     assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /- name: Build and push\s+id: build\s+uses: docker\/build-push-action@v6/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
     assert.match(workflow, /docker run --rm "\$IMAGE_NAME:smoke" sh -c 'node --version && nginx -v && cloudflared --version'/);
     assert.match(workflow, /nginx -v/);
     assert.match(workflow, /cloudflared --version/);
 
-    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools$/m);
-    assert.match(dockerfile, /^ARG CLOUDFLARED_IMAGE=docker\.io\/cloudflare\/cloudflared:latest$/m);
+    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}$/m);
+    assert.match(dockerfile, /^ARG CLOUDFLARED_IMAGE=docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:[0-9a-f]{64}$/m);
+    assert.match(workflow, /default: 'docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:[0-9a-f]{64}'/);
+    assert.match(workflow, /default: 'docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}'/);
+    assert.match(workflow, /DEFAULT_CLOUDFLARED_IMAGE:\s*docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:[0-9a-f]{64}/);
+    assert.match(workflow, /DEFAULT_BASE_IMAGE:\s*docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}/);
+    assert.match(workflow, /digest_ref_pattern='[^'\n]*@sha256:\[0-9a-f\]\{64\}\$'/);
+    assert.match(workflow, /cloudflared_image must be an immutable tag@sha256 manifest digest reference/);
+    assert.match(workflow, /base_image must be an immutable tag@sha256 manifest digest reference/);
+    assert.match(workflow, /Validate multiarchitecture source manifests/);
+    assert.match(workflow, /docker manifest inspect "\$source_ref"/);
+    assert.match(workflow, /\.platform\.architecture == "amd64"/);
+    assert.match(workflow, /\.platform\.architecture == "arm64"/);
     assert.match(dockerfile, /^FROM \$\{CLOUDFLARED_IMAGE\} AS cloudflared$/m);
     assert.match(dockerfile, /^FROM \$\{BASE_IMAGE\}$/m);
     assert.match(dockerfile, /COPY --from=cloudflared \/usr\/local\/bin\/cloudflared \/usr\/local\/bin\/cloudflared/);
@@ -116,6 +127,21 @@ test('web-publishing-agent workflow builds the nginx and cloudflared image', () 
     assert.match(dockerfile, /\bnginx\b/);
     assert.match(dockerfile, /\bca-certificates\b/);
     assert.match(dockerfile, /\bopenssl\b/);
+    assert.match(dockerfile, /^ARG DEBIAN_SNAPSHOT=\d{8}T\d{6}Z$/m);
+    assert.match(dockerfile, /^ARG CA_CERTIFICATES_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG NGINX_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG OPENSSL_VERSION=\S+$/m);
+    assert.match(dockerfile, /VERSION_CODENAME=bookworm/);
+    assert.match(dockerfile, /\/etc\/apt\/sources\.list\.d\/\*\.list/);
+    assert.match(dockerfile, /\/etc\/apt\/sources\.list\.d\/\*\.sources/);
+    assert.match(dockerfile, /snapshot\.debian\.org\/archive\/debian\/\$\{DEBIAN_SNAPSHOT\} bookworm main/);
+    assert.match(dockerfile, /"ca-certificates=\$\{CA_CERTIFICATES_VERSION\}"/);
+    assert.match(dockerfile, /"nginx=\$\{NGINX_VERSION\}"/);
+    assert.match(dockerfile, /"openssl=\$\{OPENSSL_VERSION\}"/);
+    assert.match(workflow, /outputs:\s+digest:\s*\$\{\{ steps\.build\.outputs\.digest \}\}/);
+    assert.match(workflow, /\^sha256:\[0-9a-f\]\{64\}\$/);
+    assert.match(workflow, /Published immutable image:/);
+    assert.match(workflow, /GITHUB_STEP_SUMMARY/);
     assert.match(dockerfile, /^USER web-publishing$/m);
     assert.match(dockerfile, /CMD \["node", "\/code\/runtime\/supervisor\.mjs"\]/);
 });
@@ -216,17 +242,125 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
 
     assert.match(workflow, /repository:\s*AssistOS-AI\/webmeetInfra/);
     assert.match(workflow, /path:\s*sources\/webmeetInfra/);
-    assert.match(workflow, /git -C sources\/webmeetInfra rev-parse --short=12 HEAD/);
+    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.doesNotMatch(workflow, /source_ref:[\s\S]*?default:\s*['"]?main/);
+    assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
+    assert.match(workflow, /refs\/heads\/ploinky-box/);
+    assert.match(workflow, /git -C sources\/webmeetInfra rev-parse HEAD/);
+    assert.match(workflow, /Verify host-hook-only credential contract/);
+    assert.match(workflow, /\$matches\[0\]\.sharedGeneratedSecret == true\s+and \$matches\[0\]\.runtime == false/);
+    assert.match(workflow, /\(\$matches \| length\) == 1/);
+    assert.match(workflow, /for profile in default dev prod/);
+    assert.match(workflow, /WEBMEET_LIVEKIT_API_KEY WEBMEET_LIVEKIT_API_SECRET WEBMEET_TURN_AUTH_SECRET/);
+    assert.match(workflow, /sources\/webmeetInfra\/liveKitServerAgent\/manifest\.json/);
+    assert.match(workflow, /sources\/webmeetInfra\/turnServerAgent\/manifest\.json/);
     assert.match(workflow, /context:\s*\.\/sources\/webmeetInfra\/liveKitServerAgent/);
     assert.match(workflow, /file:\s*\.\/images\/livekit-server-agent\/Dockerfile/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/livekit-server-agent/);
     assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /- name: Build and push\s+id: build\s+uses: docker\/build-push-action@v6/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(dockerfile, /^ARG LIVEKIT_SERVER_IMAGE=livekit\/livekit-server:v1\.11\.0$/m);
+    assert.match(workflow, /Smoke build local architecture/);
+    assert.match(workflow, /docker build[\s\S]*sources\/webmeetInfra\/liveKitServerAgent/);
+    assert.match(workflow, /for binary in livekit-server egress redis-server node npm git g\+\+ getent ip make curl nc tini/);
+    assert.match(workflow, /for retired in turnserver nginx certbot python3/);
+    // Base images are pinned by manifest digest, not tag alone (webmeet
+    // network-hardening trim: resolved via the Docker Hub registry v2 API,
+    // see the comment block above the ARG lines in the Dockerfile itself).
+    assert.match(dockerfile, /^ARG LIVEKIT_SERVER_IMAGE=livekit\/livekit-server:v1\.11\.0@sha256:[0-9a-f]{64}$/m);
+    assert.match(dockerfile, /^ARG LIVEKIT_EGRESS_IMAGE=livekit\/egress:v1\.9\.1@sha256:[0-9a-f]{64}$/m);
+    assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim@sha256:[0-9a-f]{64}$/m);
+    assert.match(dockerfile, /^ARG GIT_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG GXX_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG IPROUTE_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG LIBC_BIN_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG MAKE_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG NETCAT_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG TINI_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG REDIS_VERSION=\S+$/m);
+    assert.match(dockerfile, /^ARG UBUNTU_SNAPSHOT=\d{8}T\d{6}Z$/m);
+    assert.match(dockerfile, /snapshot\.ubuntu\.com\/ubuntu\/\$\{UBUNTU_SNAPSHOT\}/);
+    assert.match(dockerfile, /"git=\$\{GIT_VERSION\}"/);
+    assert.match(dockerfile, /"iproute2=\$\{IPROUTE_VERSION\}"/);
+    assert.match(dockerfile, /"libc-bin=\$\{LIBC_BIN_VERSION\}"/);
+    assert.match(dockerfile, /"redis-server=\$\{REDIS_VERSION\}"/);
+    assert.match(dockerfile, /command -v getent/);
+    assert.match(workflow, /outputs:\s+digest:\s*\$\{\{ steps\.build\.outputs\.digest \}\}/);
+    assert.match(workflow, /\^sha256:\[0-9a-f\]\{64\}\$/);
+    assert.match(workflow, /Published immutable image:/);
+    assert.match(workflow, /GITHUB_STEP_SUMMARY/);
+    assert.doesNotMatch(dockerfile, /scripts\/health\/livekit-server-agent-health\.sh/);
+    assert.match(
+        dockerfile,
+        /ENTRYPOINT \["env", "-u", "WEBMEET_LIVEKIT_API_KEY", "-u", "WEBMEET_LIVEKIT_API_SECRET", "-u", "WEBMEET_TURN_AUTH_SECRET", "tini", "--"\]/,
+    );
+    assert.match(workflow, /pid1_env="\$\(tr "\\000" "\\n" < \/proc\/1\/environ\)"/);
+    assert.match(workflow, /Normal Ploinky startup never puts[\s\S]*OCI Config\.Env/);
+    assert.match(workflow, /WEBMEET_LIVEKIT_API_KEY WEBMEET_LIVEKIT_API_SECRET WEBMEET_TURN_AUTH_SECRET/);
+
     assert.match(dockerfile, /COPY\s+scripts\s+\/code\/scripts/);
     assert.match(dockerfile, /livekit-server/);
     assert.match(dockerfile, /\begress\b/);
+    assert.match(dockerfile, /\bredis-server\b/);
+
+    // Coturn/Nginx/Certbot were split out into a dedicated turnServerAgent
+    // image (webmeet network-hardening design); this combined image must
+    // never reintroduce them. python3 was the runtime for a synthetic
+    // "python3 -m http.server" health endpoint in liveKitServerAgent's
+    // supervisor script that is being removed as part of the same
+    // cross-repo change — re-check this assertion if a future change adds
+    // back a python3-dependent script here.
+    assert.doesNotMatch(dockerfile, /\bcoturn\b/);
+    assert.doesNotMatch(dockerfile, /\bnginx\b/);
+    assert.doesNotMatch(dockerfile, /\bcertbot\b/);
+    assert.doesNotMatch(dockerfile, /\bturnserver\b/);
+    assert.doesNotMatch(dockerfile, /\bpython3\b/);
+});
+
+test('Ploinky network gateway is a fixed minimal raw-TCP to Unix-socket proxy', () => {
+    const workflow = read('.github/workflows/publish-ploinky-network-gateway.yml');
+    const dockerfile = read('images/ploinky-network-gateway/Dockerfile');
+    const source = read('images/ploinky-network-gateway/main.go');
+    const instructions = dockerfileInstructions(dockerfile);
+    const fromInstructions = instructions.filter(({ keyword }) => keyword === 'FROM');
+
+    assert.match(
+        dockerfile,
+        /^ARG GO_BUILDER=docker\.io\/library\/golang:1\.25\.6-alpine3\.22@sha256:[0-9a-f]{64}$/m,
+    );
+    assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch');
+    assert.match(dockerfile, /^USER 65532:65532$/m);
+    assert.match(dockerfile, /^EXPOSE 8080\/tcp$/m);
+    assert.match(dockerfile, /^ENTRYPOINT \["\/ploinky-network-gateway"\]$/m);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'VOLUME').length, 0);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'ENV').length, 0);
+
+    assert.match(source, /listenAddress = ":8080"/);
+    assert.match(source, /routerSocket\s+= "\/run\/ploinky\/router\.sock"/);
+    assert.match(source, /net\.Listen\("tcp4", listenAddress\)/);
+    assert.match(source, /net\.DialUnix\("unix", nil, &net\.UnixAddr\{Name: routerSocket/);
+    assert.match(source, /arguments are not supported/);
+    assert.doesNotMatch(source, /os\.Getenv|flag\.|http\.|agent|workspace|docker\.sock|podman\.sock/i);
+
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/ploinky-network-gateway/);
+    assert.match(workflow, /default: '1'/);
+    assert.doesNotMatch(workflow, /default: ['"]?latest/);
+    assert.match(workflow, /--read-only/);
+    assert.match(workflow, /--cap-drop ALL/);
+    assert.match(workflow, /--security-opt no-new-privileges/);
+    assert.match(workflow, /--tmpfs \/tmp:rw,noexec,nosuid,nodev,size=1m/);
+    assert.match(workflow, /--sysctl net\.ipv4\.ip_forward=0/);
+    assert.match(
+        workflow,
+        /type=bind,src=\$socket_path,dst=\/run\/ploinky\/router\.sock,readonly/,
+    );
+    assert.match(workflow, /test "\$\(docker inspect --format '\{\{len \.Mounts\}\}' "\$container"\)" = 1/);
+    assert.doesNotMatch(workflow, /--privileged|--cap-add|seccomp=unconfined/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /outputs:[\s\S]*?digest:\s*\$\{\{ steps\.build\.outputs\.digest \}\}/);
+    assert.match(workflow, /\$\{\{ steps\.build\.outputs\.digest \}\}/);
+    assert.match(workflow, /\^sha256:\[0-9a-f\]\{64\}\$/);
 });
 
 test('soul-gateway workflow builds source checkout with SQLite and baked gateway code', () => {
@@ -252,7 +386,7 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
 
-test('ploinky-box image is a source-free contract-2 scratch runtime', () => {
+test('ploinky-box image is a source-free contract-3 scratch runtime', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
     const entrypoint = read('images/ploinky-box/entrypoint.sh');
     const instructions = dockerfileInstructions(dockerfile);
@@ -283,7 +417,9 @@ test('ploinky-box image is a source-free contract-2 scratch runtime', () => {
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
     assert.match(dockerfile, /rpm --setcaps shadow-utils/);
-    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="2"$/m);
+    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="3"$/m);
+    assert.match(dockerfile, /\/etc\/subuid\)" = 65534/);
+    assert.match(dockerfile, /\/etc\/subgid\)" = 65534/);
     assert.match(dockerfile, /\/opt\/ploinky\/node_modules/);
     assert.match(dockerfile, /echo 'assistos\/ploinky-box' > \/etc\/ploinky-box/);
     assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
@@ -341,9 +477,14 @@ test('ploinky-box image is a source-free contract-2 scratch runtime', () => {
     assert.match(entrypoint, /\/tmp\/storage-run-\$uid/);
     assert.match(entrypoint, /\/tmp\/podman-run-\$uid/);
     assert.match(entrypoint, /podman unshare cat "\$proc_file"/);
-    assert.match(entrypoint, /configured \+ 1/);
+    assert.match(entrypoint, /^EXPECTED_SUBORDINATE_IDS=65534$/m);
+    assert.match(entrypoint, /^EXPECTED_MAPPED_IDS=65535$/m);
+    assert.match(entrypoint, /configured" -eq "\$EXPECTED_SUBORDINATE_IDS/);
+    assert.match(entrypoint, /mapped" -eq "\$EXPECTED_MAPPED_IDS/);
     assert.match(entrypoint, /^podman version >\/dev\/null 2>&1 \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /inner podman not functional: \$\{podman_info:-no diagnostic\}/);
+    assert.match(entrypoint, /podman info --format '\{\{\.Host\.Security\.Rootless\}\}'/);
+    assert.match(entrypoint, /inner Podman must be rootless/);
     assert.match(entrypoint, /^MANAGED_LABEL='io\.assistos\.ploinky\.managed=1'$/m);
     assert.match(
         entrypoint,
@@ -360,13 +501,13 @@ test('ploinky-box image is a source-free contract-2 scratch runtime', () => {
     assert.doesNotMatch(entrypoint, /mcp-sdk/);
 });
 
-test('ploinky-box workflow gates native contract-2 digests before moving runtime', () => {
+test('ploinky-box workflow gates native contract-3 digests before moving runtime', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const resolveJob = workflow.match(/\n  resolve-source:[\s\S]*?(?=\n  build:)/)?.[0] || '';
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
     const metadataGate = buildJob.match(
-        /- name: Inspect exact contract-2 metadata and platform[\s\S]*?(?=\n      - name:)/,
+        /- name: Inspect exact contract-3 metadata and platform[\s\S]*?(?=\n      - name:)/,
     )?.[0] || '';
 
     assert.ok(resolveJob);
@@ -384,6 +525,8 @@ test('ploinky-box workflow gates native contract-2 digests before moving runtime
     assert.match(buildJob, /platform:\s*linux\/amd64/);
     assert.match(buildJob, /platform:\s*linux\/arm64/);
     assert.doesNotMatch(buildJob, /setup-qemu-action/);
+    assert.match(buildJob, /Require rootless Podman for contract-3 runtime gates/);
+    assert.match(buildJob, /podman info --format '\{\{\.Host\.Security\.Rootless\}\}'/);
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
     assert.ok(metadataGate);
@@ -411,6 +554,12 @@ test('ploinky-box workflow gates native contract-2 digests before moving runtime
     assert.match(buildJob, /newgidmap/);
     assert.match(buildJob, /\/proc\/self\/uid_map/);
     assert.match(buildJob, /\/proc\/self\/gid_map/);
+    assert.match(buildJob, /test "\$uid_configured" -eq 65534/);
+    assert.match(buildJob, /test "\$gid_configured" -eq 65534/);
+    assert.match(buildJob, /test "\$uid_mapped" -eq 65535/);
+    assert.match(buildJob, /test "\$gid_mapped" -eq 65535/);
+    assert.match(buildJob, /podman run -d --name "\$outer" --user podman[\s\S]*?--security-opt unmask=ALL/);
+    assert.doesNotMatch(buildJob, /--privileged|--cap-add|seccomp=unconfined/);
     assert.match(buildJob, /docker\.io\/library\/alpine echo nested-ok/);
     assert.match(buildJob, /managed-running/);
     assert.match(buildJob, /managed-stopped/);

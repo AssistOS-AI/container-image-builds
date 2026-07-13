@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       cloudflared_image:
-        description: 'Cloudflare cloudflared image to copy from'
+        description: 'Cloudflare cloudflared tag plus multiarch sha256 manifest digest'
         required: false
-        default: 'docker.io/cloudflare/cloudflared:latest'
+        default: 'docker.io/cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe'
         type: string
       base_image:
-        description: 'Node-capable Ploinky base image'
+        description: 'Node-capable Ploinky tag plus multiarch sha256 manifest digest'
         required: false
-        default: 'docker.io/assistos/ploinky-node:24-bookworm-tools'
+        default: 'docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:95ec6e79245cf6a193b3cdd95b0f7a329edf938f1bdf29e7f4fe361df784cdea'
         type: string
       image_tag:
         description: 'Docker Hub tag to publish'
@@ -34,14 +34,16 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/web-publishing-agent
-  DEFAULT_CLOUDFLARED_IMAGE: docker.io/cloudflare/cloudflared:latest
-  DEFAULT_BASE_IMAGE: docker.io/assistos/ploinky-node:24-bookworm-tools
+  DEFAULT_CLOUDFLARED_IMAGE: docker.io/cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
+  DEFAULT_BASE_IMAGE: docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:95ec6e79245cf6a193b3cdd95b0f7a329edf938f1bdf29e7f4fe361df784cdea
   DEFAULT_IMAGE_TAG: node24-nginx-cloudflared
 
 jobs:
   publish:
     name: Build and push Docker Hub image
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout image definitions
         uses: actions/checkout@v4
@@ -67,14 +69,14 @@ jobs:
             image_tag="$DEFAULT_IMAGE_TAG"
           fi
 
-          image_ref_pattern='^[A-Za-z0-9._/@:-]+$'
+          digest_ref_pattern='^[A-Za-z0-9._-]+(:[0-9]+)?/[A-Za-z0-9._/-]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$'
           tag_pattern='^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
-          if [[ "$cloudflared_image" == *$'\n'* || "$cloudflared_image" == *$'\r'* || ! "$cloudflared_image" =~ $image_ref_pattern ]]; then
-            echo "Invalid cloudflared_image input." >&2
+          if [[ "$cloudflared_image" == *$'\n'* || "$cloudflared_image" == *$'\r'* || ! "$cloudflared_image" =~ $digest_ref_pattern ]]; then
+            echo "cloudflared_image must be an immutable tag@sha256 manifest digest reference." >&2
             exit 1
           fi
-          if [[ "$base_image" == *$'\n'* || "$base_image" == *$'\r'* || ! "$base_image" =~ $image_ref_pattern ]]; then
-            echo "Invalid base_image input." >&2
+          if [[ "$base_image" == *$'\n'* || "$base_image" == *$'\r'* || ! "$base_image" =~ $digest_ref_pattern ]]; then
+            echo "base_image must be an immutable tag@sha256 manifest digest reference." >&2
             exit 1
           fi
           if [[ "$image_tag" == *$'\n'* || "$image_tag" == *$'\r'* || ! "$image_tag" =~ $tag_pattern ]]; then
@@ -85,6 +87,24 @@ jobs:
           printf '%s\n' "cloudflared_image=$cloudflared_image" >> "$GITHUB_OUTPUT"
           printf '%s\n' "base_image=$base_image" >> "$GITHUB_OUTPUT"
           printf '%s\n' "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Validate multiarchitecture source manifests
+        env:
+          CLOUDFLARED_IMAGE: ${{ steps.image.outputs.cloudflared_image }}
+          BASE_IMAGE: ${{ steps.image.outputs.base_image }}
+        run: |
+          set -euo pipefail
+          for source_ref in "$CLOUDFLARED_IMAGE" "$BASE_IMAGE"; do
+            manifest="$(docker manifest inspect "$source_ref")"
+            jq -e '
+              (.manifests | type == "array")
+              and any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")
+              and any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")
+            ' <<< "$manifest" >/dev/null || {
+              echo "Source image must resolve to a linux/amd64 and linux/arm64 manifest index: $source_ref" >&2
+              exit 1
+            }
+          done
 
       - name: Smoke build local architecture
         run: |
@@ -118,6 +138,7 @@ jobs:
             type=sha,prefix=${{ steps.image.outputs.image_tag }}-
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: images/web-publishing-agent
@@ -129,3 +150,17 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
+
+      - name: Report immutable image reference
+        id: report
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Build output digest is missing or malformed." >&2
+            exit 1
+          fi
+          immutable_ref="docker.io/${IMAGE_NAME}@${BUILD_DIGEST}"
+          echo "Published immutable image: $immutable_ref"
+          printf 'Published immutable image: `%s`\n' "$immutable_ref" >> "$GITHUB_STEP_SUMMARY"

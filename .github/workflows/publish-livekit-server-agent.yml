@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'AssistOS-AI/webmeetInfra ref to build from'
-        required: false
-        default: 'main'
+        description: 'Exact 40-character commit SHA at the tip of AssistOS-AI/webmeetInfra ploinky-box'
+        required: true
         type: string
       image_tag:
         description: 'Docker Hub tag to publish for liveKitServerAgent'
@@ -29,21 +28,98 @@ jobs:
   publish:
     name: Build and push Docker Hub image
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate immutable source revision
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_ref must be an exact 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
 
       - name: Checkout webmeetInfra source
         uses: actions/checkout@v4
         with:
           repository: AssistOS-AI/webmeetInfra
-          ref: ${{ inputs.source_ref || 'main' }}
+          ref: ${{ inputs.source_ref }}
           path: sources/webmeetInfra
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Resolve source revision
+      - name: Verify ploinky-box source tip
         id: source
-        run: echo "sha=$(git -C sources/webmeetInfra rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C sources/webmeetInfra rev-parse HEAD)"
+          branch_sha="$(git -C sources/webmeetInfra ls-remote --exit-code origin refs/heads/ploinky-box | awk '{print $1}')"
+          test "$actual_sha" = "$SOURCE_REF"
+          if [ "$actual_sha" != "$branch_sha" ]; then
+            echo "source_ref must be the current tip of webmeetInfra/ploinky-box" >&2
+            exit 1
+          fi
+          echo "sha=${actual_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify host-hook-only credential contract
+        run: |
+          set -euo pipefail
+          verify_credential() {
+            manifest="$1"
+            profile="$2"
+            name="$3"
+            jq -e --arg profile "$profile" --arg name "$name" '
+              [.profiles[$profile].env[] | select(.name == $name)] as $matches
+              | ($matches | length) == 1
+                and $matches[0].sharedGeneratedSecret == true
+                and $matches[0].runtime == false
+            ' "$manifest" >/dev/null
+          }
+          for profile in default dev prod; do
+            for name in WEBMEET_LIVEKIT_API_KEY WEBMEET_LIVEKIT_API_SECRET WEBMEET_TURN_AUTH_SECRET; do
+              verify_credential sources/webmeetInfra/liveKitServerAgent/manifest.json "$profile" "$name"
+            done
+            verify_credential sources/webmeetInfra/turnServerAgent/manifest.json "$profile" WEBMEET_TURN_AUTH_SECRET
+          done
+
+      - name: Smoke build local architecture
+        run: |
+          set -euo pipefail
+          docker build \
+            -f images/livekit-server-agent/Dockerfile \
+            -t "$IMAGE_NAME:smoke" \
+            sources/webmeetInfra/liveKitServerAgent
+          docker run --rm --entrypoint sh "$IMAGE_NAME:smoke" -c '
+            set -eu
+            for binary in livekit-server egress redis-server node npm git g++ getent ip make curl nc tini; do
+              command -v "$binary" >/dev/null
+            done
+            for retired in turnserver nginx certbot python3; do
+              ! command -v "$retired" >/dev/null 2>&1
+            done
+            test -x /code/scripts/start-livekit-server-agent.sh
+          '
+          # Defense in depth: the image entrypoint also scrubs credentials if a
+          # non-Ploinky caller injects them. Normal Ploinky startup never puts
+          # these host-hook-only values in OCI Config.Env.
+          docker run --rm \
+            -e WEBMEET_LIVEKIT_API_KEY=synthetic-api-key \
+            -e WEBMEET_LIVEKIT_API_SECRET=synthetic-api-secret \
+            -e WEBMEET_TURN_AUTH_SECRET=synthetic-turn-secret \
+            "$IMAGE_NAME:smoke" sh -c '
+              set -eu
+              pid1_env="$(tr "\000" "\n" < /proc/1/environ)"
+              for secret_name in WEBMEET_LIVEKIT_API_KEY WEBMEET_LIVEKIT_API_SECRET WEBMEET_TURN_AUTH_SECRET; do
+                ! printf "%s\n" "$pid1_env" | grep -q "^${secret_name}="
+                test -z "$(printenv "$secret_name" || true)"
+              done
+            '
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -67,6 +143,7 @@ jobs:
             type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.source.outputs.sha }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ./sources/webmeetInfra/liveKitServerAgent
@@ -76,3 +153,17 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
+
+      - name: Report immutable image reference
+        id: report
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Build output digest is missing or malformed." >&2
+            exit 1
+          fi
+          immutable_ref="docker.io/${IMAGE_NAME}@${BUILD_DIGEST}"
+          echo "Published immutable image: $immutable_ref"
+          printf 'Published immutable image: `%s`\n' "$immutable_ref" >> "$GITHUB_STEP_SUMMARY"

@@ -23,6 +23,12 @@ RUN mkdir -p \
         /home/podman/.local/share/containers \
     && echo 'assistos/ploinky-box' > /etc/ploinky-box
 
+# The split ranges deliberately skip the podman user's own UID/GID while
+# supplying 65,534 subordinate IDs. Inner root plus IDs through 65,534 then
+# fit in the required 65,535-entry rootless mapping (Coturn uses UID 65,534).
+RUN test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /etc/subuid)" = 65534 \
+    && test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /etc/subgid)" = 65534
+
 COPY images/ploinky-box/entrypoint.sh /usr/local/bin/ploinky-box-entrypoint
 RUN chmod 0755 /usr/local/bin/ploinky-box-entrypoint
 
@@ -35,7 +41,7 @@ COPY --from=prepared-rootfs / /
 # supported privilege mechanism remains explicit and testable.
 RUN rpm --setcaps shadow-utils
 
-LABEL io.assistos.ploinky.runtime-contract="2"
+LABEL io.assistos.ploinky.runtime-contract="3"
 
 ENV PATH=/opt/ploinky/bin:/usr/local/bin:/usr/bin \
     USER=podman \

@@ -82,6 +82,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Require rootless Podman for contract-3 runtime gates
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap
+          test -e /dev/fuse
+          test -e /dev/net/tun
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman unshare true
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -107,7 +117,7 @@ jobs:
           echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "IMAGE_REF=docker.io/${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_ENV"
 
-      - name: Inspect exact contract-2 metadata and platform
+      - name: Inspect exact contract-3 metadata and platform
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}
         run: |
@@ -121,7 +131,7 @@ jobs:
                 | add // {}) as $env
             | ($image.Os + "/" + $image.Architecture) == $platform
               and $image.Config.User == "podman"
-              and ($image.Config.Labels["io.assistos.ploinky.runtime-contract"] == "2")
+              and ($image.Config.Labels["io.assistos.ploinky.runtime-contract"] == "3")
               and $image.Config.WorkingDir == "/workspace"
               and $image.Config.Entrypoint == ["/usr/local/bin/ploinky-box-entrypoint"]
               and (($image.Config.Cmd == null) or ($image.Config.Cmd == []))
@@ -207,8 +217,8 @@ jobs:
           storage_volume="$prefix-containers"
           deps_volume="$prefix-deps"
           cleanup() {
-            docker rm -f "$outer" >/dev/null 2>&1 || true
-            docker volume rm -f \
+            podman rm -f "$outer" >/dev/null 2>&1 || true
+            podman volume rm -f \
               "$workspace_volume" "$storage_volume" "$deps_volume" \
               >/dev/null 2>&1 || true
           }
@@ -216,26 +226,27 @@ jobs:
             local expected="$1"
             local count state
             for _ in $(seq 1 60); do
-              count=$(docker logs "$outer" 2>&1 | grep -c 'self-check OK' || true)
+              count=$(podman logs "$outer" 2>&1 | grep -c 'self-check OK' || true)
               if test "$count" -ge "$expected"; then
                 return 0
               fi
-              state=$(docker inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
+              state=$(podman inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
               if test "$state" = exited; then
-                docker logs "$outer" >&2
+                podman logs "$outer" >&2
                 return 1
               fi
               sleep 1
             done
-            docker logs "$outer" >&2
+            podman logs "$outer" >&2
             return 1
           }
           trap cleanup EXIT
           cleanup
-          docker volume create "$workspace_volume" >/dev/null
-          docker volume create "$storage_volume" >/dev/null
-          docker volume create "$deps_volume" >/dev/null
-          docker run --rm --user root --entrypoint bash \
+          podman pull "$IMAGE_REF" >/dev/null
+          podman volume create "$workspace_volume" >/dev/null
+          podman volume create "$storage_volume" >/dev/null
+          podman volume create "$deps_volume" >/dev/null
+          podman run --rm --user root --entrypoint bash \
             -v "$workspace_volume:/workspace" \
             -v "$storage_volume:/home/podman/.local/share/containers" \
             -v "$deps_volume:/opt/ploinky/node_modules" \
@@ -245,27 +256,29 @@ jobs:
                 /home/podman/.local/share/containers \
                 /opt/ploinky/node_modules
             '
-          docker run -d --name "$outer" --user podman \
-            --privileged \
+          podman run -d --name "$outer" --user podman \
             --device /dev/fuse \
             --device /dev/net/tun \
-            --security-opt seccomp=unconfined \
+            --security-opt unmask=ALL \
             -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
             -v "$workspace_volume:/workspace" \
             -v "$storage_volume:/home/podman/.local/share/containers" \
             -v "$deps_volume:/opt/ploinky/node_modules" \
             "$IMAGE_REF" >/dev/null
           wait_for_check_count 1
-          docker exec "$outer" bash -lc '
+          podman exec "$outer" bash -lc '
             set -euo pipefail
             podman version
             podman info
+            test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
             uid_configured=$(awk -F: '\''$1 == "podman" { total += $3 } END { print total + 0 }'\'' /etc/subuid)
             gid_configured=$(awk -F: '\''$1 == "podman" { total += $3 } END { print total + 0 }'\'' /etc/subgid)
             uid_mapped=$(podman unshare cat /proc/self/uid_map | awk '\''{ total += $3 } END { print total + 0 }'\'')
             gid_mapped=$(podman unshare cat /proc/self/gid_map | awk '\''{ total += $3 } END { print total + 0 }'\'')
-            test "$uid_mapped" -ge "$((uid_configured + 1))"
-            test "$gid_mapped" -ge "$((gid_configured + 1))"
+            test "$uid_configured" -eq 65534
+            test "$gid_configured" -eq 65534
+            test "$uid_mapped" -eq 65535
+            test "$gid_mapped" -eq 65535
             uid_caps=$(getcap /usr/bin/newuidmap || true)
             gid_caps=$(getcap /usr/bin/newgidmap || true)
             { [[ "$uid_caps" == *cap_setuid=ep* ]] || [[ "$uid_caps" == *cap_setuid+ep* ]] || test -u /usr/bin/newuidmap; }
@@ -294,9 +307,9 @@ jobs:
             podman run --rm -v sentinel-volume:/sentinel \
               docker.io/library/alpine sh -c "echo retained > /sentinel/value"
           '
-          docker restart "$outer" >/dev/null
+          podman restart "$outer" >/dev/null
           wait_for_check_count 2
-          docker exec "$outer" bash -lc '
+          podman exec "$outer" bash -lc '
             set -euo pipefail
             ! podman container exists managed-running
             ! podman container exists managed-stopped
@@ -323,8 +336,8 @@ jobs:
           wrapper_dir="$RUNNER_TEMP/$prefix-wrapper"
           mode_dir="$RUNNER_TEMP/$prefix-mode"
           cleanup() {
-            docker rm -f "$outer" >/dev/null 2>&1 || true
-            docker volume rm -f \
+            podman rm -f "$outer" >/dev/null 2>&1 || true
+            podman volume rm -f \
               "$workspace_volume" "$storage_volume" "$deps_volume" \
               >/dev/null 2>&1 || true
             rm -rf "$wrapper_dir" "$mode_dir"
@@ -332,19 +345,18 @@ jobs:
           wait_for_exit() {
             local state
             for _ in $(seq 1 45); do
-              state=$(docker inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
+              state=$(podman inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
               test "$state" = exited && return 0
               sleep 1
             done
-            docker logs "$outer" >&2
+            podman logs "$outer" >&2
             return 1
           }
           run_outer() {
-            docker run -d --name "$outer" --user podman \
-              --privileged \
+            podman run -d --name "$outer" --user podman \
               --device /dev/fuse \
               --device /dev/net/tun \
-              --security-opt seccomp=unconfined \
+              --security-opt unmask=ALL \
               --env 'PATH=/failure-bin:/opt/ploinky/bin:/usr/local/bin:/usr/bin' \
               -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
               -v "$workspace_volume:/workspace" \
@@ -372,10 +384,11 @@ jobs:
           exec /usr/bin/podman "$@"
           WRAPPER
           chmod 0755 "$wrapper_dir/podman"
-          docker volume create "$workspace_volume" >/dev/null
-          docker volume create "$storage_volume" >/dev/null
-          docker volume create "$deps_volume" >/dev/null
-          docker run --rm --user root --entrypoint bash \
+          podman pull "$IMAGE_REF" >/dev/null
+          podman volume create "$workspace_volume" >/dev/null
+          podman volume create "$storage_volume" >/dev/null
+          podman volume create "$deps_volume" >/dev/null
+          podman run --rm --user root --entrypoint bash \
             -v "$workspace_volume:/workspace" \
             -v "$storage_volume:/home/podman/.local/share/containers" \
             -v "$deps_volume:/opt/ploinky/node_modules" \
@@ -389,27 +402,27 @@ jobs:
           printf '%s\n' enumerate > "$mode_dir/mode"
           run_outer
           wait_for_exit
-          test "$(docker inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
-          docker logs "$outer" 2>&1 | grep -q 'cannot enumerate Ploinky-managed nested containers'
-          docker logs "$outer" 2>&1 | grep -q 'injected managed-container enumeration failure'
+          test "$(podman inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
+          podman logs "$outer" 2>&1 | grep -q 'cannot enumerate Ploinky-managed nested containers'
+          podman logs "$outer" 2>&1 | grep -q 'injected managed-container enumeration failure'
 
-          docker rm -f "$outer" >/dev/null
+          podman rm -f "$outer" >/dev/null
           printf '%s\n' normal > "$mode_dir/mode"
           run_outer
           for _ in $(seq 1 60); do
-            docker logs "$outer" 2>&1 | grep -q 'self-check OK' && break
+            podman logs "$outer" 2>&1 | grep -q 'self-check OK' && break
             sleep 1
           done
-          docker logs "$outer" 2>&1 | grep -q 'self-check OK'
-          docker exec "$outer" /usr/bin/podman run -d --name removal-target \
+          podman logs "$outer" 2>&1 | grep -q 'self-check OK'
+          podman exec "$outer" /usr/bin/podman run -d --name removal-target \
             --label io.assistos.ploinky.managed=1 \
             docker.io/library/alpine sleep 600 >/dev/null
           printf '%s\n' remove > "$mode_dir/mode"
-          docker restart "$outer" >/dev/null 2>&1 || true
+          podman restart "$outer" >/dev/null 2>&1 || true
           wait_for_exit
-          test "$(docker inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
-          docker logs "$outer" 2>&1 | grep -q 'cannot remove Ploinky-managed nested container'
-          docker logs "$outer" 2>&1 | grep -q 'injected managed-container removal failure'
+          test "$(podman inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
+          podman logs "$outer" 2>&1 | grep -q 'cannot remove Ploinky-managed nested container'
+          podman logs "$outer" 2>&1 | grep -q 'injected managed-container removal failure'
 
       - name: Export gated candidate digest
         env:

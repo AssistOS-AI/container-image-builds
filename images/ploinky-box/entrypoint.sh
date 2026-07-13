@@ -2,6 +2,8 @@
 set -u
 
 MANAGED_LABEL='io.assistos.ploinky.managed=1'
+EXPECTED_SUBORDINATE_IDS=65534
+EXPECTED_MAPPED_IDS=65535
 
 fail() {
     echo "[ploinky-box] SELF-CHECK FAILED: $1" >&2
@@ -54,13 +56,13 @@ require_full_mapping() {
 
     configured="$(configured_subid_count "$subid_file")" \
         || fail "cannot read $subid_file"
-    test "$configured" -gt 0 \
-        || fail "podman has no configured subordinate ${kind^^} range"
+    test "$configured" -eq "$EXPECTED_SUBORDINATE_IDS" \
+        || fail "podman subordinate ${kind^^} range must contain exactly $EXPECTED_SUBORDINATE_IDS IDs (observed $configured)"
     mapping="$(podman unshare cat "$proc_file" 2>&1)" \
         || fail "cannot inspect Podman ${kind^^} mapping: $mapping"
     mapped="$(printf '%s\n' "$mapping" | mapped_id_count)"
-    test "$mapped" -ge "$((configured + 1))" \
-        || fail "Podman ${kind^^} mapping is degraded (mapped=$mapped configured-subids=$configured)"
+    test "$mapped" -eq "$EXPECTED_MAPPED_IDS" \
+        || fail "Podman ${kind^^} mapping must contain exactly $EXPECTED_MAPPED_IDS IDs (observed $mapped)"
 }
 
 reset_ephemeral_podman_runtime() {
@@ -122,6 +124,10 @@ podman version >/dev/null 2>&1 || fail "inner podman version check failed"
 if ! podman_info="$(podman info 2>&1)"; then
     fail "inner podman not functional: ${podman_info:-no diagnostic}"
 fi
+inner_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>&1)" \
+    || fail "cannot inspect inner Podman rootless state: ${inner_rootless:-no diagnostic}"
+test "$inner_rootless" = true \
+    || fail "inner Podman must be rootless (observed ${inner_rootless:-unknown})"
 require_full_mapping uid
 require_full_mapping gid
 
