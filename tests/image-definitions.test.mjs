@@ -332,6 +332,7 @@ test('Ploinky network gateway is a fixed minimal raw-TCP to Unix-socket proxy', 
     assert.match(dockerfile, /^USER 65532:65532$/m);
     assert.match(dockerfile, /^EXPOSE 8080\/tcp$/m);
     assert.match(dockerfile, /^ENTRYPOINT \["\/ploinky-network-gateway"\]$/m);
+    assert.doesNotMatch(dockerfile, /^LABEL\s/m, 'image labels would be inherited by the exact-owned gateway container');
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'VOLUME').length, 0);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'ENV').length, 0);

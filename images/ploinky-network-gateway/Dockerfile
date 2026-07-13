@@ -18,9 +18,6 @@ FROM scratch
 
 COPY --from=builder /out/rootfs/ /
 
-LABEL org.opencontainers.image.title="Ploinky network gateway" \
-    org.opencontainers.image.description="Fixed raw-TCP proxy from port 8080 to /run/ploinky/router.sock"
-
 USER 65532:65532
 EXPOSE 8080/tcp
 ENTRYPOINT ["/ploinky-network-gateway"]
