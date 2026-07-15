@@ -4,6 +4,7 @@ set -u
 MANAGED_LABEL='io.assistos.ploinky.managed=1'
 EXPECTED_SUBORDINATE_IDS=65534
 EXPECTED_MAPPED_IDS=65535
+MINIMUM_PODMAN_VERSION=5.4
 
 fail() {
     echo "[ploinky-box] SELF-CHECK FAILED: $1" >&2
@@ -96,6 +97,31 @@ remove_managed_containers() {
     done <<< "$managed_ids"
 }
 
+require_managed_network_stack() {
+    local podman_version
+    local oldest_version
+    local network_backend
+    local pasta_version
+
+    podman_version="$(podman --version 2>/dev/null | awk '{ print $3 }')" \
+        || fail "cannot inspect inner Podman version"
+    [[ "$podman_version" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?([.-][0-9A-Za-z.-]+)?$ ]] \
+        || fail "inner Podman returned an invalid version '${podman_version:-<empty>}'"
+    oldest_version="$(printf '%s\n%s\n' "$MINIMUM_PODMAN_VERSION" "$podman_version" | sort -V | head -n 1)"
+    test "$oldest_version" = "$MINIMUM_PODMAN_VERSION" \
+        || fail "inner Podman must be $MINIMUM_PODMAN_VERSION or newer (observed $podman_version)"
+
+    network_backend="$(podman info --format '{{.Host.NetworkBackend}}' 2>&1)" \
+        || fail "cannot inspect inner Podman network backend: ${network_backend:-no diagnostic}"
+    test "$network_backend" = netavark \
+        || fail "inner Podman network backend must be netavark (observed ${network_backend:-unknown})"
+
+    command -v pasta >/dev/null 2>&1 || fail "pasta backend not on PATH"
+    pasta_version="$(pasta --version 2>&1)" \
+        || fail "pasta backend is not operational: ${pasta_version:-no diagnostic}"
+    test -n "$pasta_version" || fail "pasta backend returned no version evidence"
+}
+
 command -v bash >/dev/null 2>&1 || fail "bash not on PATH"
 command -v node >/dev/null 2>&1 || fail "node not on PATH"
 command -v npm >/dev/null 2>&1 || fail "npm not on PATH"
@@ -128,9 +154,13 @@ inner_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>&1)" \
     || fail "cannot inspect inner Podman rootless state: ${inner_rootless:-no diagnostic}"
 test "$inner_rootless" = true \
     || fail "inner Podman must be rootless (observed ${inner_rootless:-unknown})"
+require_managed_network_stack
 require_full_mapping uid
 require_full_mapping gid
 
+# This exact filter intentionally catches pre-contract-4 gateway and agent
+# containers. It does not remove manual containers, images, named volumes, or
+# valid managed networks stored in the three retained outer volumes.
 remove_managed_containers
 echo "[ploinky-box] self-check OK"
 

@@ -1,4 +1,6 @@
-ARG PODMAN_BASE=quay.io/podman/stable
+# quay.io's immutable OCI index for Podman 5.8.2, verified to include native
+# linux/amd64 and linux/arm64 manifests. Candidate CI re-proves the full stack.
+ARG PODMAN_BASE=quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964
 ARG NODE_RUNTIME_IMAGE=docker.io/library/node:24-bookworm-slim
 
 FROM $NODE_RUNTIME_IMAGE AS node-runtime
@@ -9,7 +11,7 @@ COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && dnf install -y git libcap slirp4netns \
+    && dnf install -y git libcap netavark aardvark-dns passt slirp4netns \
     && dnf clean all \
     && rpm --setcaps shadow-utils
 
@@ -41,7 +43,7 @@ COPY --from=prepared-rootfs / /
 # supported privilege mechanism remains explicit and testable.
 RUN rpm --setcaps shadow-utils
 
-LABEL io.assistos.ploinky.runtime-contract="3"
+LABEL io.assistos.ploinky.runtime-contract="4"
 
 ENV PATH=/opt/ploinky/bin:/usr/local/bin:/usr/bin \
     USER=podman \
