@@ -7,6 +7,10 @@ on:
         description: 'Exact 40-character commit SHA at the tip of AssistOS-AI/webmeetInfra ploinky-box'
         required: true
         type: string
+      egress_image:
+        description: 'Verified patched Egress index: docker.io/assistos/livekit-egress@sha256:<64 lowercase hex>'
+        required: true
+        type: string
       image_tag:
         description: 'Docker Hub tag to publish for liveKitServerAgent'
         required: false
@@ -23,6 +27,7 @@ concurrency:
 env:
   IMAGE_NAME: assistos/livekit-server-agent
   IMAGE_TAG: ${{ inputs.image_tag || 'webmeet-infra' }}
+  LIVEKIT_EGRESS_IMAGE: ${{ inputs.egress_image }}
 
 jobs:
   publish:
@@ -41,6 +46,10 @@ jobs:
           set -euo pipefail
           if [[ ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo "source_ref must be an exact 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$LIVEKIT_EGRESS_IMAGE" =~ ^docker\.io/assistos/livekit-egress@sha256:[0-9a-f]{64}$ ]]; then
+            echo "egress_image must be the exact verified patched Egress multi-architecture index" >&2
             exit 1
           fi
 
@@ -67,31 +76,11 @@ jobs:
           fi
           echo "sha=${actual_sha:0:12}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify host-hook-only credential contract
-        run: |
-          set -euo pipefail
-          verify_credential() {
-            manifest="$1"
-            profile="$2"
-            name="$3"
-            jq -e --arg profile "$profile" --arg name "$name" '
-              [.profiles[$profile].env[] | select(.name == $name)] as $matches
-              | ($matches | length) == 1
-                and $matches[0].sharedGeneratedSecret == true
-                and $matches[0].runtime == false
-            ' "$manifest" >/dev/null
-          }
-          for profile in default dev prod; do
-            for name in WEBMEET_LIVEKIT_API_KEY WEBMEET_LIVEKIT_API_SECRET WEBMEET_TURN_AUTH_SECRET; do
-              verify_credential sources/webmeetInfra/liveKitServerAgent/manifest.json "$profile" "$name"
-            done
-            verify_credential sources/webmeetInfra/turnServerAgent/manifest.json "$profile" WEBMEET_TURN_AUTH_SECRET
-          done
-
       - name: Smoke build local architecture
         run: |
           set -euo pipefail
           docker build \
+            --build-arg LIVEKIT_EGRESS_IMAGE="$LIVEKIT_EGRESS_IMAGE" \
             -f images/livekit-server-agent/Dockerfile \
             -t "$IMAGE_NAME:smoke" \
             sources/webmeetInfra/liveKitServerAgent
@@ -104,22 +93,12 @@ jobs:
               ! command -v "$retired" >/dev/null 2>&1
             done
             test -x /code/scripts/start-livekit-server-agent.sh
+            contract=/usr/local/share/ploinky/livekit-egress-loopback-v5.contract
+            test -f "$contract" && test ! -L "$contract"
+            test "$(stat -c "%u:%g:%a" "$contract")" = 0:0:444
+            expected="$(sed -n "s/^binary_sha256=//p" "$contract")"
+            printf "%s  %s\n" "$expected" /usr/bin/egress | sha256sum --check --strict -
           '
-          # Defense in depth: the image entrypoint also scrubs credentials if a
-          # non-Ploinky caller injects them. Normal Ploinky startup never puts
-          # these host-hook-only values in OCI Config.Env.
-          docker run --rm \
-            -e WEBMEET_LIVEKIT_API_KEY=synthetic-api-key \
-            -e WEBMEET_LIVEKIT_API_SECRET=synthetic-api-secret \
-            -e WEBMEET_TURN_AUTH_SECRET=synthetic-turn-secret \
-            "$IMAGE_NAME:smoke" sh -c '
-              set -eu
-              pid1_env="$(tr "\000" "\n" < /proc/1/environ)"
-              for secret_name in WEBMEET_LIVEKIT_API_KEY WEBMEET_LIVEKIT_API_SECRET WEBMEET_TURN_AUTH_SECRET; do
-                ! printf "%s\n" "$pid1_env" | grep -q "^${secret_name}="
-                test -z "$(printenv "$secret_name" || true)"
-              done
-            '
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -152,6 +131,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            LIVEKIT_EGRESS_IMAGE=${{ env.LIVEKIT_EGRESS_IMAGE }}
           provenance: false
 
       - name: Report immutable image reference

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "umami": {
+    "version": "3.2.0",
+    "image": "docker.umami.is/umami-software/umami:3.2.0@sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec",
+    "indexDigest": "sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec",
+    "platformManifests": {
+      "linux/amd64": "sha256:afbd42695964762c2accf8ed0d863211d764c3937dbba0bf808ba5e33afae763",
+      "linux/arm64": "sha256:41c5df65ee777b762411c105f9b040e33708ef8640a19a2d2b9abf3284ee3f37"
+    }
+  },
+  "bun": {
+    "version": "1.3.14",
+    "release": "https://github.com/oven-sh/bun/releases/tag/bun-v1.3.14",
+    "artifacts": {
+      "linux/amd64": {
+        "name": "bun-linux-x64-musl.zip",
+        "sha256": "14bd9aedeebf1dba67e8def9531c89bc989ecfdf1de42e5bfcaf1b8cd9294719"
+      },
+      "linux/arm64": {
+        "name": "bun-linux-aarch64-musl.zip",
+        "sha256": "b98e0ad3625c5c00d1d5b5ff55605c7adddbfae151861e68ade57b2d3b8703bb"
+      }
+    }
+  },
+  "umamiMcp": {
+    "repository": "https://github.com/MadsNyl/umami-mcp.git",
+    "commit": "3ab73beda2db0ebffb0b07439b218ef562107520",
+    "committedAt": "2026-06-01T23:59:25+02:00",
+    "bunLockSha256": "92e41e798c3593657116f461377d92e8b74dbcf605f279e6e1832dbcfd0aa46f"
+  }
+}

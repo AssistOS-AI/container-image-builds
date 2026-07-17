@@ -7,8 +7,10 @@
 # single-platform manifest.
 # livekit/livekit-server:v1.11.0
 ARG LIVEKIT_SERVER_IMAGE=livekit/livekit-server:v1.11.0@sha256:100b9a870616d02f5e3795b34e0b593b5054a26f8131a94fd3fa322ed3154b16
-# livekit/egress:v1.9.1
-ARG LIVEKIT_EGRESS_IMAGE=livekit/egress:v1.9.1@sha256:99f6a19cd93a6336c518845bae22a151ad63497329b62f1b1b8c4125c52d57c8
+# No default is permitted. The publication workflow accepts only a verified,
+# immutable docker.io/assistos/livekit-egress@sha256:<index> produced by the
+# loopback-patched Egress workflow.
+ARG LIVEKIT_EGRESS_IMAGE
 # node:24-bookworm-slim
 ARG NODE_BASE=node:24-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5
 
@@ -77,15 +79,25 @@ RUN set -eu; \
     command -v nc >/dev/null 2>&1 || (echo "nc binary missing" >&2 && exit 1); \
     command -v node >/dev/null 2>&1 || (echo "node binary missing" >&2 && exit 1); \
     command -v npm >/dev/null 2>&1 || (echo "npm binary missing" >&2 && exit 1); \
-    command -v redis-server >/dev/null 2>&1 || (echo "redis-server binary missing" >&2 && exit 1)
+    command -v redis-server >/dev/null 2>&1 || (echo "redis-server binary missing" >&2 && exit 1); \
+    contract=/usr/local/share/ploinky/livekit-egress-loopback-v5.contract; \
+    test -f "$contract" && test ! -L "$contract" || \
+        (echo "patched Egress v5 contract marker missing" >&2 && exit 1); \
+    test "$(stat -c '%u:%g:%a' "$contract")" = '0:0:444' || \
+        (echo "patched Egress v5 contract marker ownership or mode is invalid" >&2 && exit 1); \
+    test "$(sed -n '1p' "$contract")" = 'contract_version=5'; \
+    test "$(sed -n '2p' "$contract")" = 'source_commit=ba52a026bea409bde31dcc7da9ba5322e967520c'; \
+    test "$(sed -n '3p' "$contract")" = 'health_listener=127.0.0.1:7981'; \
+    test "$(sed -n '4p' "$contract")" = 'template_listener=127.0.0.1:7980'; \
+    test "$(wc -l < "$contract")" -eq 5; \
+    expected_egress_sha="$(sed -n 's/^binary_sha256=//p' "$contract")"; \
+    test "$(printf '%s' "$expected_egress_sha" | wc -c)" -eq 64; \
+    printf '%s  %s\n' "$expected_egress_sha" /usr/bin/egress | sha256sum --check --strict -
 
 WORKDIR /code
 
 COPY scripts /code/scripts
 RUN chmod +x /code/scripts/start-livekit-server-agent.sh
 
-# Preinstall has already materialized the private LiveKit/Egress configs. Strip
-# their source credentials before tini becomes the long-lived PID 1 so neither
-# the init process nor any runtime child inherits duplicate secret material.
-ENTRYPOINT ["env", "-u", "WEBMEET_LIVEKIT_API_KEY", "-u", "WEBMEET_LIVEKIT_API_SECRET", "-u", "WEBMEET_TURN_AUTH_SECRET", "tini", "--"]
+ENTRYPOINT ["tini", "--"]
 CMD ["sh", "/code/scripts/start-livekit-server-agent.sh"]

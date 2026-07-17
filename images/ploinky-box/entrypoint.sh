@@ -4,6 +4,8 @@ set -u
 MANAGED_LABEL='io.assistos.ploinky.managed=1'
 EXPECTED_SUBORDINATE_IDS=65534
 EXPECTED_MAPPED_IDS=65535
+MINIMUM_PODMAN_VERSION=5.4
+EXPECTED_CLOUDFLARED_VERSION=2026.7.1
 
 fail() {
     echo "[ploinky-box] SELF-CHECK FAILED: $1" >&2
@@ -79,21 +81,57 @@ reset_ephemeral_podman_runtime() {
     done
 }
 
-remove_managed_containers() {
+reject_retained_managed_containers() {
     local managed_ids
-    local id
-    local removal_output
 
     if ! managed_ids="$(podman ps --all --quiet --filter "label=$MANAGED_LABEL" 2>&1)"; then
         fail "cannot enumerate Ploinky-managed nested containers: ${managed_ids:-no diagnostic}"
     fi
+    test -z "$managed_ids" || fail \
+        "retained Ploinky-managed nested containers were found; stop/remove them explicitly in the old box, destroy it, and recreate with runtime contract v5 (v5 will not delete or import old state)"
+}
 
-    while IFS= read -r id; do
-        test -n "$id" || continue
-        if ! removal_output="$(podman rm --force --time 0 "$id" 2>&1)"; then
-            fail "cannot remove Ploinky-managed nested container $id: ${removal_output:-no diagnostic}"
-        fi
-    done <<< "$managed_ids"
+require_managed_network_stack() {
+    local podman_version
+    local oldest_version
+    local network_backend
+    local pasta_version
+
+    podman_version="$(podman --version 2>/dev/null | awk '{ print $3 }')" \
+        || fail "cannot inspect inner Podman version"
+    [[ "$podman_version" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?([.-][0-9A-Za-z.-]+)?$ ]] \
+        || fail "inner Podman returned an invalid version '${podman_version:-<empty>}'"
+    oldest_version="$(printf '%s\n%s\n' "$MINIMUM_PODMAN_VERSION" "$podman_version" | sort -V | head -n 1)"
+    test "$oldest_version" = "$MINIMUM_PODMAN_VERSION" \
+        || fail "inner Podman must be $MINIMUM_PODMAN_VERSION or newer (observed $podman_version)"
+
+    network_backend="$(podman info --format '{{.Host.NetworkBackend}}' 2>&1)" \
+        || fail "cannot inspect inner Podman network backend: ${network_backend:-no diagnostic}"
+    test "$network_backend" = netavark \
+        || fail "inner Podman network backend must be netavark (observed ${network_backend:-unknown})"
+
+    command -v pasta >/dev/null 2>&1 || fail "pasta backend not on PATH"
+    pasta_version="$(pasta --version 2>&1)" \
+        || fail "pasta backend is not operational: ${pasta_version:-no diagnostic}"
+    test -n "$pasta_version" || fail "pasta backend returned no version evidence"
+}
+
+require_cloudflared_contract() {
+    local version_output
+    local help_output
+
+    command -v cloudflared >/dev/null 2>&1 || fail "cloudflared not on PATH"
+    test -x "$(command -v cloudflared)" || fail "cloudflared is not executable"
+    version_output="$(cloudflared --version 2>&1)" \
+        || fail "cannot inspect cloudflared version: ${version_output:-no diagnostic}"
+    case "$version_output" in
+        "cloudflared version $EXPECTED_CLOUDFLARED_VERSION"|"cloudflared version $EXPECTED_CLOUDFLARED_VERSION "*) ;;
+        *) fail "cloudflared must be exactly $EXPECTED_CLOUDFLARED_VERSION (observed ${version_output:-unknown})" ;;
+    esac
+    help_output="$(cloudflared tunnel run --help 2>&1)" \
+        || fail "cannot inspect cloudflared tunnel-run options: ${help_output:-no diagnostic}"
+    [[ "$help_output" == *"--token-file"* ]] \
+        || fail "cloudflared $EXPECTED_CLOUDFLARED_VERSION lacks required --token-file support"
 }
 
 command -v bash >/dev/null 2>&1 || fail "bash not on PATH"
@@ -102,6 +140,9 @@ command -v npm >/dev/null 2>&1 || fail "npm not on PATH"
 command -v npx >/dev/null 2>&1 || fail "npx not on PATH"
 command -v git >/dev/null 2>&1 || fail "git not on PATH"
 command -v podman >/dev/null 2>&1 || fail "podman not on PATH"
+command -v ss >/dev/null 2>&1 || fail "ss not on PATH"
+command -v nsenter >/dev/null 2>&1 || fail "nsenter not on PATH"
+require_cloudflared_contract
 test "$(id -un 2>/dev/null)" = 'podman' || fail "process user must be podman"
 require_value USER podman
 require_value HOME /home/podman
@@ -128,10 +169,14 @@ inner_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>&1)" \
     || fail "cannot inspect inner Podman rootless state: ${inner_rootless:-no diagnostic}"
 test "$inner_rootless" = true \
     || fail "inner Podman must be rootless (observed ${inner_rootless:-unknown})"
+require_managed_network_stack
 require_full_mapping uid
 require_full_mapping gid
 
-remove_managed_containers
+# A contract-v5 process never deletes, imports, or translates retained managed
+# runtime state. Operators must make the old box quiescent and remove its
+# managed containers before the explicit destroy/recreate boundary.
+reject_retained_managed_containers
 echo "[ploinky-box] self-check OK"
 
 if [ "$#" -gt 0 ]; then

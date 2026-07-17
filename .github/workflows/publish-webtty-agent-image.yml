@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       base_image:
-        description: 'Base image to build from'
+        description: 'Exact approved ploinky-node base image (tag plus index digest)'
         required: false
-        default: 'docker.io/assistos/ploinky-node:24-bookworm-tools'
+        default: 'docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:95ec6e79245cf6a193b3cdd95b0f7a329edf938f1bdf29e7f4fe361df784cdea'
         type: string
       image_tag:
         description: 'Docker Hub tag to publish'
@@ -30,7 +30,7 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/webtty-agent
-  DEFAULT_BASE_IMAGE: docker.io/assistos/ploinky-node:24-bookworm-tools
+  DEFAULT_BASE_IMAGE: docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:95ec6e79245cf6a193b3cdd95b0f7a329edf938f1bdf29e7f4fe361df784cdea
   DEFAULT_IMAGE_TAG: node24
 
 jobs:
@@ -50,6 +50,10 @@ jobs:
           if [ -z "$base_image" ]; then
             base_image="$DEFAULT_BASE_IMAGE"
           fi
+          if [ "$base_image" != "$DEFAULT_BASE_IMAGE" ]; then
+            echo 'base_image must equal the reviewed immutable ploinky-node index' >&2
+            exit 1
+          fi
           if [ -z "$image_tag" ]; then
             image_tag="$DEFAULT_IMAGE_TAG"
           fi
@@ -64,6 +68,17 @@ jobs:
             -t "$IMAGE_NAME:smoke" \
             images/webtty-agent
           docker run --rm "$IMAGE_NAME:smoke" node -e "require('node-pty'); console.log('node-pty ok')"
+          docker run --rm "$IMAGE_NAME:smoke" sh -eu -c '
+            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm.js
+            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm.css
+            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm-addon-fit.js
+            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm-addon-web-links.js
+            ! grep -R -E "https?://(unpkg|cdn\\.jsdelivr|cdnjs)" /opt/webtty-agent/public
+            test "$(stat -c "%u:%g:%a" /usr/local/share/ploinky/webtty-v5.contract)" = 0:0:444
+            test "$(sed -n "1p" /usr/local/share/ploinky/webtty-v5.contract)" = contract_version=5
+            test "$(wc -l < /usr/local/share/ploinky/webtty-v5.contract)" -eq 5
+            test -x /usr/local/bin/webtty-v5-start
+          '
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

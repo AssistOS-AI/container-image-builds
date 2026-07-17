@@ -1,4 +1,4 @@
-name: Publish OnlyOfficeAgent image
+name: Publish loopback-only LiveKit Egress image
 
 on:
   workflow_dispatch:
@@ -10,24 +10,24 @@ on:
       image_tag:
         description: 'Docker Hub tag to publish after digest verification'
         required: false
-        default: '9.3.1-v5'
+        default: 'v1.9.1-ploinky-loopback-v5'
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-onlyoffice-agent-image
+  group: publish-livekit-egress-loopback
   cancel-in-progress: false
 
 env:
-  IMAGE_NAME: assistos/onlyoffice-agent
-  IMAGE_TAG: ${{ inputs.image_tag || '9.3.1-v5' }}
+  IMAGE_NAME: assistos/livekit-egress
+  IMAGE_TAG: ${{ inputs.image_tag || 'v1.9.1-ploinky-loopback-v5' }}
   EXPECTED_DIGEST: ${{ inputs.expected_digest }}
 
 jobs:
   publish:
-    name: Verify exact OCI index, then publish
+    name: Verify exact Egress OCI index, then publish
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout image definitions
@@ -51,19 +51,59 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Smoke build local architecture
+      - name: Build local architecture
         run: |
           set -euo pipefail
-          docker build -t "$IMAGE_NAME:smoke" images/onlyoffice-agent
-          docker run --rm --entrypoint /bin/bash "$IMAGE_NAME:smoke" -lc '
+          docker build -t "$IMAGE_NAME:smoke" images/livekit-egress-loopback
+          docker run --rm --entrypoint sh "$IMAGE_NAME:smoke" -lc '
             set -eu
-            node --version
-            npm --version
-            git --version
-            python3 --version
-            make --version
-            test -x /app/ds/run-document-server.sh
+            contract=/usr/local/share/ploinky/livekit-egress-loopback-v5.contract
+            test -f "$contract" && test ! -L "$contract"
+            test "$(stat -c "%u:%g:%a" "$contract")" = 0:0:444
+            test "$(sed -n "1p" "$contract")" = contract_version=5
+            test "$(sed -n "2p" "$contract")" = source_commit=ba52a026bea409bde31dcc7da9ba5322e967520c
+            expected="$(sed -n "s/^binary_sha256=//p" "$contract")"
+            printf "%s  %s\n" "$expected" /usr/bin/egress | sha256sum --check --strict -
           '
+
+      - name: Prove semantic endpoints and loopback-only health listener
+        run: |
+          set -euo pipefail
+          network=livekit-egress-loopback-smoke
+          redis=livekit-egress-loopback-redis
+          egress=livekit-egress-loopback-egress
+          cleanup() {
+            docker rm -f "$egress" "$redis" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create "$network" >/dev/null
+          docker run -d --name "$redis" --network "$network" redis:7.0.15-bookworm@sha256:352c1fdadc91926edda08f45aeb3f27f37194c2f14101229c0523a11195c96e3 >/dev/null
+          printf '%s\n' \
+            'api_key: smoke-key' \
+            'api_secret: smoke-secret-not-a-production-credential' \
+            'ws_url: ws://127.0.0.1:7880' \
+            'insecure: true' \
+            'redis:' \
+            '  address: 127.0.0.1:6379' \
+            'template_port: 7980' \
+            'health_port: 7981' > /tmp/egress-smoke.yaml
+          docker run -d --name "$egress" --network "container:$redis" \
+            -v /tmp/egress-smoke.yaml:/tmp/egress.yaml:ro \
+            -e EGRESS_CONFIG_FILE=/tmp/egress.yaml \
+            "$IMAGE_NAME:smoke" >/dev/null
+          for _ in $(seq 1 30); do
+            if docker exec "$egress" curl -fsS http://127.0.0.1:7981/ >/tmp/egress-health.json 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          jq -e '.CpuLoad | numbers' /tmp/egress-health.json >/dev/null
+          docker exec "$egress" curl -fsS http://127.0.0.1:7980/ | grep -Fq 'LiveKit Egress'
+          docker exec "$egress" sh -c "grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]+0100007F:1F2D[[:space:]]' /proc/net/tcp"
+          ! docker exec "$egress" sh -c "grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]+00000000:1F2D[[:space:]]' /proc/net/tcp"
+          ! docker run --rm --network "$network" --entrypoint curl "$IMAGE_NAME:smoke" \
+            -fsS --connect-timeout 2 "http://$redis:7981/"
 
       - name: Build sealed multi-architecture OCI archive
         run: |
@@ -71,11 +111,10 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --provenance=false \
-            --output type=oci,dest=/tmp/onlyoffice-agent.oci.tar \
-            images/onlyoffice-agent
+            --output type=oci,dest=/tmp/livekit-egress-loopback.oci.tar \
+            images/livekit-egress-loopback
 
       - name: Verify archive digest and platform set before registry mutation
-        id: archive
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -86,7 +125,7 @@ jobs:
           import re
           import tarfile
 
-          archive = pathlib.Path('/tmp/onlyoffice-agent.oci.tar')
+          archive = pathlib.Path('/tmp/livekit-egress-loopback.oci.tar')
           expected = os.environ['EXPECTED_DIGEST']
           with tarfile.open(archive, 'r') as tar:
               root = json.load(tar.extractfile('index.json'))
@@ -114,8 +153,6 @@ jobs:
                   raise SystemExit(f'OCI platform set must equal {sorted(required)}, got {sorted(platforms)}')
               if actual != expected:
                   raise SystemExit(f'computed OCI index {actual} does not equal approved expected_digest')
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f'digest={actual}\n')
           PY
 
       - name: Install archive publisher
@@ -134,11 +171,13 @@ jobs:
         run: |
           set -euo pipefail
           destination="docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-          skopeo copy --all "oci-archive:/tmp/onlyoffice-agent.oci.tar" "$destination"
+          skopeo copy --all "oci-archive:/tmp/livekit-egress-loopback.oci.tar" "$destination"
           remote_digest="$(skopeo inspect --raw "$destination" | sha256sum | awk '{print "sha256:" $1}')"
           if [ "$remote_digest" != "$EXPECTED_DIGEST" ]; then
             echo "registry digest mismatch after copy: expected $EXPECTED_DIGEST, got $remote_digest" >&2
             exit 1
           fi
-          printf 'Published immutable image: `docker.io/%s@%s`\n' \
+          printf 'Published patched Egress: `docker.io/%s@%s`\n' \
             "$IMAGE_NAME" "$remote_digest" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Rebuild livekit-server-agent with this exact immutable reference before v5 activation.\n' \
+            >> "$GITHUB_STEP_SUMMARY"

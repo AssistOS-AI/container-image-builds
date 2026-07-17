@@ -3,11 +3,6 @@ name: Publish Umami Agent image
 on:
   workflow_dispatch:
     inputs:
-      umami_base_image:
-        description: 'Umami base image to build from'
-        required: false
-        default: 'docker.umami.is/umami-software/umami:postgresql-latest'
-        type: string
       image_tag:
         description: 'Docker Hub tag to publish'
         required: false
@@ -18,6 +13,7 @@ on:
       - main
     paths:
       - 'images/umami-agent/**'
+      - 'tests/umami-agent-supply-chain.test.mjs'
       - '.github/workflows/publish-umami-agent-image.yml'
 
 permissions:
@@ -29,56 +25,79 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/umami-agent
-  DEFAULT_UMAMI_BASE_IMAGE: docker.umami.is/umami-software/umami:postgresql-latest
   DEFAULT_IMAGE_TAG: umami-stack
 
 jobs:
   publish:
     name: Build and push Docker Hub image
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout image definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Resolve image inputs
+      - name: Resolve image tag
         id: image
+        env:
+          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          umami_base_image="${{ github.event.inputs.umami_base_image }}"
-          image_tag="${{ github.event.inputs.image_tag }}"
-          if [ -z "$umami_base_image" ]; then
-            umami_base_image="$DEFAULT_UMAMI_BASE_IMAGE"
+          image_tag="${REQUESTED_IMAGE_TAG:-$DEFAULT_IMAGE_TAG}"
+          if [[ ! "$image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo 'image_tag must be one valid OCI tag component' >&2
+            exit 1
           fi
-          if [ -z "$image_tag" ]; then
-            image_tag="$DEFAULT_IMAGE_TAG"
-          fi
-          echo "umami_base_image=$umami_base_image" >> "$GITHUB_OUTPUT"
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable source lock and build definition
+        run: node --test tests/umami-agent-supply-chain.test.mjs
 
       - name: Smoke build local architecture
         run: |
           set -euo pipefail
-          docker build \
-            --build-arg UMAMI_BASE_IMAGE='${{ steps.image.outputs.umami_base_image }}' \
-            -t "$IMAGE_NAME:smoke" \
-            images/umami-agent
-          docker run --rm "$IMAGE_NAME:smoke" sh -c 'node --version && npm --version && postgres --version && bun --version && test -f /app/server.js && test -f /opt/umami-mcp/dist/index.js'
+          docker build --pull -t "$IMAGE_NAME:smoke" images/umami-agent
+          docker run --rm "$IMAGE_NAME:smoke" sh -eu -c '
+            test "$(node --version)" != ""
+            test "$(npm --version)" != ""
+            test "$(postgres --version | cut -d " " -f 3)" = 18.4
+            test "$(bun --version)" = 1.3.14
+            test -f /app/server.js
+            test -f /opt/umami-mcp/dist/index.js
+            test "$(stat -c "%u:%g:%a" /usr/local/share/ploinky/umami-agent-sources.json)" = 0:0:444
+            node -e "JSON.parse(require(\"node:fs\").readFileSync(\"/usr/local/share/ploinky/umami-agent-sources.json\", \"utf8\"))"
+          '
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$IMAGE_NAME:smoke")" = 'sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec'
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.assistos.umami-mcp.revision" }}' "$IMAGE_NAME:smoke")" = '3ab73beda2db0ebffb0b07439b218ef562107520'
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Verify pinned Umami base platform manifests
+        run: |
+          set -euo pipefail
+          source_image="$(jq -r '.umami.image' images/umami-agent/sources.lock.json)"
+          docker buildx imagetools inspect "$source_image" --raw > /tmp/umami-base-index.json
+          for platform in linux/amd64 linux/arm64; do
+            os="${platform%/*}"
+            architecture="${platform#*/}"
+            expected="$(jq -r --arg platform "$platform" '.umami.platformManifests[$platform]' images/umami-agent/sources.lock.json)"
+            actual="$(jq -r --arg os "$os" --arg architecture "$architecture" '.manifests[] | select(.platform.os == $os and .platform.architecture == $architecture) | .digest' /tmp/umami-base-index.json)"
+            test "$actual" = "$expected"
+          done
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
@@ -86,13 +105,36 @@ jobs:
             type=sha,prefix=${{ steps.image.outputs.image_tag }}-
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: images/umami-agent
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: |
-            UMAMI_BASE_IMAGE=${{ steps.image.outputs.umami_base_image }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
+          provenance: mode=max
+          sbom: true
+
+      - name: Verify and report immutable image
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'Build output digest is missing or malformed.' >&2
+            exit 1
+          fi
+          immutable_ref="docker.io/${IMAGE_NAME}@${BUILD_DIGEST}"
+          docker buildx imagetools inspect "$immutable_ref" --raw > /tmp/umami-agent-index.json
+          jq -e '.manifests | any(.platform.os == "linux" and .platform.architecture == "amd64")' /tmp/umami-agent-index.json >/dev/null
+          jq -e '.manifests | any(.platform.os == "linux" and .platform.architecture == "arm64")' /tmp/umami-agent-index.json >/dev/null
+          echo "Published immutable image: $immutable_ref"
+          {
+            printf 'Published immutable image: `%s`\n\n' "$immutable_ref"
+            printf '| Pinned source | Value |\n'
+            printf '| --- | --- |\n'
+            printf '| Umami base index | `%s` |\n' "$(jq -r '.umami.image' images/umami-agent/sources.lock.json)"
+            printf '| Bun | `%s` |\n' "$(jq -r '.bun.version' images/umami-agent/sources.lock.json)"
+            printf '| umami-mcp commit | `%s` |\n' "$(jq -r '.umamiMcp.commit' images/umami-agent/sources.lock.json)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -4,9 +4,32 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: AssistOS-AI/ploinky ref mounted during verification
-        required: false
-        default: master
+        description: Exact 40-character AssistOS-AI/ploinky commit SHA mounted during verification
+        required: true
+        type: string
+      explorer_ref:
+        description: Exact 40-character AssistOS-AI/AssistOSExplorer commit SHA for the full-graph gate
+        required: true
+        type: string
+      webmeet_infra_ref:
+        description: Exact 40-character AssistOS-AI/webmeetInfra commit SHA for the full-graph gate
+        required: true
+        type: string
+      umami_ref:
+        description: Exact 40-character AssistOS-AI/UmamiAgent commit SHA for the full-graph gate
+        required: true
+        type: string
+      achilles_cli_ref:
+        description: Exact 40-character AssistOS-AI/AchillesCLI commit SHA for the full-graph gate
+        required: true
+        type: string
+      proxies_ref:
+        description: Exact 40-character AssistOS-AI/proxies commit SHA for the full-graph gate
+        required: true
+        type: string
+      basic_ref:
+        description: Exact 40-character AssistOS-AI/basic commit SHA for the full-graph gate
+        required: true
         type: string
 
 permissions:
@@ -27,22 +50,30 @@ jobs:
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
     steps:
+      - name: Require immutable Ploinky source SHA
+        id: source
+        env:
+          SOURCE_SHA: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Checkout requested Ploinky source
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: AssistOS-AI/ploinky
-          ref: ${{ inputs.source_ref || 'master' }}
+          ref: ${{ steps.source.outputs.sha }}
           path: sources/ploinky
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Record immutable Ploinky commit
-        id: source
+      - name: Verify immutable Ploinky commit
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           set -euo pipefail
-          sha=$(git -C sources/ploinky rev-parse HEAD)
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Ploinky source: $sha"
+          test "$(git -C sources/ploinky rev-parse HEAD)" = "$SOURCE_SHA"
+          echo "Ploinky source: $SOURCE_SHA"
 
   build:
     name: Build and gate ${{ matrix.platform }}
@@ -56,15 +87,17 @@ jobs:
           - arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
+            cloudflared_sha256: a76297bc59df96887b94d8cdb2aabe2401fc7b2bf3527b05d9a311b7341d190a
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
+            cloudflared_sha256: 254ee7bd4966d32e87c3d223c4b90d2b8f49e0a6a468484a09ea6346b50b2957
     steps:
       - name: Checkout image definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Checkout immutable Ploinky source
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: AssistOS-AI/ploinky
           ref: ${{ needs.resolve-source.outputs.source_sha }}
@@ -79,10 +112,117 @@ jobs:
           set -euo pipefail
           test "$(git -C sources/ploinky rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Require immutable full-graph source SHAs
+        env:
+          EXPLORER_SHA: ${{ inputs.explorer_ref }}
+          WEBMEET_INFRA_SHA: ${{ inputs.webmeet_infra_ref }}
+          UMAMI_SHA: ${{ inputs.umami_ref }}
+          ACHILLES_CLI_SHA: ${{ inputs.achilles_cli_ref }}
+          PROXIES_SHA: ${{ inputs.proxies_ref }}
+          BASIC_SHA: ${{ inputs.basic_ref }}
+        run: |
+          set -euo pipefail
+          for sha in \
+            "$EXPLORER_SHA" "$WEBMEET_INFRA_SHA" "$UMAMI_SHA" \
+            "$ACHILLES_CLI_SHA" "$PROXIES_SHA" "$BASIC_SHA"; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          done
 
-      - name: Require rootless Podman for contract-3 runtime gates
+      - name: Checkout exact Explorer graph sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/AssistOSExplorer
+          ref: ${{ inputs.explorer_ref }}
+          path: full-workspace/AssistOSExplorer
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact WebMeet infrastructure source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/webmeetInfra
+          ref: ${{ inputs.webmeet_infra_ref }}
+          path: full-workspace/webmeetInfra
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact Umami source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/UmamiAgent
+          ref: ${{ inputs.umami_ref }}
+          path: full-workspace/UmamiAgent
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact AchillesCLI source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/AchillesCLI
+          ref: ${{ inputs.achilles_cli_ref }}
+          path: full-workspace/AchillesCLI
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact proxies source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/proxies
+          ref: ${{ inputs.proxies_ref }}
+          path: full-workspace/proxies
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact basic source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/basic
+          ref: ${{ inputs.basic_ref }}
+          path: full-workspace/basic
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact image definitions for Explorer graph discovery
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: full-workspace/container-image-builds
+
+      - name: Gate checked-out Ploinky contract-5 source
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+
+          const contractModule = pathToFileURL(
+            path.resolve('sources/ploinky/container/runtime-contract.mjs'),
+          ).href;
+          const { REQUIRED_RUNTIME_CONTRACT } = await import(contractModule);
+          assert.equal(
+            REQUIRED_RUNTIME_CONTRACT,
+            '5',
+            'the exact checked-out Ploinky source must require runtime contract 5',
+          );
+          NODE
+          node --test \
+            sources/ploinky/tests/unit/networkContract.test.mjs \
+            sources/ploinky/tests/unit/networkHardCutSourceAbsence.test.mjs \
+            sources/ploinky/tests/unit/networkLifecycle.test.mjs \
+            sources/ploinky/tests/unit/runtimeDocumentation.test.mjs
+          node sources/ploinky/container/runtime-supervisor-tests.mjs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Verify pinned multiarchitecture cloudflared source
+        env:
+          CLOUDFLARED_IMAGE: docker.io/cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
+        run: |
+          set -euo pipefail
+          [[ "$CLOUDFLARED_IMAGE" =~ ^docker\.io/cloudflare/cloudflared:2026\.7\.1@sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "$CLOUDFLARED_IMAGE" > /tmp/cloudflared-index.json
+          jq -e '
+            [.manifests[].platform | select(.os == "linux") | .architecture] as $arches
+            | ($arches | index("amd64")) != null
+              and ($arches | index("arm64")) != null
+          ' /tmp/cloudflared-index.json
+
+      - name: Require rootless Podman for contract-5 runtime gates
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -93,14 +233,14 @@ jobs:
           podman unshare true
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push candidate by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./images/ploinky-box/Dockerfile
@@ -117,7 +257,7 @@ jobs:
           echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "IMAGE_REF=docker.io/${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_ENV"
 
-      - name: Inspect exact contract-3 metadata and platform
+      - name: Inspect exact contract-5 metadata and platform
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}
         run: |
@@ -131,7 +271,7 @@ jobs:
                 | add // {}) as $env
             | ($image.Os + "/" + $image.Architecture) == $platform
               and $image.Config.User == "podman"
-              and ($image.Config.Labels["io.assistos.ploinky.runtime-contract"] == "3")
+              and ($image.Config.Labels["io.assistos.ploinky.runtime-contract"] == "5")
               and $image.Config.WorkingDir == "/workspace"
               and $image.Config.Entrypoint == ["/usr/local/bin/ploinky-box-entrypoint"]
               and (($image.Config.Cmd == null) or ($image.Config.Cmd == []))
@@ -148,9 +288,13 @@ jobs:
           ' /tmp/ploinky-box-inspect.json
 
       - name: Verify source-free runtime filesystem
+        env:
+          EXPECTED_CLOUDFLARED_SHA256: ${{ matrix.cloudflared_sha256 }}
         run: |
           set -euo pipefail
-          docker run --rm --entrypoint bash "$IMAGE_REF" -c '
+          docker run --rm \
+            --env EXPECTED_CLOUDFLARED_SHA256 \
+            --entrypoint bash "$IMAGE_REF" -c '
             set -euo pipefail
             test "$(id -un)" = podman
             test "$USER" = podman
@@ -169,6 +313,10 @@ jobs:
             npx --version
             git --version
             podman --version
+            cloudflared --version | grep -E "^cloudflared version 2026\.7\.1([[:space:]]|$)"
+            cloudflared tunnel run --help 2>&1 | grep -F -- "--token-file"
+            printf "%s  %s\n" "$EXPECTED_CLOUDFLARED_SHA256" /usr/local/bin/cloudflared \
+              | sha256sum --check --strict -
             getcap /usr/bin/newuidmap
             getcap /usr/bin/newgidmap
             test -f /etc/ploinky-box
@@ -208,7 +356,23 @@ jobs:
               echo MOUNT-OK
             '
 
-      - name: Gate nested Podman and exact-label boot cleanup
+      - name: Gate exact fixed outer publications and lifecycle
+        env:
+          SMOKE_FULL_GRAPH_ARGS_JSON: '["start","AssistOSExplorer/explorer","18080"]'
+          SMOKE_FULL_GRAPH_REPOSITORIES_JSON: >-
+            {"AchillesCLI":"${{ github.workspace }}/full-workspace/AchillesCLI",
+            "AssistOSExplorer":"${{ github.workspace }}/full-workspace/AssistOSExplorer",
+            "UmamiAgent":"${{ github.workspace }}/full-workspace/UmamiAgent",
+            "basic":"${{ github.workspace }}/full-workspace/basic",
+            "container-image-builds":"${{ github.workspace }}/full-workspace/container-image-builds",
+            "proxies":"${{ github.workspace }}/full-workspace/proxies",
+            "webmeetInfra":"${{ github.workspace }}/full-workspace/webmeetInfra"}
+        run: |
+          set -euo pipefail
+          SMOKE_IMAGE="$IMAGE_REF" SMOKE_PORT=18080 \
+            node sources/ploinky/container/smoke-runtime.mjs
+
+      - name: Gate contract-5 hard cut and native host-gateway topology
         run: |
           set -euo pipefail
           prefix="ploinky-box-gate-${{ matrix.arch }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -222,14 +386,24 @@ jobs:
               "$workspace_volume" "$storage_volume" "$deps_volume" \
               >/dev/null 2>&1 || true
           }
-          wait_for_check_count() {
-            local expected="$1"
-            local count state
+          run_outer() {
+            local args=(
+              run -d --name "$outer" --user podman
+              --device /dev/fuse
+              --device /dev/net/tun
+              --security-opt unmask=ALL
+              -v "$PWD/sources/ploinky:/opt/ploinky:ro"
+              -v "$workspace_volume:/workspace"
+              -v "$storage_volume:/home/podman/.local/share/containers"
+              -v "$deps_volume:/opt/ploinky/node_modules"
+            )
+            args+=("$IMAGE_REF")
+            podman "${args[@]}" >/dev/null
+          }
+          wait_for_self_check() {
+            local state
             for _ in $(seq 1 60); do
-              count=$(podman logs "$outer" 2>&1 | grep -c 'self-check OK' || true)
-              if test "$count" -ge "$expected"; then
-                return 0
-              fi
+              podman logs "$outer" 2>&1 | grep -q 'self-check OK' && return 0
               state=$(podman inspect --format '{{.State.Status}}' "$outer" 2>/dev/null || true)
               if test "$state" = exited; then
                 podman logs "$outer" >&2
@@ -238,6 +412,17 @@ jobs:
               sleep 1
             done
             podman logs "$outer" >&2
+            return 1
+          }
+          wait_for_router() {
+            for _ in $(seq 1 60); do
+              if podman exec "$outer" node -e \
+                'const http=require("node:http");const req=http.get({socketPath:"/workspace/.ploinky/run/router-health.sock",path:"/health"},res=>{res.resume();process.exit(res.statusCode===200?0:1)});req.setTimeout(2000,()=>{req.destroy();process.exit(1)});req.on("error",()=>process.exit(1));'; then
+                return 0
+              fi
+              sleep 1
+            done
+            podman exec "$outer" cat /workspace/router-smoke.log >&2 || true
             return 1
           }
           test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
@@ -257,20 +442,37 @@ jobs:
                 /home/podman/.local/share/containers \
                 /opt/ploinky/node_modules
             '
-          podman run -d --name "$outer" --user podman \
-            --device /dev/fuse \
-            --device /dev/net/tun \
-            --security-opt unmask=ALL \
-            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
-            -v "$workspace_volume:/workspace" \
-            -v "$storage_volume:/home/podman/.local/share/containers" \
-            -v "$deps_volume:/opt/ploinky/node_modules" \
-            "$IMAGE_REF" >/dev/null
-          wait_for_check_count 1
+
+          # The checked-out supervisor tests above prove that contract-4 outer
+          # state is rejected before mutation. This native gate separately
+          # proves that an operator can quiesce/remove managed nested state,
+          # then explicitly destroy/recreate without a v5 migration reader.
+          run_outer
+          wait_for_self_check
+          podman exec -i "$outer" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { createNetworkLifecycleAdapter } from '/opt/ploinky/cli/services/networkLifecycle.js';
+
+          const lifecycle = createNetworkLifecycleAdapter({
+            runtime: 'podman',
+            workspaceRoot: '/workspace',
+          });
+          const primary = lifecycle.ensureNetwork('primary');
+          const secondary = lifecycle.ensureNetwork('secondary');
+          assert.equal(primary.created, true);
+          assert.equal(secondary.created, true);
+          assert.match(primary.name, /^ploinky-nw-[a-f0-9]{12}-[a-f0-9]{12}$/);
+          assert.match(secondary.name, /^ploinky-nw-[a-f0-9]{12}-[a-f0-9]{12}$/);
+          assert.notEqual(primary.name, secondary.name);
+          fs.writeFileSync('/workspace/schema2-networks-before-hard-cut.json', JSON.stringify({
+            workspaceHash: lifecycle.identity.hash,
+            primary: primary.name,
+            secondary: secondary.name,
+          }, null, 2));
+          NODE
           podman exec "$outer" bash -lc '
             set -euo pipefail
-            podman version
-            podman info
             test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
             uid_configured=$(awk -F: '\''$1 == "podman" { total += $3 } END { print total + 0 }'\'' /etc/subuid)
             gid_configured=$(awk -F: '\''$1 == "podman" { total += $3 } END { print total + 0 }'\'' /etc/subgid)
@@ -284,14 +486,32 @@ jobs:
             gid_caps=$(getcap /usr/bin/newgidmap || true)
             { [[ "$uid_caps" == *cap_setuid=ep* ]] || [[ "$uid_caps" == *cap_setuid+ep* ]] || test -u /usr/bin/newuidmap; }
             { [[ "$gid_caps" == *cap_setgid=ep* ]] || [[ "$gid_caps" == *cap_setgid+ep* ]] || test -u /usr/bin/newgidmap; }
-            podman run --network slirp4netns:allow_host_loopback=true \
-              --rm docker.io/library/alpine echo nested-ok
-            podman run -d --name managed-running \
+
+            podman pull docker.io/library/alpine
+            topology=/workspace/schema2-networks-before-hard-cut.json
+            workspace_hash=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).workspaceHash")
+            primary=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).primary")
+            secondary=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).secondary")
+            podman create --name old-gateway --network "$primary" \
               --label io.assistos.ploinky.managed=1 \
+              --label io.assistos.ploinky.resource=gateway \
+              --label io.assistos.ploinky.network-schema=2 \
+              --label io.assistos.ploinky.workspace="$workspace_hash" \
               docker.io/library/alpine sleep 600
-            podman run --name managed-stopped \
+            podman run -d --name old-default-agent --network "$primary" \
               --label io.assistos.ploinky.managed=1 \
-              docker.io/library/alpine true
+              --label io.assistos.ploinky.resource=agent \
+              --label io.assistos.ploinky.network-schema=2 \
+              --label io.assistos.ploinky.workspace="$workspace_hash" \
+              docker.io/library/alpine sleep 600
+            podman create --name old-multi-agent --network "$primary" \
+              --label io.assistos.ploinky.managed=1 \
+              --label io.assistos.ploinky.resource=agent \
+              --label io.assistos.ploinky.network-schema=2 \
+              --label io.assistos.ploinky.workspace="$workspace_hash" \
+              docker.io/library/alpine sleep 600
+            podman network connect "$secondary" old-multi-agent
+            podman start old-multi-agent
             podman run -d --name manual-running \
               docker.io/library/alpine sleep 600
             podman create --name manual-stopped docker.io/library/alpine true
@@ -307,13 +527,27 @@ jobs:
             podman volume create sentinel-volume
             podman run --rm -v sentinel-volume:/sentinel \
               docker.io/library/alpine sh -c "echo retained > /sentinel/value"
+            printf retained > /workspace/.hard-cut-workspace-sentinel
+            printf retained > /home/podman/.local/share/containers/.hard-cut-storage-sentinel
+            printf retained > /opt/ploinky/node_modules/.hard-cut-deps-sentinel
           '
-          podman restart "$outer" >/dev/null
-          wait_for_check_count 2
+
+          # This is the explicit destructive operator step. Contract v5 must
+          # never perform this removal from its entrypoint or startup code.
           podman exec "$outer" bash -lc '
             set -euo pipefail
-            ! podman container exists managed-running
-            ! podman container exists managed-stopped
+            podman rm --force --time 0 old-gateway old-default-agent old-multi-agent
+            echo EXPLICIT-MANAGED-STATE-REMOVAL-OK
+          '
+
+          podman rm -f --time 0 "$outer" >/dev/null
+          run_outer
+          wait_for_self_check
+          podman exec "$outer" bash -lc '
+            set -euo pipefail
+            ! podman container exists old-gateway
+            ! podman container exists old-default-agent
+            ! podman container exists old-multi-agent
             podman container exists manual-running
             podman container exists manual-stopped
             podman container exists managed-zero
@@ -323,10 +557,257 @@ jobs:
             podman volume exists sentinel-volume
             test "$(podman run --rm -v sentinel-volume:/sentinel \
               docker.io/library/alpine cat /sentinel/value)" = retained
-            echo CLEANUP-OK
+            test "$(cat /workspace/.hard-cut-workspace-sentinel)" = retained
+            test "$(cat /home/podman/.local/share/containers/.hard-cut-storage-sentinel)" = retained
+            test "$(cat /opt/ploinky/node_modules/.hard-cut-deps-sentinel)" = retained
+            topology=/workspace/schema2-networks-before-hard-cut.json
+            primary=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).primary")
+            secondary=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).secondary")
+            for network in "$primary" "$secondary"; do
+              podman network exists "$network"
+              test "$(podman network inspect --format '\''{{index .Labels "io.assistos.ploinky.network-schema"}}'\'' "$network")" = 2
+              test "$(podman network inspect --format '\''{{index .Options "isolate"}}'\'' "$network")" = true
+            done
           '
 
-      - name: Gate cleanup enumeration and removal failures
+          evidence=$(podman exec "$outer" bash -lc '
+            set -euo pipefail
+            podman_version=$(podman --version | awk "{ print \$3 }")
+            test "$(printf "5.4\n%s\n" "$podman_version" | sort -V | head -n 1)" = 5.4
+            test "$(podman info --format '\''{{.Host.NetworkBackend}}'\'')" = netavark
+            printf "Podman: %s\n" "$podman_version"
+            rpm -q netavark aardvark-dns passt
+            printf "pasta: %s\n" "$(pasta --version | head -n 1)"
+          ')
+          printf '%s\n' "$evidence"
+          {
+            echo "### ${{ matrix.platform }} nested networking evidence"
+            echo
+            echo '```text'
+            printf '%s\n' "$evidence"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          podman exec "$outer" /opt/ploinky/bin/ploinky-install-deps
+          podman exec "$outer" bash -lc '
+            set -euo pipefail
+            PLOINKY_MASTER_KEY=$(printf "6%.0s" {1..64}) PORT=8080 \
+              nohup node /opt/ploinky/cli/server/RoutingServer.js \
+              > /workspace/router-smoke.log 2>&1 &
+            echo $! > /workspace/router-smoke.pid
+            nohup node -e '\''require("node:http").createServer((_q,r)=>r.end("loopback")).listen(18082,"127.0.0.1")'\'' \
+              > /workspace/loopback-smoke.log 2>&1 &
+          '
+          wait_for_router
+          podman exec "$outer" node --input-type=module -e '
+            for (let attempt = 0; attempt < 30; attempt += 1) {
+              try {
+                const response = await fetch("http://127.0.0.1:18082");
+                if (response.ok && await response.text() === "loopback") process.exit(0);
+              } catch {}
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            throw new Error("loopback-only box service did not become ready");
+          '
+
+          # Re-enter the checked-out Ploinky implementation after the outer
+          # hard cut. It must recognize both persisted schema-2 networks as
+          # reusable, derive the default-network name, generate the managed
+          # host policy, and create/verify both managed agent shapes.
+          podman exec -i "$outer" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          import {
+            NETWORK_STATUS_SCHEMA_VERSION,
+            createNetworkLifecycleAdapter,
+          } from '/opt/ploinky/cli/services/networkLifecycle.js';
+          import {
+            canonicalizeNetwork,
+            networkContractHash,
+          } from '/opt/ploinky/cli/services/networkContract.js';
+          import { buildRuntimeRouterEnv } from '/opt/ploinky/cli/services/docker/agentServiceManager.js';
+          import { buildRouterEndpoint } from '/opt/ploinky/cli/services/routerPort.js';
+
+          const before = JSON.parse(fs.readFileSync(
+            '/workspace/schema2-networks-before-hard-cut.json',
+            'utf8',
+          ));
+          const lifecycle = createNetworkLifecycleAdapter({
+            runtime: 'podman',
+            workspaceRoot: '/workspace',
+          });
+          assert.equal(lifecycle.identity.hash, before.workspaceHash);
+          for (const logicalName of ['primary', 'secondary']) {
+            const reused = lifecycle.ensureNetwork(logicalName);
+            assert.equal(reused.created, false, `${logicalName} was recreated instead of reused`);
+            assert.equal(reused.name, before[logicalName]);
+          }
+
+          function runPodman(args) {
+            const result = spawnSync('podman', args, { encoding: 'utf8' });
+            assert.equal(
+              result.status,
+              0,
+              `podman ${args.join(' ')} failed: ${result.stderr || result.error?.message || ''}`,
+            );
+          }
+
+          function createManagedAgent({ containerName, network, instanceKey }) {
+            const endpoint = buildRouterEndpoint(network.mode, 8080);
+            const routerEnv = buildRuntimeRouterEnv('podman', {
+              networkMode: network.mode,
+              routerEndpoint: endpoint,
+              routerPort: endpoint.port,
+            });
+            return lifecycle.runManagedContainerTransaction({
+              network,
+              canonicalAgentId: containerName,
+              instanceKey,
+              containerName,
+              createContainer(plan) {
+                const args = [
+                  'create',
+                  '--name', containerName,
+                  ...plan.args,
+                  ...lifecycle.agentIdentityLabelArgs(network),
+                ];
+                for (const [name, value] of Object.entries(routerEnv)) {
+                  args.push('--env', `${name}=${value}`);
+                }
+                args.push('docker.io/library/alpine', 'sleep', '600');
+                runPodman(args);
+              },
+            });
+          }
+
+          const defaultNetwork = canonicalizeNetwork({ mode: 'default' });
+          const bridgeNetwork = canonicalizeNetwork({
+            mode: 'bridge',
+            attachments: [
+              { name: 'primary', primary: true },
+              { name: 'secondary' },
+            ],
+          });
+          const defaultPlan = createManagedAgent({
+            containerName: 'default-agent',
+            network: defaultNetwork,
+            instanceKey: 'smoke/default-agent',
+          });
+          const multiPlan = createManagedAgent({
+            containerName: 'multi-agent',
+            network: bridgeNetwork,
+            instanceKey: 'smoke/multi-agent',
+          });
+          assert.equal(defaultPlan.created.length, 1);
+          assert.equal(multiPlan.created.length, 0);
+          assert.deepEqual(
+            multiPlan.attachments.map(({ name }) => name).sort(),
+            [before.primary, before.secondary].sort(),
+          );
+          assert.equal(lifecycle.verifyContainerContract(
+            'default-agent',
+            defaultNetwork,
+            'default-agent',
+            {
+              instanceKey: 'smoke/default-agent',
+              contractHash: networkContractHash(defaultNetwork),
+            },
+          ), true);
+          assert.equal(lifecycle.verifyContainerContract(
+            'multi-agent',
+            bridgeNetwork,
+            'multi-agent',
+            {
+              instanceKey: 'smoke/multi-agent',
+              contractHash: networkContractHash(bridgeNetwork),
+            },
+          ), true);
+
+          const status = lifecycle.status();
+          assert.equal(status.schemaVersion, NETWORK_STATUS_SCHEMA_VERSION);
+          assert.equal(status.workspaceHash, before.workspaceHash);
+          const expectedNetworks = [
+            defaultPlan.attachments[0].name,
+            before.primary,
+            before.secondary,
+          ].sort();
+          assert.deepEqual(
+            status.networks
+              .filter(({ ownership }) => ownership === 'owned')
+              .map(({ physicalName }) => physicalName)
+              .sort(),
+            expectedNetworks,
+          );
+          fs.writeFileSync('/workspace/managed-topology.json', JSON.stringify({
+            workspaceHash: before.workspaceHash,
+            defaultNetwork: defaultPlan.attachments[0].name,
+            primary: before.primary,
+            secondary: before.secondary,
+            managedNetworks: expectedNetworks,
+          }, null, 2));
+          NODE
+
+          podman exec "$outer" bash -lc '
+            set -euo pipefail
+            topology=/workspace/managed-topology.json
+            default_network=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).defaultNetwork")
+            secondary=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).secondary")
+            managed_networks=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).managedNetworks.join(\" \")")
+            router_port=8081
+            podman run -d --name same-network-peer --network "$default_network" \
+              --network-alias same-network-peer \
+              docker.io/library/alpine sh -c '\''mkdir -p /www; echo same-network > /www/index.html; exec httpd -f -p 18090 -h /www'\''
+            podman run -d --name isolated-peer --network "$secondary" \
+              --network-alias isolated-peer \
+              docker.io/library/alpine sh -c '\''mkdir -p /www; echo isolated > /www/index.html; exec httpd -f -p 18090 -h /www'\''
+
+            for agent in default-agent multi-agent; do
+              test "$(podman inspect --format '\''{{.HostConfig.HostsFile}}'\'' "$agent")" = none
+              test "$(podman inspect --format '\''{{json .HostConfig.ExtraHosts}}'\'' "$agent")" = '\''["host.containers.internal:host-gateway"]'\''
+              podman exec "$agent" awk '\''{ for (i=2; i<=NF; i++) if ($i == "host.containers.internal") count++ } END { exit count == 1 ? 0 : 1 }'\'' /etc/hosts
+              test "$(podman exec "$agent" printenv PLOINKY_ROUTER_HOST)" = host.containers.internal
+              test "$(podman exec "$agent" printenv PLOINKY_ROUTER_PORT)" = 8080
+              test "$(podman exec "$agent" printenv PLOINKY_ROUTER_URL)" = "http://host.containers.internal:8080"
+              test "$(podman exec "$agent" printenv PLOINKY_INTERNAL_ROUTER_URL)" = "http://host.containers.internal:$router_port"
+              podman exec "$agent" nc -z -w 3 host.containers.internal "$router_port"
+              podman exec "$agent" nc -z -w 3 host.containers.internal 8080
+              ! podman exec "$agent" wget -T 3 -qO- http://host.containers.internal:8080/status
+            done
+
+            podman exec default-agent wget -qO- http://same-network-peer:18090 | grep -q same-network
+            isolated_ip=$(podman inspect --format '\''{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'\'' isolated-peer)
+            ! podman exec default-agent wget -T 3 -qO- "http://$isolated_ip:18090"
+            podman exec default-agent wget -qO- https://example.com >/dev/null
+            ! podman exec default-agent wget -T 3 -qO- http://host.containers.internal:18082
+
+            podman network inspect $managed_networks > /workspace/networks-before-router-restart.json
+            kill "$(cat /workspace/router-smoke.pid)"
+            for _ in $(seq 1 30); do
+              kill -0 "$(cat /workspace/router-smoke.pid)" 2>/dev/null || break
+              sleep 1
+            done
+            ! kill -0 "$(cat /workspace/router-smoke.pid)" 2>/dev/null
+            PLOINKY_MASTER_KEY=$(printf "6%.0s" {1..64}) PORT=8080 \
+              nohup node /opt/ploinky/cli/server/RoutingServer.js \
+              >> /workspace/router-smoke.log 2>&1 &
+            echo $! > /workspace/router-smoke.pid
+          '
+          wait_for_router
+          podman exec "$outer" bash -lc '
+            set -euo pipefail
+            topology=/workspace/managed-topology.json
+            managed_networks=$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"$topology\", \"utf8\")).managedNetworks.join(\" \")")
+            podman network inspect $managed_networks > /workspace/networks-after-router-restart.json
+            cmp /workspace/networks-before-router-restart.json \
+              /workspace/networks-after-router-restart.json
+            podman exec default-agent nc -z -w 3 host.containers.internal 8081
+            podman exec default-agent nc -z -w 3 host.containers.internal 8080
+            ! podman exec default-agent wget -T 3 -qO- http://host.containers.internal:8080/status
+            echo HARD-CUT-AND-TOPOLOGY-OK
+          '
+
+      - name: Gate retained managed-state enumeration and hard-cut rejection
         run: |
           set -euo pipefail
           prefix="ploinky-box-failure-${{ matrix.arch }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -380,10 +861,6 @@ jobs:
             echo 'injected managed-container enumeration failure' >&2
             exit 86
           fi
-          if test "$mode" = remove && test "${1-}" = rm; then
-            echo 'injected managed-container removal failure' >&2
-            exit 87
-          fi
           exec /usr/bin/podman "$@"
           WRAPPER
           chmod 0755 "$wrapper_dir/podman"
@@ -416,15 +893,28 @@ jobs:
             sleep 1
           done
           podman logs "$outer" 2>&1 | grep -q 'self-check OK'
-          podman exec "$outer" /usr/bin/podman run -d --name removal-target \
+          podman exec "$outer" /usr/bin/podman run -d --name retained-managed-target \
             --label io.assistos.ploinky.managed=1 \
             docker.io/library/alpine sleep 600 >/dev/null
-          printf '%s\n' remove > "$mode_dir/mode"
           podman restart "$outer" >/dev/null 2>&1 || true
           wait_for_exit
           test "$(podman inspect --format '{{.State.ExitCode}}' "$outer")" -ne 0
-          podman logs "$outer" 2>&1 | grep -q 'cannot remove Ploinky-managed nested container'
-          podman logs "$outer" 2>&1 | grep -q 'injected managed-container removal failure'
+          podman logs "$outer" 2>&1 | grep -q 'retained Ploinky-managed nested containers were found'
+          podman logs "$outer" 2>&1 | grep -q 'v5 will not delete or import old state'
+          podman rm -f --time 0 "$outer" >/dev/null
+          podman run --rm --user podman \
+            --device /dev/fuse \
+            --device /dev/net/tun \
+            --security-opt unmask=ALL \
+            --entrypoint bash \
+            -v "$PWD/sources/ploinky:/opt/ploinky:ro" \
+            -v "$workspace_volume:/workspace" \
+            -v "$storage_volume:/home/podman/.local/share/containers" \
+            -v "$deps_volume:/opt/ploinky/node_modules" \
+            "$IMAGE_REF" -lc '
+              set -euo pipefail
+              podman container exists retained-managed-target
+            '
 
       - name: Export gated candidate digest
         env:
@@ -438,7 +928,7 @@ jobs:
           test -s "/tmp/ploinky-box-digest/${{ matrix.arch }}.txt"
 
       - name: Upload gated candidate digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ploinky-box-digest-${{ matrix.arch }}
           path: /tmp/ploinky-box-digest/${{ matrix.arch }}.txt
@@ -452,17 +942,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download both gated digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: /tmp/ploinky-box-digests
           pattern: ploinky-box-digest-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
