@@ -32,11 +32,16 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 RUN mkdir -p \
         /opt/ploinky/node_modules \
         /workspace \
+        /run/ploinky \
+        /home/podman/.config/containers \
         /home/podman/.local/share/containers \
     && chown -R podman:podman \
         /opt/ploinky \
         /workspace \
+        /run/ploinky \
+        /home/podman/.config \
         /home/podman/.local/share/containers \
+    && chmod 0700 /run/ploinky /home/podman/.config /home/podman/.config/containers \
     && echo 'assistos/ploinky-box' > /etc/ploinky-box
 
 # The split ranges deliberately skip the podman user's own UID/GID while

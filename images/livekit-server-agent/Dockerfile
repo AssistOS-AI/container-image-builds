@@ -80,7 +80,7 @@ RUN set -eu; \
     command -v node >/dev/null 2>&1 || (echo "node binary missing" >&2 && exit 1); \
     command -v npm >/dev/null 2>&1 || (echo "npm binary missing" >&2 && exit 1); \
     command -v redis-server >/dev/null 2>&1 || (echo "redis-server binary missing" >&2 && exit 1); \
-    contract=/usr/local/share/ploinky/livekit-egress-loopback-v5.contract; \
+    contract=/usr/local/share/ploinky/livekit-egress-loopback.contract; \
     test -f "$contract" && test ! -L "$contract" || \
         (echo "patched Egress v5 contract marker missing" >&2 && exit 1); \
     test "$(stat -c '%u:%g:%a' "$contract")" = '0:0:444' || \

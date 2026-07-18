@@ -10,7 +10,7 @@ on:
       image_tag:
         description: 'Docker Hub tag to publish after digest verification'
         required: false
-        default: '9.3.1-v5'
+        default: '9.3.1'
         type: string
 
 permissions:
@@ -22,7 +22,7 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/onlyoffice-agent
-  IMAGE_TAG: ${{ inputs.image_tag || '9.3.1-v5' }}
+  IMAGE_TAG: ${{ inputs.image_tag || '9.3.1' }}
   EXPECTED_DIGEST: ${{ inputs.expected_digest }}
 
 jobs:

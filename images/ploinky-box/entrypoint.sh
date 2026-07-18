@@ -12,6 +12,107 @@ fail() {
     exit 1
 }
 
+write_box_transport_contract() {
+    local transport_file="${PLOINKY_BOX_TRANSPORT_FILE:-/run/ploinky/box-transport.json}"
+    local containers_conf="${PLOINKY_BOX_PODMAN_CONTAINERS_CONF:-/home/podman/.config/containers/containers.conf}"
+    local owner="${PLOINKY_BOX_TRANSPORT_OWNER:-}"
+    local route_json
+    local route_pair
+    local transport_address
+    local transport_interface
+    local address_json
+    local write_result
+
+    route_json="$(ip -j -4 route get 198.51.100.1 2>&1)" \
+        || fail "cannot discover box default route: ${route_json:-no diagnostic}"
+    route_pair="$(ROUTE_JSON="$route_json" node - <<'NODE'
+try {
+  const net = require('node:net');
+  const routes = JSON.parse(process.env.ROUTE_JSON || '[]');
+  if (!Array.isArray(routes) || routes.length !== 1) {
+    throw new Error('default route result must be exact');
+  }
+  const route = routes[0] || {};
+  const address = String(route.prefsrc || '').trim();
+  const dev = String(route.dev || '').trim();
+  if (net.isIP(address) !== 4 || !dev || /[\u0000-\u0020\u007f/\\]/.test(dev)) {
+    throw new Error('default route result lacks exact IPv4 prefsrc/device');
+  }
+  const first = Number(address.split('.')[0]);
+  if (first === 0 || first === 127 || first >= 224) {
+    throw new Error('default route prefsrc is not a routable box IPv4 address');
+  }
+  process.stdout.write(`${address} ${dev}`);
+} catch (error) {
+  process.stdout.write(error.message || String(error));
+  process.exit(1);
+}
+NODE
+)" || fail "$route_pair"
+    transport_address="${route_pair%% *}"
+    transport_interface="${route_pair#* }"
+    address_json="$(ip -j -4 address show dev "$transport_interface" 2>&1)" \
+        || fail "cannot inspect box transport interface '$transport_interface': ${address_json:-no diagnostic}"
+    write_result="$(
+        ROUTE_JSON="$route_json" \
+        ADDRESS_JSON="$address_json" \
+        TRANSPORT_FILE="$transport_file" \
+        CONTAINERS_CONF="$containers_conf" \
+        TRANSPORT_ADDRESS="$transport_address" \
+        TRANSPORT_INTERFACE="$transport_interface" \
+        node - <<'NODE'
+try {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const net = require('node:net');
+
+  function fail(message) { throw new Error(message); }
+  function parseArray(value, label) {
+    const parsed = JSON.parse(value || '[]');
+    if (!Array.isArray(parsed)) fail(`${label} must be a JSON array`);
+    return parsed;
+  }
+  function writeAtomic(file, bytes, mode) {
+    const dir = path.dirname(file);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(dir, 0o700);
+    const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, bytes, { mode });
+    fs.chmodSync(tmp, mode);
+    fs.renameSync(tmp, file);
+    fs.chmodSync(file, mode);
+  }
+
+  const address = process.env.TRANSPORT_ADDRESS || '';
+  const iface = process.env.TRANSPORT_INTERFACE || '';
+  if (net.isIP(address) !== 4 || !iface) fail('transport route parse did not produce an exact address/interface');
+  const routes = parseArray(process.env.ROUTE_JSON, 'route output');
+  if (routes.length !== 1 || String(routes[0]?.prefsrc || '') !== address || String(routes[0]?.dev || '') !== iface) {
+    fail('default route result changed during transport write');
+  }
+  const interfaces = parseArray(process.env.ADDRESS_JSON, 'address output');
+  const record = interfaces.find((entry) => String(entry?.ifname || '') === iface);
+  const assigned = Array.isArray(record?.addr_info) && record.addr_info.some((entry) => (
+    String(entry?.family || '') === 'inet' && String(entry?.local || '') === address
+  ));
+  if (!assigned) fail('transport address is not assigned to the discovered interface');
+
+  writeAtomic(process.env.TRANSPORT_FILE, `${JSON.stringify({ address, interface: iface })}\n`, 0o600);
+  writeAtomic(process.env.CONTAINERS_CONF, `[containers]\nhost_containers_internal_ip="${address}"\n`, 0o600);
+} catch (error) {
+  process.stdout.write(error.message || String(error));
+  process.exit(1);
+}
+NODE
+    )" || fail "$write_result"
+    if [ -n "$owner" ] && [ "$owner" != "skip" ]; then
+        chown "$owner" "$transport_file" "$containers_conf" \
+            || fail "cannot set podman ownership on transport files"
+    fi
+    chmod 0600 "$transport_file" "$containers_conf" \
+        || fail "cannot set private transport file modes"
+}
+
 require_value() {
     local name="$1"
     local expected="$2"
@@ -88,8 +189,13 @@ reject_retained_managed_containers() {
         fail "cannot enumerate Ploinky-managed nested containers: ${managed_ids:-no diagnostic}"
     fi
     test -z "$managed_ids" || fail \
-        "retained Ploinky-managed nested containers were found; stop/remove them explicitly in the old box, destroy it, and recreate with runtime contract v5 (v5 will not delete or import old state)"
+        "retained Ploinky-managed nested containers were found; stop/remove them explicitly in the old box, destroy it, and recreate with runtime contract 5 (v5 will not delete or import old state)"
 }
+
+if [ "${PLOINKY_BOX_ENTRYPOINT_TRANSPORT_ONLY:-}" = "1" ]; then
+    write_box_transport_contract
+    exit 0
+fi
 
 require_managed_network_stack() {
     local podman_version
@@ -151,6 +257,7 @@ require_value PLOINKY_DISABLE_HOST_SANDBOX 1
 require_value container oci
 require_value _CONTAINERS_USERNS_CONFIGURED ''
 require_value BUILDAH_ISOLATION chroot
+write_box_transport_contract
 test -f /etc/ploinky-box || fail "/etc/ploinky-box marker missing"
 test -x /opt/ploinky/bin/ploinky || fail "ploinky source not mounted read-only at /opt/ploinky"
 test -d /opt/ploinky/node_modules || fail "dependency volume not mounted at /opt/ploinky/node_modules"
@@ -173,7 +280,7 @@ require_managed_network_stack
 require_full_mapping uid
 require_full_mapping gid
 
-# A contract-v5 process never deletes, imports, or translates retained managed
+# A contract-5 process never deletes, imports, or translates retained managed
 # runtime state. Operators must make the old box quiescent and remove its
 # managed containers before the explicit destroy/recreate boundary.
 reject_retained_managed_containers

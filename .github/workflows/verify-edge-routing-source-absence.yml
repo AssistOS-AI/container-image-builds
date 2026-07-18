@@ -1,4 +1,4 @@
-name: Verify runtime-v5 source absence
+name: Verify edge-routing source absence
 
 on:
   pull_request:
@@ -14,4 +14,4 @@ jobs:
       - name: Check out source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Reject retired edge-publication source
-        run: node --test tests/v5-source-absence.test.mjs
+        run: node --test tests/edge-routing-source-absence.test.mjs

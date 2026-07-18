@@ -51,14 +51,14 @@ RUN set -eu; \
     rm -f /tmp/docservice-loopback-bind.c; \
     test -s /usr/local/lib/onlyoffice-docservice-loopback-bind.so; \
     contract_dir=/usr/local/share/ploinky; \
-    contract_file="$contract_dir/onlyoffice-v5.contract"; \
+    contract_file="$contract_dir/onlyoffice.contract"; \
     interposer_sha256="$(sha256sum /usr/local/lib/onlyoffice-docservice-loopback-bind.so | awk '{print $1}')"; \
     mkdir -p "$contract_dir"; \
     printf '%s\n' \
       'contract_version=5' \
       'documentserver_index_sha256=53a06109f1f4029a78f913a061e14f01bff023d109024073a13d4416b54d2195' \
       "ubuntu_snapshot=${UBUNTU_SNAPSHOT}" \
-      'docservice_bind_scope=docservice-v5-port-8000' \
+      'docservice_bind_scope=docservice-port-8000' \
       "interposer_sha256=${interposer_sha256}" \
       > "$contract_file"; \
     chown root:root "$contract_file"; \

@@ -93,7 +93,7 @@ jobs:
               ! command -v "$retired" >/dev/null 2>&1
             done
             test -x /code/scripts/start-livekit-server-agent.sh
-            contract=/usr/local/share/ploinky/livekit-egress-loopback-v5.contract
+            contract=/usr/local/share/ploinky/livekit-egress-loopback.contract
             test -f "$contract" && test ! -L "$contract"
             test "$(stat -c "%u:%g:%a" "$contract")" = 0:0:444
             expected="$(sed -n "s/^binary_sha256=//p" "$contract")"

@@ -23,7 +23,7 @@ test('patch is narrow, guarded, and produces loopback-only health binding', () =
   assert.match(dockerfile, /http\.ListenAndServe\(fmt\.Sprintf\("127\.0\.0\.1:%d", conf\.HealthPort\)/);
   assert.match(dockerfile, /! grep -Fq 'http\.ListenAndServe\(fmt\.Sprintf\(":%d", conf\.HealthPort\)/);
   assert.match(dockerfile, /io\.ploinky\.patch="egress-health-7981-loopback-only"/);
-  assert.match(dockerfile, /livekit-egress-loopback-v5\.contract/);
+  assert.match(dockerfile, /livekit-egress-loopback\.contract/);
   assert.match(dockerfile, /binary_sha256=/);
   assert.match(dockerfile, /chmod 0444/);
 });

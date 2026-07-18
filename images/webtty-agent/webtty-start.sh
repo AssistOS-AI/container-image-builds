@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-contract=/usr/local/share/ploinky/webtty-v5.contract
+contract=/usr/local/share/ploinky/webtty.contract
 app_root=/opt/webtty-agent
 
 fail() {
@@ -31,14 +31,14 @@ verify_entry() {
 
 verify_entry package_lock_sha256 "$app_root/package-lock.json"
 verify_entry server_sha256 "$app_root/server.mjs"
-verify_entry public_archive_sha256 "$app_root/public-v5.tar"
-verify_entry start_script_sha256 /usr/local/bin/webtty-v5-start
+verify_entry public_archive_sha256 "$app_root/public.tar"
+verify_entry start_script_sha256 /usr/local/bin/webtty-start
 
 test -d "$app_root/public" && test ! -L "$app_root/public" || \
     fail "WebTTY v5 public asset directory is missing or replaced"
 actual_public_sha="$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
     -C "$app_root/public" -cf - . | sha256sum | awk '{print $1}')"
-expected_public_sha="$(sha256sum "$app_root/public-v5.tar" | awk '{print $1}')"
+expected_public_sha="$(sha256sum "$app_root/public.tar" | awk '{print $1}')"
 test "$actual_public_sha" = "$expected_public_sha" || \
     fail "WebTTY v5 public asset bytes do not match the immutable image contract"
 

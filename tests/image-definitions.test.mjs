@@ -84,7 +84,7 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(dockerfile, /\bpython3\b/);
     assert.match(dockerfile, /\bmake\b/);
     assert.match(dockerfile, /onlyoffice-docservice-loopback-bind\.so/);
-    assert.match(dockerfile, /onlyoffice-v5\.contract/);
+    assert.match(dockerfile, /onlyoffice\.contract/);
     assert.match(dockerfile, /interposer_sha256=/);
     assert.match(dockerfile, /chmod 0444/);
     assert.match(bindInterposer, /sin_port == htons\(8000\)/);
@@ -92,7 +92,7 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(bindInterposer, /INADDR_LOOPBACK/);
     assert.match(bindInterposer, /IN6_IS_ADDR_UNSPECIFIED/);
     assert.match(bindInterposer, /in6addr_loopback/);
-    assert.match(bindInterposer, /docservice-v5-port-8000/);
+    assert.match(bindInterposer, /docservice-port-8000/);
 });
 
 test('webtty-agent workflow builds and publishes the node-pty terminal image', () => {
@@ -100,7 +100,7 @@ test('webtty-agent workflow builds and publishes the node-pty terminal image', (
     const dockerfile = read('images/webtty-agent/Dockerfile');
     const packageJson = JSON.parse(read('images/webtty-agent/app/package.json'));
     const html = read('images/webtty-agent/app/public/webtty.html');
-    const startScript = read('images/webtty-agent/webtty-v5-start.sh');
+    const startScript = read('images/webtty-agent/webtty-start.sh');
 
     assert.match(workflow, /images\/webtty-agent/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/webtty-agent/);
@@ -110,15 +110,15 @@ test('webtty-agent workflow builds and publishes the node-pty terminal image', (
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
     assert.match(workflow, /DEFAULT_BASE_IMAGE:\s*docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}/);
     assert.match(workflow, /base_image must equal the reviewed immutable ploinky-node index/);
-    assert.match(workflow, /webtty-v5\.contract/);
+    assert.match(workflow, /webtty\.contract/);
 
     assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}$/m);
     assert.match(dockerfile, /\bnode-pty\b/);
     assert.match(dockerfile, /public\/assets\/vendor\/xterm\/xterm\.js/);
-    assert.match(dockerfile, /webtty-v5\.contract/);
-    assert.match(dockerfile, /public-v5\.tar/);
+    assert.match(dockerfile, /webtty\.contract/);
+    assert.match(dockerfile, /public\.tar/);
     assert.match(dockerfile, /chmod 0444/);
-    assert.match(dockerfile, /CMD \["\/usr\/local\/bin\/webtty-v5-start"\]/);
+    assert.match(dockerfile, /CMD \["\/usr\/local\/bin\/webtty-start"\]/);
     assert.match(startScript, /contract_version=5/);
     assert.match(startScript, /package_lock_sha256/);
     assert.match(startScript, /server_sha256/);
@@ -258,7 +258,7 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
     assert.match(dockerfile, /^ARG LIVEKIT_EGRESS_IMAGE$/m);
     assert.match(workflow, /--build-arg LIVEKIT_EGRESS_IMAGE=/);
     assert.match(workflow, /build-args:[\s\S]*LIVEKIT_EGRESS_IMAGE=/);
-    assert.match(dockerfile, /livekit-egress-loopback-v5\.contract/);
+    assert.match(dockerfile, /livekit-egress-loopback\.contract/);
     assert.match(dockerfile, /sha256sum --check --strict/);
     assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim@sha256:[0-9a-f]{64}$/m);
     assert.match(dockerfile, /^ARG GIT_VERSION=\S+$/m);
@@ -392,6 +392,9 @@ test('ploinky-box image is a source-free contract-5 runtime with pinned cloudfla
     assert.match(dockerfile, /\/etc\/subuid\)" = 65534/);
     assert.match(dockerfile, /\/etc\/subgid\)" = 65534/);
     assert.match(dockerfile, /\/opt\/ploinky\/node_modules/);
+    assert.match(dockerfile, /\/run\/ploinky/);
+    assert.match(dockerfile, /\/home\/podman\/\.config\/containers/);
+    assert.match(dockerfile, /chmod 0700 \/run\/ploinky/);
     assert.match(dockerfile, /echo 'assistos\/ploinky-box' > \/etc\/ploinky-box/);
     assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
     for (const requiredEnv of [
@@ -444,6 +447,11 @@ test('ploinky-box image is a source-free contract-5 runtime with pinned cloudfla
     assert.match(entrypoint, /^test -w \/workspace \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -e \/dev\/fuse \|\| fail "[^"\n]+"$/m);
     assert.match(entrypoint, /^test -e \/dev\/net\/tun \|\| fail "[^"\n]+"$/m);
+    assert.match(entrypoint, /write_box_transport_contract/);
+    assert.match(entrypoint, /ip -j -4 route get 198\.51\.100\.1/);
+    assert.match(entrypoint, /ip -j -4 address show dev "\$transport_interface"/);
+    assert.match(entrypoint, /host_containers_internal_ip=/);
+    assert.match(entrypoint, /PLOINKY_BOX_TRANSPORT_FILE/);
     assert.match(entrypoint, /require_value PLOINKY_DISABLE_HOST_SANDBOX 1/);
     assert.match(entrypoint, /require_value _CONTAINERS_USERNS_CONFIGURED ''/);
     assert.match(entrypoint, /require_helper_privilege newuidmap cap_setuid/);

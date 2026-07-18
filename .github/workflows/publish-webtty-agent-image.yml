@@ -74,10 +74,10 @@ jobs:
             test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm-addon-fit.js
             test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm-addon-web-links.js
             ! grep -R -E "https?://(unpkg|cdn\\.jsdelivr|cdnjs)" /opt/webtty-agent/public
-            test "$(stat -c "%u:%g:%a" /usr/local/share/ploinky/webtty-v5.contract)" = 0:0:444
-            test "$(sed -n "1p" /usr/local/share/ploinky/webtty-v5.contract)" = contract_version=5
-            test "$(wc -l < /usr/local/share/ploinky/webtty-v5.contract)" -eq 5
-            test -x /usr/local/bin/webtty-v5-start
+            test "$(stat -c "%u:%g:%a" /usr/local/share/ploinky/webtty.contract)" = 0:0:444
+            test "$(sed -n "1p" /usr/local/share/ploinky/webtty.contract)" = contract_version=5
+            test "$(wc -l < /usr/local/share/ploinky/webtty.contract)" -eq 5
+            test -x /usr/local/bin/webtty-start
           '
 
       - name: Set up QEMU

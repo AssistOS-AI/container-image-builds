@@ -7,6 +7,26 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exact = (...parts) => new RegExp(`\\b${parts.join('_')}\\b`);
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const literalPattern = (...parts) => new RegExp(escapeRegExp(parts.join('')));
+const retiredVersionedArtifactPatterns = [
+  ['retired versioned WebTTY start script', literalPattern('webtty', '-v', '5', '-start')],
+  ['retired versioned WebTTY contract', literalPattern('webtty', '-v', '5', '.contract')],
+  ['retired versioned WebTTY public archive', literalPattern('public', '-v', '5', '.tar')],
+  ['retired versioned OnlyOffice contract', literalPattern('onlyoffice', '-v', '5', '.contract')],
+  ['retired versioned DocService marker', literalPattern('docservice', '-v', '5', '-port-8000')],
+  ['retired versioned OnlyOffice script environment', literalPattern('ONLYOFFICE_', 'V', '5', '_CONFIGURE_SCRIPT')],
+  ['retired versioned source-absence path', literalPattern('lib/', 'v', '5', '-source-absence.test.mjs')],
+  ['retired versioned Document Server script', literalPattern('configure-document-server-', 'v', '5')],
+  ['retired versioned support-listener script', literalPattern('configure-support-listeners-', 'v', '5')],
+  ['retired versioned LiveKit Egress contract', literalPattern('livekit-egress-loopback-', 'v', '5', '.contract')],
+  ['retired versioned install directory', literalPattern('.ploinky-install-', 'v', '5')],
+  ['retired versioned GPTResearcher lock', literalPattern('gpt-researcher-', 'v', '5', '-lock-1')],
+  ['retired versioned OnlyOffice session file', literalPattern('onlyoffice-sessions-', 'v', '5', '.json')],
+  ['retired versioned smoke generation age variable', literalPattern('SMOKE_', 'V', '5', '_MAX_GENERATION_AGE_MS')],
+  ['retired versioned smoke image age variable', literalPattern('SMOKE_', 'V', '5', '_MAX_IMAGE_AGE_MS')],
+  ['retired versioned smoke evidence variable', literalPattern('SMOKE_SCREEN_', 'V', '5', '_BOX_EVIDENCE')],
+];
 const FORBIDDEN = [
   [['retired', ['web', 'publishing'].join('-'), 'agent'].join(' '), new RegExp(`\\b${['basic', ['web', 'publishing'].join('-')].join('/')}\\b`)],
   [['retired', ['web', 'publishing'].join('-'), 'component'].join(' '), new RegExp(`\\b${['web', 'publishing'].join('-')}\\b`, 'i')],
@@ -20,9 +40,11 @@ const FORBIDDEN = [
   ['retired WebMeet TURN environment', new RegExp(`\\b${['WEBMEET', 'TURN'].join('_')}_[A-Z0-9_]*\\b`)],
   ['retired WebMeet TLS hostname', exact('WEBMEET', 'TLS', 'HOSTNAME')],
   ['retired WebMeet certificate email', exact('WEBMEET', 'CERT', 'EMAIL')],
+  ['retired private Router host publication', /(?:8081\/tcp|0\.0\.0\.0:8081:8081|127\.0\.0\.1:8081:8081)/],
+  ...retiredVersionedArtifactPatterns,
 ];
 
-test('runtime-v5 active source omits retired edge-publication symbols', () => {
+test('edge-routing active source omits retired edge-publication symbols', () => {
   const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
     cwd: ROOT,
     encoding: 'utf8',

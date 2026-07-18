@@ -62,7 +62,7 @@ RUN set -eu; \
     test -x /usr/bin/egress; \
     test "$(/usr/bin/egress --version | awk '{print $NF}')" = "1.9.0"; \
     contract_dir=/usr/local/share/ploinky; \
-    contract_file="$contract_dir/livekit-egress-loopback-v5.contract"; \
+    contract_file="$contract_dir/livekit-egress-loopback.contract"; \
     binary_sha256="$(sha256sum /usr/bin/egress | awk '{print $1}')"; \
     mkdir -p "$contract_dir"; \
     printf '%s\n' \

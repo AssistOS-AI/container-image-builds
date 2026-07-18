@@ -532,7 +532,7 @@ jobs:
             printf retained > /opt/ploinky/node_modules/.hard-cut-deps-sentinel
           '
 
-          # This is the explicit destructive operator step. Contract v5 must
+          # This is the explicit destructive operator step. Contract 5 must
           # never perform this removal from its entrypoint or startup code.
           podman exec "$outer" bash -lc '
             set -euo pipefail

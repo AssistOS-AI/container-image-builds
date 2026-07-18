@@ -111,7 +111,7 @@ io.assistos.ploinky.managed=1
 
 Any match makes startup fail with an explicit operator-recreate diagnostic.
 The old box must be quiesced and its managed containers removed explicitly
-before the contract-v5 destroy/recreate boundary. Unlabelled containers, labels
+before the contract-5 destroy/recreate boundary. Unlabelled containers, labels
 with another value or key, nested images, and nested named volumes remain
 untouched. Enumeration failure also stops the entrypoint rather than
 continuing with ambiguous nested state.
@@ -158,7 +158,7 @@ The native gate seeds gateway-era managed containers, manual containers,
 images, nested named-volume data, and sentinel data in all three outer volumes.
 It removes the managed containers in an explicit operator step before the
 destroy/recreate boundary, then proves manual/data preservation and
-Ploinky-driven schema-2 network reuse. A separate gate proves that v5 rejects
+Ploinky-driven schema-2 network reuse. A separate gate proves that contract 5 rejects
 retained managed containers without deleting or importing them. It starts the
 actual RoutingServer with fixed public/control `8080`, strict private `8081`,
 and Unix-socket detailed health. Lifecycle-created managed agents must have
@@ -256,10 +256,10 @@ gh workflow run publish-ploinky-box-image.yml \
 ```
 
 WebTTY publication is a two-step hard cut. The workflow accepts only the
-reviewed immutable `ploinky-node` base and emits a root-owned v5 byte-contract
+reviewed immutable `ploinky-node` base and emits a root-owned byte-contract
 marker. After the multi-architecture index is published and inspected, update
 the consumer manifest to that exact index digest. Until then, the consumer's
-required `/usr/local/bin/webtty-v5-start` entrypoint makes the previous pinned
+required `/usr/local/bin/webtty-start` entrypoint makes the previous pinned
 image fail before opening its listener; no mutable-tag fallback is permitted.
 
 `runtime` is intentionally mutable, but an already-created Ploinky box stays on

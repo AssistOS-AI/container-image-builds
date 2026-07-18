@@ -21,7 +21,7 @@ static void fail_closed(const char *message) {
 
 __attribute__((constructor)) static void initialize_docservice_bind_scope(void) {
     const char *scope = getenv("ONLYOFFICE_DOCSERVICE_BIND_SCOPE");
-    if (scope == NULL || strcmp(scope, "docservice-v5-port-8000") != 0) {
+    if (scope == NULL || strcmp(scope, "docservice-port-8000") != 0) {
         fail_closed("OnlyOffice DocService bind interposer loaded outside its exact v5 scope.\n");
     }
 
