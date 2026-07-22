@@ -103,6 +103,7 @@ jobs:
           repository: AssistOS-AI/ploinky
           ref: ${{ needs.resolve-source.outputs.source_sha }}
           path: sources/ploinky
+          fetch-depth: 2
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
