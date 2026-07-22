@@ -35,6 +35,7 @@ RUN mkdir -p \
         /run/ploinky \
         /home/podman/.config/containers \
         /home/podman/.local/share/containers \
+    && rm -f /home/podman/.config/containers/containers.conf \
     && chown -R podman:podman \
         /opt/ploinky \
         /workspace \

@@ -358,6 +358,10 @@ test('ploinky-box image is the exact contract-6 runtime assembled from immutable
     assert.doesNotMatch(dockerfile, /COPY images\/ploinky-box\/entrypoint\.sh/);
     assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="6"$/m);
     assert.match(dockerfile, /printf '6\\n' > \/etc\/ploinky-box/);
+    assert.match(
+        dockerfile,
+        /rm -f \/home\/podman\/\.config\/containers\/containers\.conf/,
+    );
     assert.match(dockerfile, /dnf install -y git iproute libcap netavark aardvark-dns passt slirp4netns util-linux-core/);
     assert.match(dockerfile, /cloudflared tunnel run --help/);
     assert.match(dockerfile, /--token-file/);
