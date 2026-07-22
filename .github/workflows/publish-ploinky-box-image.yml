@@ -39,6 +39,7 @@ on:
         options:
           - publish
           - reproduce-private-routing
+          - gate-existing-candidates
       amd64_candidate_digest:
         description: Existing immutable amd64 candidate for reproduce-private-routing
         required: false
@@ -95,7 +96,7 @@ jobs:
   build:
     name: Build and gate ${{ matrix.platform }}
     needs: resolve-source
-    if: ${{ inputs.operation == 'publish' }}
+    if: ${{ inputs.operation == 'publish' || inputs.operation == 'gate-existing-candidates' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -227,12 +228,14 @@ jobs:
           ' /tmp/cloudflared-index.json
 
       - name: Log in to Docker Hub
+        if: ${{ inputs.operation == 'publish' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push candidate by digest
+        if: ${{ inputs.operation == 'publish' }}
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -244,9 +247,16 @@ jobs:
 
       - name: Resolve candidate reference
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          EXISTING_DIGEST: ${{ matrix.arch == 'amd64' && inputs.amd64_candidate_digest || inputs.arm64_candidate_digest }}
+          OPERATION: ${{ inputs.operation }}
         run: |
           set -euo pipefail
+          if [[ "$OPERATION" == publish ]]; then
+            DIGEST=$BUILT_DIGEST
+          else
+            DIGEST=$EXISTING_DIGEST
+          fi
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "IMAGE_REF=docker.io/${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_ENV"
@@ -323,7 +333,7 @@ jobs:
       - name: Gate native lifecycle, exact TCP/UDP publications, and Explorer graph
         env:
           PLOINKY_BOX_REQUIRE_PODMAN: "1"
-          PLOINKY_BOX_CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+          PLOINKY_BOX_CANDIDATE_DIGEST: ${{ inputs.operation == 'publish' && steps.build.outputs.digest || (matrix.arch == 'amd64' && inputs.amd64_candidate_digest || inputs.arm64_candidate_digest) }}
           PLOINKY_BOX_REAL_PODMAN: /usr/bin/podman
           PLOINKY_BOX_PROXY_TRACE_ARTIFACT: /tmp/ploinky-box-proxy-trace-${{ matrix.arch }}.bin
           SMOKE_GRAPH_ARGS_JSON: '["start","AchillesIDE/explorer","18080"]'
@@ -349,7 +359,7 @@ jobs:
 
       - name: Export gated candidate digest
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ inputs.operation == 'publish' && steps.build.outputs.digest || (matrix.arch == 'amd64' && inputs.amd64_candidate_digest || inputs.arm64_candidate_digest) }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -381,7 +391,7 @@ jobs:
     needs:
       - resolve-source
       - build
-    if: ${{ inputs.operation == 'publish' }}
+    if: ${{ inputs.operation == 'publish' || inputs.operation == 'gate-existing-candidates' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Download both gated digests

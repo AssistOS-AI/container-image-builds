@@ -398,6 +398,7 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.ok(mergeJob);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
     assert.match(workflow, /operation:[\s\S]*?reproduce-private-routing/);
+    assert.match(workflow, /operation:[\s\S]*?gate-existing-candidates/);
     for (const sourceRef of [
         'explorer_ref',
         'webmeet_infra_ref',
@@ -411,11 +412,19 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     }
     assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
     assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
-    assert.match(buildJob, /if:\s*\$\{\{ inputs\.operation == 'publish' \}\}/);
+    assert.match(
+        buildJob,
+        /if:\s*\$\{\{ inputs\.operation == 'publish' \|\| inputs\.operation == 'gate-existing-candidates' \}\}/,
+    );
     assert.match(buildJob, /platform:\s*linux\/amd64/);
     assert.match(buildJob, /platform:\s*linux\/arm64/);
     assert.doesNotMatch(buildJob, /setup-qemu-action/);
     assert.match(buildJob, /Build and push candidate by digest/);
+    assert.match(
+        buildJob,
+        /Build and push candidate by digest[\s\S]*?if:\s*\$\{\{ inputs\.operation == 'publish' \}\}/,
+    );
+    assert.match(buildJob, /EXISTING_DIGEST:[\s\S]*?inputs\.amd64_candidate_digest[\s\S]*?inputs\.arm64_candidate_digest/);
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
     assert.match(buildJob, /runtime-contract"\] == "6"/);
@@ -447,7 +456,10 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.match(mergeJob, /linux\/arm64/);
     assert.match(mergeJob, /runtime_digest/);
     assert.match(workflow, /reproduce-private-routing:[\s\S]*?uses:\s*\.\/\.github\/workflows\/reproduce-ploinky-box-private-routing\.yml/);
-    assert.match(mergeJob, /if:\s*\$\{\{ inputs\.operation == 'publish' \}\}/);
+    assert.match(
+        mergeJob,
+        /if:\s*\$\{\{ inputs\.operation == 'publish' \|\| inputs\.operation == 'gate-existing-candidates' \}\}/,
+    );
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }
