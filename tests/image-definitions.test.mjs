@@ -391,14 +391,21 @@ test('ploinky-box image is the exact contract-6 runtime assembled from immutable
 
 test('ploinky-box workflow gates contract-6 native digests and exact publications before moving runtime', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
-    const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
+    const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  reproduce-private-routing:)/)?.[0] || '';
+    const promotionStartupJob = workflow.match(
+        /\n  promotion-startup:[\s\S]*?(?=\n  promote:)/,
+    )?.[0] || '';
+    const promoteJob = workflow.match(/\n  promote:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
 
     assert.ok(buildJob);
+    assert.ok(promotionStartupJob);
+    assert.ok(promoteJob);
     assert.ok(mergeJob);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
     assert.match(workflow, /operation:[\s\S]*?reproduce-private-routing/);
     assert.match(workflow, /operation:[\s\S]*?gate-existing-candidates/);
+    assert.match(workflow, /operation:[\s\S]*?promote-existing-candidates/);
     for (const sourceRef of [
         'explorer_ref',
         'webmeet_infra_ref',
@@ -457,12 +464,49 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.match(mergeJob, /runtime_digest/);
     assert.match(workflow, /reproduce-private-routing:[\s\S]*?uses:\s*\.\/\.github\/workflows\/reproduce-ploinky-box-private-routing\.yml/);
     assert.match(
+        workflow,
+        /reproduce-private-routing:[\s\S]*?inputs\.operation == 'promote-existing-candidates'/,
+    );
+    assert.match(promotionStartupJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(promotionStartupJob, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(promotionStartupJob, /platform:\s*linux\/amd64/);
+    assert.match(promotionStartupJob, /platform:\s*linux\/arm64/);
+    assert.match(promotionStartupJob, /SMOKE_GRAPH_ARGS_JSON:\s*'\["start","AchillesIDE\/explorer","18080"\]'/);
+    assert.match(promotionStartupJob, /scripts\/verify-ploinky-box-startup\.mjs/);
+    assert.match(promotionStartupJob, /PLOINKY_BOX_CANDIDATE_DIGEST/);
+    assert.match(promotionStartupJob, /PLOINKY_BOX_REAL_PODMAN:\s*\/usr\/bin\/podman/);
+    assert.doesNotMatch(promotionStartupJob, /setup-qemu-action|--privileged|--cap-add|seccomp=unconfined/);
+    assert.match(promoteJob, /reproduce-private-routing/);
+    assert.match(promoteJob, /promotion-startup/);
+    assert.match(promoteJob, /test "\$\{#files\[@\]\}" -eq 2/);
+    assert.match(promoteJob, /test "\$amd64_digest" = "\$EXPECTED_AMD64"/);
+    assert.match(promoteJob, /test "\$arm64_digest" = "\$EXPECTED_ARM64"/);
+    assert.match(promoteJob, /docker buildx imagetools create/);
+    assert.match(promoteJob, /\(\.manifests \| length\) == 2/);
+    assert.match(promoteJob, /\.platform\.architecture == "amd64"/);
+    assert.match(promoteJob, /\.platform\.architecture == "arm64"/);
+    assert.match(
         mergeJob,
         /if:\s*\$\{\{ inputs\.operation == 'publish' \|\| inputs\.operation == 'gate-existing-candidates' \}\}/,
     );
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }
+});
+
+test('ploinky-box promotion startup gate proves a running Explorer without exercising teardown', () => {
+    const gate = read('scripts/verify-ploinky-box-startup.mjs');
+
+    assert.match(gate, /path\.join\(sourceRoot, 'bin\/ploinky'\)/);
+    assert.match(gate, /assert\.match\(status\.stdout, \/running-initialized\//);
+    assert.match(gate, /'7882\/udp'/);
+    assert.match(gate, /'8080\/tcp'/);
+    assert.match(gate, /mount\.Destination === '\/opt\/ploinky'/);
+    assert.match(gate, /assert\.equal\(sourceMount\.RW, false\)/);
+    assert.match(gate, /record\?\.runtime === 'podman'/);
+    assert.match(gate, /assert\.equal\(nestedInspection\?\.State\?\.Running, true\)/);
+    assert.match(gate, /assert\.equal\(health\.statusCode, 200/);
+    assert.doesNotMatch(gate, /\['stop'\]|runStopTransaction|stopCore/);
 });
 
 test('ploinky-box private-routing reproducer reuses exact candidates without a graph or publication', () => {

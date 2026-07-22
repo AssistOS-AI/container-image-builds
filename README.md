@@ -17,7 +17,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:runtime` | this repo; one immutable `AssistOS-AI/ploinky` commit is mounted for verification | repo root; source-free nested-Podman runtime contract `5` with integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:runtime` | this repo; one immutable `AssistOS-AI/ploinky` commit is mounted for verification | repo root; source-free nested-Podman runtime contract `6` with integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
@@ -63,7 +63,7 @@ separate reviewed operation.
 ## Ploinky box runtime contract
 
 `docker.io/assistos/ploinky-box:runtime` is the mutable release channel for
-runtime contract 5. The image contains Podman, Node 24, npm/npx, Bash, Git,
+runtime contract 6. The image contains Podman, Node 24, npm/npx, Bash, Git,
 cloudflared, and the rootless networking helpers. Ploinky source is not baked into the image; the
 outer supervisor mounts it read-only at `/opt/ploinky` and mounts writable named
 volumes at `/workspace`, `/opt/ploinky/node_modules`, and
@@ -80,7 +80,7 @@ clean `FROM scratch` stage. Its contract metadata is exact:
 
 | Field | Value |
 | --- | --- |
-| Contract label | `io.assistos.ploinky.runtime-contract=5` |
+| Contract label | `io.assistos.ploinky.runtime-contract=6` |
 | User | `podman` |
 | Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
 | `PATH` | `/opt/ploinky/bin:/usr/local/bin:/usr/bin` |
@@ -111,7 +111,7 @@ io.assistos.ploinky.managed=1
 
 Any match makes startup fail with an explicit operator-recreate diagnostic.
 The old box must be quiesced and its managed containers removed explicitly
-before the contract-5 destroy/recreate boundary. Unlabelled containers, labels
+before the contract-6 destroy/recreate boundary. Unlabelled containers, labels
 with another value or key, nested images, and nested named volumes remain
 untouched. Enumeration failure also stops the entrypoint rather than
 continuing with ambiguous nested state.
@@ -122,7 +122,7 @@ manual recovery. Removing it deletes the cached nested images, container
 records, and nested volumes it contains:
 
 ```sh
-ENGINE=podman # contract 5 requires a rootless outer Podman engine
+ENGINE=podman # contract 6 requires a rootless outer Podman engine
 INSTANCE=ploinky-box-WORKSPACE-PATHHASH
 
 $ENGINE volume inspect "$INSTANCE-containers"
@@ -138,7 +138,7 @@ normal destroy path, and do not remove it until its retained data is understood.
 The publication workflow requires `source_ref` to be an exact 40-character
 Ploinky commit SHA. Native `linux/amd64` and `linux/arm64` jobs check out that
 same SHA and first prove that its exported required runtime contract is exactly
-`5`. The selected source hard-cut, network-contract, network-lifecycle,
+`6`. The selected source hard-cut, network-contract, network-lifecycle,
 documentation, and supervisor suites must pass before an image is built. The
 supervisor suite includes contract-4 rejection before mutation.
 
@@ -158,7 +158,7 @@ The native gate seeds gateway-era managed containers, manual containers,
 images, nested named-volume data, and sentinel data in all three outer volumes.
 It removes the managed containers in an explicit operator step before the
 destroy/recreate boundary, then proves manual/data preservation and
-Ploinky-driven schema-2 network reuse. A separate gate proves that contract 5 rejects
+Ploinky-driven schema-2 network reuse. A separate gate proves that contract 6 rejects
 retained managed containers without deleting or importing them. It starts the
 actual RoutingServer with fixed public/control `8080`, strict private `8081`,
 and Unix-socket detailed health. Lifecycle-created managed agents must have
@@ -167,11 +167,11 @@ public Router `8080` only for allowed agent surfaces while an unauthenticated
 status/control request is denied; the same gate also proves same-network traffic,
 isolated-bridge denial, egress, loopback-only box-service denial, and unchanged
 networks across Router restart. On the currently observed rootless Podman
-host-gateway topology, strict private-listener startup cannot acquire an
-approved managed-interface bind, so this native publication lane remains
-release-blocked pending Ploinky DS004 Question #8. It must not widen the bind or
-install a forwarding fallback to pass. Managed-state enumeration failure is a
-separate fail-closed gate.
+host-gateway topology, nested Podman resolves `host.containers.internal`
+through Podman's `host-gateway` entry while pasta maps its gateway into the
+nested namespace. The focused native routing gate proves that path on both
+architectures without publishing private TCP `8081`. Managed-state enumeration
+failure is a separate fail-closed gate.
 The runtime gates use only `--user podman`, `/dev/fuse`, `/dev/net/tun`, and
 `--security-opt unmask=ALL`. They do not use privilege, added capabilities, or
 an unconfined seccomp profile. Ploinky adds `label=disable` only when an SELinux
@@ -185,6 +185,17 @@ concurrency prevents two dispatches from racing the mutable channel.
 
 Publication remains a separately authorized operation. A failed candidate job
 can leave untagged registry content, but it cannot move `:runtime`.
+
+For recovery of already-built immutable candidates, the
+`promote-existing-candidates` operation does not rebuild them. It reruns the
+focused private-routing proof and starts the pinned Explorer graph through the
+public `ploinky` CLI on native amd64 and arm64 runners. Those gates recheck the
+exact TCP/UDP publications, read-only `/opt/ploinky` mount, contract label,
+rootless/unprivileged outer Box, nested Explorer container, and Router health.
+Only then may the workflow assemble the two exact digests under `:runtime`.
+This startup qualification deliberately does not call `ploinky stop`; a known
+dependency-free teardown defect is tracked separately and is not represented
+as a successful lifecycle qualification.
 
 ## Secrets
 
@@ -253,6 +264,21 @@ gh workflow run publish-soul-gateway-image.yml \
 gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f source_ref="$(git -C ../ploinky rev-parse HEAD)"
+
+# Recovery-only promotion of two previously built immutable contract-6 candidates.
+# Supply every graph source input as an exact 40-character commit SHA.
+gh workflow run publish-ploinky-box-image.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f operation=promote-existing-candidates \
+  -f source_ref="$(git -C ../ploinky rev-parse HEAD)" \
+  -f explorer_ref="$EXPLORER_SHA" \
+  -f webmeet_infra_ref="$WEBMEET_INFRA_SHA" \
+  -f umami_ref="$UMAMI_SHA" \
+  -f achilles_cli_ref="$ACHILLES_CLI_SHA" \
+  -f proxies_ref="$PROXIES_SHA" \
+  -f basic_ref="$BASIC_SHA" \
+  -f amd64_candidate_digest="$AMD64_DIGEST" \
+  -f arm64_candidate_digest="$ARM64_DIGEST"
 ```
 
 WebTTY publication is a two-step hard cut. The workflow accepts only the
@@ -268,7 +294,7 @@ a missing outer box after an explicit destroy. Any contract or configuration
 drift is rejected before mutation and requires an explicit destroy followed by
 recreate; the supervisor never stops, renames, replaces, restores, or rolls back
 an existing box. Moving the release channel back to a previously verified
-contract-5 manifest digest is a separately authorized registry release action,
+contract-6 manifest digest is a separately authorized registry release action,
 never a supervisor transaction, and the channel must not point to an older
 contract.
 

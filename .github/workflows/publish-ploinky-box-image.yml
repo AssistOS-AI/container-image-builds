@@ -32,7 +32,7 @@ on:
         required: true
         type: string
       operation:
-        description: Run publication gates or only the existing-candidate private-routing reproducer
+        description: Build, reproduce, fully gate, or startup-qualify existing candidates
         required: false
         default: publish
         type: choice
@@ -40,12 +40,13 @@ on:
           - publish
           - reproduce-private-routing
           - gate-existing-candidates
+          - promote-existing-candidates
       amd64_candidate_digest:
-        description: Existing immutable amd64 candidate for reproduce-private-routing
+        description: Existing immutable amd64 candidate for reproduce, gate, or promotion
         required: false
         type: string
       arm64_candidate_digest:
-        description: Existing immutable arm64 candidate for reproduce-private-routing
+        description: Existing immutable arm64 candidate for reproduce, gate, or promotion
         required: false
         type: string
 
@@ -378,13 +379,295 @@ jobs:
   reproduce-private-routing:
     name: Reproduce existing candidates only
     needs: resolve-source
-    if: ${{ inputs.operation == 'reproduce-private-routing' }}
+    if: ${{ inputs.operation == 'reproduce-private-routing' || inputs.operation == 'promote-existing-candidates' }}
     uses: ./.github/workflows/reproduce-ploinky-box-private-routing.yml
     with:
       source_ref: ${{ needs.resolve-source.outputs.source_sha }}
       amd64_digest: ${{ inputs.amd64_candidate_digest }}
       arm64_digest: ${{ inputs.arm64_candidate_digest }}
     secrets: inherit
+
+  promotion-startup:
+    name: Startup-qualify existing ${{ matrix.platform }} candidate
+    needs: resolve-source
+    if: ${{ inputs.operation == 'promote-existing-candidates' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      CANDIDATE_DIGEST: ${{ matrix.arch == 'amd64' && inputs.amd64_candidate_digest || inputs.arm64_candidate_digest }}
+      PLOINKY_SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+    steps:
+      - name: Require immutable graph revisions and existing candidate digests
+        env:
+          EXPLORER_SHA: ${{ inputs.explorer_ref }}
+          WEBMEET_INFRA_SHA: ${{ inputs.webmeet_infra_ref }}
+          UMAMI_SHA: ${{ inputs.umami_ref }}
+          ACHILLES_CLI_SHA: ${{ inputs.achilles_cli_ref }}
+          PROXIES_SHA: ${{ inputs.proxies_ref }}
+          BASIC_SHA: ${{ inputs.basic_ref }}
+        run: |
+          set -euo pipefail
+          for sha in \
+            "$PLOINKY_SOURCE_SHA" "$EXPLORER_SHA" "$WEBMEET_INFRA_SHA" \
+            "$UMAMI_SHA" "$ACHILLES_CLI_SHA" "$PROXIES_SHA" "$BASIC_SHA"; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          done
+          [[ "${{ inputs.amd64_candidate_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${{ inputs.arm64_candidate_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "${{ inputs.amd64_candidate_digest }}" != "${{ inputs.arm64_candidate_digest }}"
+
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Checkout immutable Ploinky source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/ploinky
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          path: sources/ploinky
+          fetch-depth: 0
+          submodules: true
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact Explorer graph sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/AssistOSExplorer
+          ref: ${{ inputs.explorer_ref }}
+          path: full-workspace/AssistOSExplorer
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact WebMeet infrastructure source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/webmeetInfra
+          ref: ${{ inputs.webmeet_infra_ref }}
+          path: full-workspace/webmeetInfra
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact Umami source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/UmamiAgent
+          ref: ${{ inputs.umami_ref }}
+          path: full-workspace/UmamiAgent
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact AchillesCLI source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/AchillesCLI
+          ref: ${{ inputs.achilles_cli_ref }}
+          path: full-workspace/AchillesCLI
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact proxies source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/proxies
+          ref: ${{ inputs.proxies_ref }}
+          path: full-workspace/proxies
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact basic source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/basic
+          ref: ${{ inputs.basic_ref }}
+          path: full-workspace/basic
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact image definitions for graph staging
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: full-workspace/container-image-builds
+
+      - name: Verify source, workflow contract, and graph revisions
+        env:
+          EXPLORER_SHA: ${{ inputs.explorer_ref }}
+          WEBMEET_INFRA_SHA: ${{ inputs.webmeet_infra_ref }}
+          UMAMI_SHA: ${{ inputs.umami_ref }}
+          ACHILLES_CLI_SHA: ${{ inputs.achilles_cli_ref }}
+          PROXIES_SHA: ${{ inputs.proxies_ref }}
+          BASIC_SHA: ${{ inputs.basic_ref }}
+        run: |
+          set -euo pipefail
+          test "$(git -C sources/ploinky rev-parse HEAD)" = "$PLOINKY_SOURCE_SHA"
+          test "$(git -C full-workspace/AssistOSExplorer rev-parse HEAD)" = "$EXPLORER_SHA"
+          test "$(git -C full-workspace/webmeetInfra rev-parse HEAD)" = "$WEBMEET_INFRA_SHA"
+          test "$(git -C full-workspace/UmamiAgent rev-parse HEAD)" = "$UMAMI_SHA"
+          test "$(git -C full-workspace/AchillesCLI rev-parse HEAD)" = "$ACHILLES_CLI_SHA"
+          test "$(git -C full-workspace/proxies rev-parse HEAD)" = "$PROXIES_SHA"
+          test "$(git -C full-workspace/basic rev-parse HEAD)" = "$BASIC_SHA"
+          test "$(git -C full-workspace/container-image-builds rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(node --input-type=module -e 'import { BOX_RUNTIME_CONTRACT } from "./sources/ploinky/ploinky-box/constants.mjs"; process.stdout.write(BOX_RUNTIME_CONTRACT)')" = 6
+          node --test tests/image-definitions.test.mjs
+
+      - name: Require native rootless Podman and exact candidate platform
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap fuse-overlayfs
+          test -e /dev/fuse
+          test -e /dev/net/tun
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman unshare true
+          podman pull "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}"
+          test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}")" = '${{ matrix.platform }}'
+
+      - name: Start the pinned Explorer graph through the public CLI
+        env:
+          PLOINKY_BOX_REQUIRE_PODMAN: "1"
+          PLOINKY_BOX_CANDIDATE_DIGEST: ${{ env.CANDIDATE_DIGEST }}
+          PLOINKY_BOX_REAL_PODMAN: /usr/bin/podman
+          PLOINKY_SOURCE_ROOT: sources/ploinky
+          SMOKE_GRAPH_ARGS_JSON: '["start","AchillesIDE/explorer","18080"]'
+          SMOKE_GRAPH_REPOSITORIES_JSON: >-
+            {"AssistOSExplorer":"${{ github.workspace }}/full-workspace/AssistOSExplorer",
+            "webmeetInfra":"${{ github.workspace }}/full-workspace/webmeetInfra",
+            "UmamiAgent":"${{ github.workspace }}/full-workspace/UmamiAgent",
+            "AchillesCLI":"${{ github.workspace }}/full-workspace/AchillesCLI",
+            "proxies":"${{ github.workspace }}/full-workspace/proxies",
+            "basic":"${{ github.workspace }}/full-workspace/basic",
+            "container-image-builds":"${{ github.workspace }}/full-workspace/container-image-builds"}
+          SMOKE_GRAPH_REVISIONS_JSON: >-
+            {"AssistOSExplorer":"${{ inputs.explorer_ref }}",
+            "webmeetInfra":"${{ inputs.webmeet_infra_ref }}",
+            "UmamiAgent":"${{ inputs.umami_ref }}",
+            "AchillesCLI":"${{ inputs.achilles_cli_ref }}",
+            "proxies":"${{ inputs.proxies_ref }}",
+            "basic":"${{ inputs.basic_ref }}",
+            "container-image-builds":"${{ github.sha }}"}
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 scripts/verify-ploinky-box-startup.mjs
+
+      - name: Export startup-qualified digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ploinky-box-promotion-digest
+          printf '%s\n' "$CANDIDATE_DIGEST" > "/tmp/ploinky-box-promotion-digest/${{ matrix.arch }}.txt"
+
+      - name: Upload startup-qualified digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-box-promotion-digest-${{ matrix.arch }}
+          path: /tmp/ploinky-box-promotion-digest/${{ matrix.arch }}.txt
+          retention-days: 7
+
+      - name: Verify promotion resources were cleaned
+        if: always()
+        run: |
+          set -euo pipefail
+          mapfile -t boxes < <(podman ps --all --quiet --filter label=io.assistos.ploinky-box.role=box)
+          for box in "${boxes[@]}"; do
+            podman container rm --force --volumes "$box"
+          done
+          mapfile -t volumes < <(podman volume ls --quiet --filter label=io.assistos.ploinky-box.schema=1)
+          for volume in "${volumes[@]}"; do
+            podman volume rm --force "$volume"
+          done
+          test -z "$(podman ps --all --quiet --filter label=io.assistos.ploinky-box.role=box)"
+
+  promote:
+    name: Promote startup-qualified existing candidates
+    needs:
+      - resolve-source
+      - reproduce-private-routing
+      - promotion-startup
+    if: >-
+      ${{ always()
+          && inputs.operation == 'promote-existing-candidates'
+          && needs.resolve-source.result == 'success'
+          && needs['reproduce-private-routing'].result == 'success'
+          && needs['promotion-startup'].result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download both startup-qualified digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: /tmp/ploinky-box-promotion-digests
+          pattern: ploinky-box-promotion-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Validate exact qualified candidates
+        id: candidates
+        env:
+          EXPECTED_AMD64: ${{ inputs.amd64_candidate_digest }}
+          EXPECTED_ARM64: ${{ inputs.arm64_candidate_digest }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find /tmp/ploinky-box-promotion-digests -maxdepth 1 -type f -name '*.txt' -print | sort)
+          test "${#files[@]}" -eq 2
+          amd64_file=/tmp/ploinky-box-promotion-digests/amd64.txt
+          arm64_file=/tmp/ploinky-box-promotion-digests/arm64.txt
+          test "${files[0]}" = "$amd64_file"
+          test "${files[1]}" = "$arm64_file"
+          IFS= read -r amd64_digest < "$amd64_file"
+          IFS= read -r arm64_digest < "$arm64_file"
+          test "$amd64_digest" = "$EXPECTED_AMD64"
+          test "$arm64_digest" = "$EXPECTED_ARM64"
+          test "$amd64_digest" != "$arm64_digest"
+          echo "amd64_digest=$amd64_digest" >> "$GITHUB_OUTPUT"
+          echo "arm64_digest=$arm64_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Move runtime tag to startup-qualified manifest
+        env:
+          AMD64_DIGEST: ${{ steps.candidates.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidates.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
+            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+
+      - name: Verify final runtime members and print digest
+        env:
+          AMD64_DIGEST: ${{ steps.candidates.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidates.outputs.arm64_digest }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > /tmp/ploinky-box-runtime.json
+          jq -e --arg amd64 "$AMD64_DIGEST" --arg arm64 "$ARM64_DIGEST" '
+            (.manifests | length) == 2
+            and any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64" and .digest == $amd64)
+            and any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64" and .digest == $arm64)
+          ' /tmp/ploinky-box-runtime.json
+          manifest=$(docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}")
+          echo "$manifest"
+          runtime_digest=$(awk '$1 == "Digest:" { print $2; exit }' <<< "$manifest")
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo '### ploinky-box startup-qualified runtime publication'
+            echo
+            echo "- Manifest: \`docker.io/${IMAGE_NAME}:${IMAGE_TAG}@${runtime_digest}\`"
+            echo "- Verified Ploinky source: \`${SOURCE_SHA}\`"
+            echo "- amd64: \`${AMD64_DIGEST}\`"
+            echo "- arm64: \`${ARM64_DIGEST}\`"
+            echo '- Qualification: public CLI Explorer startup and private routing; teardown is tracked separately'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   merge:
     name: Publish mutable multiarchitecture runtime
