@@ -449,6 +449,27 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     }
 });
 
+test('ploinky-box private-routing reproducer reuses exact candidates without a graph or publication', () => {
+    const workflow = read('.github/workflows/reproduce-ploinky-box-private-routing.yml');
+
+    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /amd64_digest:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /arm64_digest:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /platform:\s*linux\/amd64/);
+    assert.match(workflow, /platform:\s*linux\/arm64/);
+    assert.match(workflow, /podman pull "docker\.io\/assistos\/ploinky-box@\$\{CANDIDATE_DIGEST\}"/);
+    assert.match(workflow, /ploinkyBoxPrivateRouting\.test\.mjs/);
+    assert.match(workflow, /PLOINKY_BOX_PRIVATE_ROUTING_ARTIFACT/);
+    assert.match(workflow, /Verify focused resources were cleaned/);
+    assert.doesNotMatch(workflow, /AssistOSExplorer|SMOKE_GRAPH|docker\/build-push-action|imagetools create/);
+    assert.doesNotMatch(workflow, /--privileged|--cap-add|seccomp=unconfined/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
+    }
+});
+
 test('runtime channel documentation requires an explicit destroy/recreate boundary', () => {
     const readme = read('README.md');
 
