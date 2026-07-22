@@ -42,7 +42,7 @@ RUN mkdir -p \
         /home/podman/.config \
         /home/podman/.local/share/containers \
     && chmod 0700 /run/ploinky /home/podman/.config /home/podman/.config/containers \
-    && echo 'assistos/ploinky-box' > /etc/ploinky-box
+    && printf '6\n' > /etc/ploinky-box
 
 # The split ranges deliberately skip the podman user's own UID/GID while
 # supplying 65,534 subordinate IDs. Inner root plus IDs through 65,534 then
@@ -50,7 +50,7 @@ RUN mkdir -p \
 RUN test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /etc/subuid)" = 65534 \
     && test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /etc/subgid)" = 65534
 
-COPY images/ploinky-box/entrypoint.sh /usr/local/bin/ploinky-box-entrypoint
+COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint
 RUN chmod 0755 /usr/local/bin/ploinky-box-entrypoint
 
 FROM scratch AS runtime
@@ -62,7 +62,7 @@ COPY --from=prepared-rootfs / /
 # supported privilege mechanism remains explicit and testable.
 RUN rpm --setcaps shadow-utils
 
-LABEL io.assistos.ploinky.runtime-contract="5"
+LABEL io.assistos.ploinky.runtime-contract="6"
 
 ENV PATH=/opt/ploinky/bin:/usr/local/bin:/usr/bin \
     USER=podman \
