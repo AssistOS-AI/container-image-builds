@@ -406,9 +406,13 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
+    const ploinkyCheckout = buildJob.match(
+        /- name: Checkout immutable Ploinky source[\s\S]*?(?=\n      - name:)/,
+    )?.[0] || '';
 
     assert.ok(buildJob);
     assert.ok(mergeJob);
+    assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
     for (const input of [
         'source_ref',
         'explorer_ref',
