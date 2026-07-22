@@ -29,7 +29,12 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && cloudflared --version | grep -E '^cloudflared version 2026\.7\.1([[:space:]]|$)' \
     && cloudflared tunnel run --help 2>&1 | grep -F -- '--token-file'
 
-RUN mkdir -p \
+# The pinned Podman base currently ships a user containers.conf. Contract 6
+# creates that file together with box-transport.json after discovering the
+# outer gateway, so the immutable image must not contain either half of that
+# runtime-owned pair.
+RUN rm -f /home/podman/.config/containers/containers.conf \
+    && mkdir -p \
         /opt/ploinky/node_modules \
         /workspace \
         /run/ploinky \

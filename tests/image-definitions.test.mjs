@@ -376,6 +376,10 @@ test('ploinky-box image is a source-owned contract-6 rootless Podman appliance',
         /chown -R podman:podman[\s\S]*?\/opt\/ploinky[\s\S]*?\/workspace[\s\S]*?\/run\/ploinky[\s\S]*?\/home\/podman\/\.config[\s\S]*?\/home\/podman\/\.local\/share\/containers/,
     );
     assert.match(dockerfile, /chmod 0700 \/run\/ploinky/);
+    assert.match(
+        dockerfile,
+        /rm -f \/home\/podman\/\.config\/containers\/containers\.conf/,
+    );
     assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
     for (const requiredEnv of [
         'USER=podman',
@@ -467,6 +471,11 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     assert.ok(candidateBuild < nativeGate && nativeGate < exportGate && exportGate < uploadGate);
     assert.match(buildJob, /installPinnedDependencies/);
     assert.match(buildJob, /ploinky-box-host-contract/);
+    assert.match(
+        buildJob,
+        /test ! -e \/home\/podman\/\.config\/containers\/containers\.conf/,
+    );
+    assert.match(buildJob, /test ! -e \/run\/ploinky\/box-transport\.json/);
     assert.match(buildJob, /ln -s "\$PLOINKY_EXPLORER_SOURCE" \.\.\/AssistOSExplorer/);
     assert.match(buildJob, /realpath \.\.\/AssistOSExplorer/);
     assert.match(buildJob, /push-by-digest=true/);

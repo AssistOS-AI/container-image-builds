@@ -114,7 +114,9 @@ The Box publishes exactly loopback TCP on the selected host port to Router
 loopback `8081` inside the Box and is never published. Custom-port output and
 health probes use the external authority while the in-box Router remains on
 8080. Entrypoint transport discovery writes the route/address JSON and effective
-`host_containers_internal_ip` configuration as one rollback-safe pair.
+`host_containers_internal_ip` configuration as one rollback-safe pair. Neither
+runtime-owned file is present in the immutable image, including any
+`containers.conf` inherited from the pinned Podman base.
 
 Contract changes are a hard cut. Stop and explicitly destroy an older Box before
 recreation; foreign exact-name containers or volumes are rejected and never

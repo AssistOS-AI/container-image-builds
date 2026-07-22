@@ -297,6 +297,8 @@ jobs:
             test "$(stat -c %U:%G /opt/ploinky/node_modules)" = podman:podman
             test "$(stat -c %U:%G /home/podman/.local/share/containers/storage)" = podman:podman
             test "$(stat -c %a /usr/local/bin/ploinky-box-entrypoint)" = 755
+            test ! -e /home/podman/.config/containers/containers.conf
+            test ! -e /run/ploinky/box-transport.json
             command -v bash node npm npx git podman ss nsenter fuse-overlayfs
           '
 
