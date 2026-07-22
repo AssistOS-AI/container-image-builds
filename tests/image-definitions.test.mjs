@@ -421,6 +421,8 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.match(buildJob, /PLOINKY_BOX_REQUIRE_PODMAN:\s*["']?1/);
     assert.match(buildJob, /PLOINKY_BOX_CANDIDATE_DIGEST/);
     assert.match(buildJob, /SMOKE_GRAPH_ARGS_JSON/);
+    assert.match(buildJob, /SMOKE_GRAPH_ARGS_JSON:\s*'\["start","AchillesIDE\/explorer","18080"\]'/);
+    assert.doesNotMatch(buildJob, /SMOKE_GRAPH_ARGS_JSON:.*AssistOSExplorer\/explorer/);
     assert.match(buildJob, /SMOKE_GRAPH_REPOSITORIES_JSON/);
     assert.match(buildJob, /SMOKE_GRAPH_REVISIONS_JSON/);
     assert.match(buildJob, /ploinkyBoxNative\.test\.mjs/);

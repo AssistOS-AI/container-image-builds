@@ -297,7 +297,7 @@ jobs:
           PLOINKY_BOX_CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
           PLOINKY_BOX_REAL_PODMAN: /usr/bin/podman
           PLOINKY_BOX_PROXY_TRACE_ARTIFACT: /tmp/ploinky-box-proxy-trace-${{ matrix.arch }}.bin
-          SMOKE_GRAPH_ARGS_JSON: '["start","AssistOSExplorer/explorer","18080"]'
+          SMOKE_GRAPH_ARGS_JSON: '["start","AchillesIDE/explorer","18080"]'
           SMOKE_GRAPH_REPOSITORIES_JSON: >-
             {"AssistOSExplorer":"${{ github.workspace }}/full-workspace/AssistOSExplorer",
             "webmeetInfra":"${{ github.workspace }}/full-workspace/webmeetInfra",
