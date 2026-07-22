@@ -194,6 +194,9 @@ jobs:
             SMOKE_GRAPH_ARGS_JSON: JSON.stringify(['start', 'AchillesIDE/explorer', '19090']),
             SMOKE_GRAPH_REPOSITORIES_JSON: JSON.stringify(repositories),
             SMOKE_GRAPH_REVISIONS_JSON: JSON.stringify(revisions),
+            SMOKE_GRAPH_EDGE_DESIRED_FILE: path.resolve(
+              'images/ploinky-box/explorer-smoke-edge-desired.json',
+            ),
           };
           fs.appendFileSync(
             process.env.GITHUB_ENV,

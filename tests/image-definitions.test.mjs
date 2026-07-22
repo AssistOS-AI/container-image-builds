@@ -436,6 +436,8 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     assert.match(buildJob, /SMOKE_GRAPH_ARGS_JSON/);
     assert.match(buildJob, /SMOKE_GRAPH_REPOSITORIES_JSON/);
     assert.match(buildJob, /SMOKE_GRAPH_REVISIONS_JSON/);
+    assert.match(buildJob, /SMOKE_GRAPH_EDGE_DESIRED_FILE/);
+    assert.match(buildJob, /images\/ploinky-box\/explorer-smoke-edge-desired\.json/);
     assert.match(buildJob, /\['start', 'AchillesIDE\/explorer', '19090'\]/);
     assert.doesNotMatch(buildJob, /\['start', 'AssistOSExplorer\/explorer', '19090'\]/);
     for (const repository of [
@@ -455,6 +457,32 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
         assert.match(buildJob, new RegExp(`sources/full-workspace/${repository}`));
     }
     assert.doesNotMatch(buildJob, /path:\s*full-workspace\//);
+    assert.deepEqual(
+        JSON.parse(read('images/ploinky-box/explorer-smoke-edge-desired.json')),
+        {
+            schemaVersion: 1,
+            hosts: {},
+            media: {
+                publicIPv4: '8.8.8.8',
+                addressMode: 'nat-forward',
+            },
+            turn: {
+                urls: [
+                    'turn:turn.example.test:3478?transport=udp',
+                    'turns:turn.example.test:5349?transport=tcp',
+                ],
+                credentialMode: 'turn-rest',
+                sharedSecret: 'smoke/turn-rest',
+                credentialConsumers: ['AchillesIDE/webmeetAgent'],
+            },
+            security: {
+                hostNetworkAllowedInstances: ['webmeetInfra/liveKitServerAgent'],
+                internalServiceConsumers: {
+                    'webmeetInfra/liveKitServerAgent/livekit-api': ['AchillesIDE/webmeetAgent'],
+                },
+            },
+        },
+    );
     assert.match(read('.gitignore'), /^sources\/$/m);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
     assert.match(buildJob, /find tests -maxdepth 1[\s\S]*?\.test\.js[\s\S]*?\.test\.mjs[\s\S]*?\.test\.cjs/);

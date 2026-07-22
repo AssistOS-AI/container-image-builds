@@ -78,6 +78,14 @@ The cloudflared source is likewise pinned, and the Dockerfile verifies the exact
 architecture-specific binary digest, version 2026.7.1, and `--token-file`
 support. Both amd64 and arm64 are built and tested on native runners.
 
+The pinned Explorer graph gate stages
+`images/ploinky-box/explorer-smoke-edge-desired.json` as the explicit operator
+configuration for its disposable workspace. That local-only fixture grants the
+one exact LiveKit host-network owner and supplies deterministic media, TURN,
+and private-service ACL inputs. It is release-test data, not a production
+default embedded in the image; real boxes require operator-owned addresses,
+TURN endpoints, secrets, and ACLs.
+
 The final image is reconstructed from a prepared Podman filesystem through a
 clean `FROM scratch` stage. Its metadata contract is exact:
 
