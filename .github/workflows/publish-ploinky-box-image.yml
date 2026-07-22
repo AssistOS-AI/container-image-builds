@@ -31,6 +31,22 @@ on:
         description: Exact 40-character AssistOS-AI/basic commit SHA
         required: true
         type: string
+      operation:
+        description: Run publication gates or only the existing-candidate private-routing reproducer
+        required: false
+        default: publish
+        type: choice
+        options:
+          - publish
+          - reproduce-private-routing
+      amd64_candidate_digest:
+        description: Existing immutable amd64 candidate for reproduce-private-routing
+        required: false
+        type: string
+      arm64_candidate_digest:
+        description: Existing immutable arm64 candidate for reproduce-private-routing
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -79,6 +95,7 @@ jobs:
   build:
     name: Build and gate ${{ matrix.platform }}
     needs: resolve-source
+    if: ${{ inputs.operation == 'publish' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -348,11 +365,23 @@ jobs:
           path: /tmp/ploinky-box-digest/${{ matrix.arch }}.txt
           retention-days: 1
 
+  reproduce-private-routing:
+    name: Reproduce existing candidates only
+    needs: resolve-source
+    if: ${{ inputs.operation == 'reproduce-private-routing' }}
+    uses: ./.github/workflows/reproduce-ploinky-box-private-routing.yml
+    with:
+      source_ref: ${{ needs.resolve-source.outputs.source_sha }}
+      amd64_digest: ${{ inputs.amd64_candidate_digest }}
+      arm64_digest: ${{ inputs.arm64_candidate_digest }}
+    secrets: inherit
+
   merge:
     name: Publish mutable multiarchitecture runtime
     needs:
       - resolve-source
       - build
+    if: ${{ inputs.operation == 'publish' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Download both gated digests

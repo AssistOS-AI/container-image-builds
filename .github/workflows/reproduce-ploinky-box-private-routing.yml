@@ -1,6 +1,17 @@
 name: Reproduce ploinky-box private routing
 
 on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      amd64_digest:
+        required: true
+        type: string
+      arm64_digest:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       source_ref:

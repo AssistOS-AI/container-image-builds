@@ -397,6 +397,7 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.ok(buildJob);
     assert.ok(mergeJob);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /operation:[\s\S]*?reproduce-private-routing/);
     for (const sourceRef of [
         'explorer_ref',
         'webmeet_infra_ref',
@@ -410,6 +411,7 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     }
     assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
     assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(buildJob, /if:\s*\$\{\{ inputs\.operation == 'publish' \}\}/);
     assert.match(buildJob, /platform:\s*linux\/amd64/);
     assert.match(buildJob, /platform:\s*linux\/arm64/);
     assert.doesNotMatch(buildJob, /setup-qemu-action/);
@@ -444,6 +446,8 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.match(mergeJob, /linux\/amd64/);
     assert.match(mergeJob, /linux\/arm64/);
     assert.match(mergeJob, /runtime_digest/);
+    assert.match(workflow, /reproduce-private-routing:[\s\S]*?uses:\s*\.\/\.github\/workflows\/reproduce-ploinky-box-private-routing\.yml/);
+    assert.match(mergeJob, /if:\s*\$\{\{ inputs\.operation == 'publish' \}\}/);
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }
@@ -453,6 +457,7 @@ test('ploinky-box private-routing reproducer reuses exact candidates without a g
     const workflow = read('.github/workflows/reproduce-ploinky-box-private-routing.yml');
 
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /workflow_call:/);
     assert.match(workflow, /amd64_digest:[\s\S]*?required:\s*true/);
     assert.match(workflow, /arm64_digest:[\s\S]*?required:\s*true/);
     assert.match(workflow, /runner:\s*ubuntu-24\.04(?:\s|$)/);
