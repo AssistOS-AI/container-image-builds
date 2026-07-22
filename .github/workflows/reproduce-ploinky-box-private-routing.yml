@@ -1,0 +1,117 @@
+name: Reproduce ploinky-box private routing
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      amd64_digest:
+        required: true
+        type: string
+      arm64_digest:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact 40-character AssistOS-AI/ploinky commit containing the focused reproducer
+        required: true
+        type: string
+      amd64_digest:
+        description: Existing immutable linux/amd64 ploinky-box candidate digest
+        required: true
+        type: string
+      arm64_digest:
+        description: Existing immutable linux/arm64 ploinky-box candidate digest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reproduce-ploinky-box-private-routing
+  cancel-in-progress: false
+
+jobs:
+  reproduce:
+    name: Private routing ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      CANDIDATE_DIGEST: ${{ matrix.arch == 'amd64' && inputs.amd64_digest || inputs.arm64_digest }}
+      PLOINKY_SOURCE_SHA: ${{ inputs.source_ref }}
+      EVIDENCE_PATH: /tmp/ploinky-private-routing-${{ matrix.arch }}.json
+    steps:
+      - name: Require immutable source and existing candidate digests
+        run: |
+          set -euo pipefail
+          [[ "$PLOINKY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${{ inputs.amd64_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${{ inputs.arm64_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "${{ inputs.amd64_digest }}" != "${{ inputs.arm64_digest }}"
+
+      - name: Checkout immutable Ploinky source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/ploinky
+          ref: ${{ inputs.source_ref }}
+          path: sources/ploinky
+          fetch-depth: 0
+          submodules: true
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Verify source and contract
+        run: |
+          set -euo pipefail
+          test "$(git -C sources/ploinky rev-parse HEAD)" = "$PLOINKY_SOURCE_SHA"
+          test "$(node --input-type=module -e 'import { BOX_RUNTIME_CONTRACT } from "./sources/ploinky/ploinky-box/constants.mjs"; process.stdout.write(BOX_RUNTIME_CONTRACT)')" = 6
+
+      - name: Require native rootless Podman
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap
+          test -e /dev/fuse
+          test -e /dev/net/tun
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman unshare true
+          podman pull "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}"
+          test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}")" = '${{ matrix.platform }}'
+
+      - name: Reproduce one nested private-listener request
+        env:
+          PLOINKY_BOX_REQUIRE_PODMAN: "1"
+          PLOINKY_BOX_CANDIDATE_DIGEST: ${{ env.CANDIDATE_DIGEST }}
+          PLOINKY_BOX_PRIVATE_ROUTING_ARTIFACT: ${{ env.EVIDENCE_PATH }}
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            sources/ploinky/tests/integration/ploinkyBoxPrivateRouting.test.mjs
+
+      - name: Verify focused resources were cleaned
+        if: always()
+        run: |
+          set -euo pipefail
+          test -z "$(podman ps --all --quiet --filter label=io.assistos.ploinky-box.role=box)"
+          test -z "$(podman volume ls --quiet | grep '^ploinky-box-' || true)"
+
+      - name: Upload redacted network evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-private-routing-${{ matrix.arch }}
+          path: ${{ env.EVIDENCE_PATH }}
+          if-no-files-found: warn
+          retention-days: 7
