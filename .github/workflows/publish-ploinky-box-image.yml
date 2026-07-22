@@ -300,6 +300,27 @@ jobs:
             command -v bash node npm npx git podman ss nsenter fuse-overlayfs
           '
 
+      - name: Prepare immutable host test dependencies and sibling graph
+        working-directory: sources/ploinky
+        env:
+          PLOINKY_EXPLORER_SOURCE: ${{ github.workspace }}/sources/full-workspace/AssistOSExplorer
+        run: |
+          set -euo pipefail
+          export PLOINKY_TEST_CONTRACT_FILE="$RUNNER_TEMP/ploinky-box-host-contract"
+          printf '6\n' > "$PLOINKY_TEST_CONTRACT_FILE"
+          node --input-type=module <<'NODE'
+          import path from 'node:path';
+          import { installPinnedDependencies } from './ploinky-box/entrypoint/install-dependencies.mjs';
+
+          const result = installPinnedDependencies({
+            targetRoot: path.resolve('node_modules'),
+            contractPath: process.env.PLOINKY_TEST_CONTRACT_FILE,
+          });
+          if (!result.changed) throw new Error('clean checkout unexpectedly reused host test dependencies');
+          NODE
+          ln -s "$PLOINKY_EXPLORER_SOURCE" ../AssistOSExplorer
+          test "$(realpath ../AssistOSExplorer)" = "$PLOINKY_EXPLORER_SOURCE"
+
       - name: Run current local-core parity through ploinky-local
         working-directory: sources/ploinky
         run: |

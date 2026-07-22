@@ -458,10 +458,17 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     const sourceGate = buildJob.indexOf('Run contract-6 entrypoint and Box unit suites');
     const candidateBuild = buildJob.indexOf('Build and push candidate by digest');
     const nativeGate = buildJob.indexOf('Run native Box integration, pinned-graph smoke, and installed CLI E2E');
+    const hostDependencyGate = buildJob.indexOf('Prepare immutable host test dependencies and sibling graph');
+    const localCoreGate = buildJob.indexOf('Run current local-core parity through ploinky-local');
     const exportGate = buildJob.indexOf('Export gated candidate digest and proxy trace');
     const uploadGate = buildJob.indexOf('Upload gated candidate evidence');
     assert.ok(sourceGate > 0 && sourceGate < candidateBuild);
+    assert.ok(candidateBuild < hostDependencyGate && hostDependencyGate < localCoreGate);
     assert.ok(candidateBuild < nativeGate && nativeGate < exportGate && exportGate < uploadGate);
+    assert.match(buildJob, /installPinnedDependencies/);
+    assert.match(buildJob, /ploinky-box-host-contract/);
+    assert.match(buildJob, /ln -s "\$PLOINKY_EXPLORER_SOURCE" \.\.\/AssistOSExplorer/);
+    assert.match(buildJob, /realpath \.\.\/AssistOSExplorer/);
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
     assert.match(buildJob, /PLOINKY_BOX_CANDIDATE_DIGEST/);
