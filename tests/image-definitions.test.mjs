@@ -429,6 +429,14 @@ test('ploinky-box workflow gates contract-6 native digests and exact publication
     assert.match(buildJob, /ploinkyBoxSmokeGraph\.test\.mjs/);
     assert.match(buildJob, /publicCli\.test\.mjs/);
     assert.match(buildJob, /--test-concurrency=1/);
+    const reclaimOffset = buildJob.indexOf('Reclaim disposable build storage for nested image gates');
+    const nativeGateOffset = buildJob.indexOf('Require rootless Podman for native contract-6 gates');
+    assert.ok(reclaimOffset > 0);
+    assert.ok(nativeGateOffset > reclaimOffset);
+    assert.match(buildJob, /docker buildx prune --all --force/);
+    assert.match(buildJob, /docker image rm "\$IMAGE_REF"/);
+    assert.match(buildJob, /docker system prune --all --force --volumes/);
+    assert.match(buildJob, /podman image inspect --format/);
     assert.doesNotMatch(buildJob, /--privileged|--cap-add|seccomp=unconfined/);
     assert.doesNotMatch(buildJob, /Move runtime tag/);
     assert.match(mergeJob, /test "\$\{#files\[@\]\}" -eq 2/);

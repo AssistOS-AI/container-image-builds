@@ -280,6 +280,18 @@ jobs:
             printf "%s  %s\n" "$EXPECTED_CLOUDFLARED_SHA256" /usr/local/bin/cloudflared               | sha256sum --check --strict -
           '
 
+      - name: Reclaim disposable build storage for nested image gates
+        run: |
+          set -euo pipefail
+          docker buildx prune --all --force
+          docker image rm "$IMAGE_REF"
+          docker system prune --all --force --volumes
+          sudo rm -rf --one-file-system /usr/share/dotnet
+          sudo rm -rf --one-file-system /usr/local/lib/android
+          sudo rm -rf --one-file-system /opt/ghc
+          sudo apt-get clean
+          df -h /
+
       - name: Require rootless Podman for native contract-6 gates
         run: |
           set -euo pipefail
@@ -324,7 +336,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_REF")" = '${{ matrix.platform }}'
+          test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_REF")" = '${{ matrix.platform }}'
           mkdir -p /tmp/ploinky-box-digest
           printf '%s\n' "$DIGEST" > "/tmp/ploinky-box-digest/${{ matrix.arch }}.txt"
           test -s "/tmp/ploinky-box-digest/${{ matrix.arch }}.txt"
