@@ -134,6 +134,9 @@ AchillesCLI, proxies, basic, and container-image-builds; the last repository is
 pinned to `GITHUB_SHA`. Ploinky is mounted separately at `/opt/ploinky` and
 is not an eighth graph repository. Every checkout must be canonical, clean, and
 at the supplied immutable SHA.
+The physical AssistOSExplorer checkout is staged under Ploinky's predefined
+logical repository name `AchillesIDE`, so the pinned smoke start targets
+`AchillesIDE/explorer`.
 
 Each native architecture job runs all top-level image tests across
 `.test.js`, `.test.mjs`, and `.test.cjs`; all Ploinky Box units; the local

@@ -191,7 +191,7 @@ jobs:
             if (dirty !== '') throw new Error(`${name} checkout is dirty`);
           }
           const values = {
-            SMOKE_GRAPH_ARGS_JSON: JSON.stringify(['start', 'AssistOSExplorer/explorer', '19090']),
+            SMOKE_GRAPH_ARGS_JSON: JSON.stringify(['start', 'AchillesIDE/explorer', '19090']),
             SMOKE_GRAPH_REPOSITORIES_JSON: JSON.stringify(repositories),
             SMOKE_GRAPH_REVISIONS_JSON: JSON.stringify(revisions),
           };

@@ -436,7 +436,8 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     assert.match(buildJob, /SMOKE_GRAPH_ARGS_JSON/);
     assert.match(buildJob, /SMOKE_GRAPH_REPOSITORIES_JSON/);
     assert.match(buildJob, /SMOKE_GRAPH_REVISIONS_JSON/);
-    assert.match(buildJob, /\['start', 'AssistOSExplorer\/explorer', '19090'\]/);
+    assert.match(buildJob, /\['start', 'AchillesIDE\/explorer', '19090'\]/);
+    assert.doesNotMatch(buildJob, /\['start', 'AssistOSExplorer\/explorer', '19090'\]/);
     for (const repository of [
         'AssistOSExplorer',
         'webmeetInfra',
