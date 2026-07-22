@@ -336,9 +336,8 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
 
-test('ploinky-box image is a source-free contract-5 runtime with pinned cloudflared', () => {
+test('ploinky-box image is a source-owned contract-6 rootless Podman appliance', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
-    const entrypoint = read('images/ploinky-box/entrypoint.sh');
     const instructions = dockerfileInstructions(dockerfile);
     const fromInstructions = instructions.filter(({ keyword }) => keyword === 'FROM');
 
@@ -346,56 +345,37 @@ test('ploinky-box image is a source-free contract-5 runtime with pinned cloudfla
         dockerfile,
         /^ARG PODMAN_BASE=quay\.io\/podman\/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964$/m,
     );
-    assert.match(
-        dockerfile,
-        /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m,
-    );
+    assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
     assert.match(
         dockerfile,
         /^ARG CLOUDFLARED_IMAGE=docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe$/m,
     );
-    assert.match(dockerfile, /^FROM \$CLOUDFLARED_IMAGE AS cloudflared$/m);
-    assert.match(
-        dockerfile,
-        /^COPY --from=cloudflared \/usr\/local\/bin\/cloudflared \/usr\/local\/bin\/cloudflared$/m,
-    );
-    assert.match(dockerfile, /a76297bc59df96887b94d8cdb2aabe2401fc7b2bf3527b05d9a311b7341d190a/);
-    assert.match(dockerfile, /254ee7bd4966d32e87c3d223c4b90d2b8f49e0a6a468484a09ea6346b50b2957/);
-    assert.match(dockerfile, /sha256sum --check --strict/);
-    assert.match(dockerfile, /cloudflared --version/);
-    assert.match(dockerfile, /cloudflared tunnel run --help/);
-    assert.match(dockerfile, /--token-file/);
-    assert.match(
-        dockerfile,
-        /^COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node$/m,
-    );
-    assert.match(
-        dockerfile,
-        /^COPY --from=node-runtime \/usr\/local\/lib\/node_modules \/usr\/local\/lib\/node_modules$/m,
-    );
-    assert.match(
-        dockerfile,
-        /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npm-cli\.js \/usr\/local\/bin\/npm/,
-    );
-    assert.match(
-        dockerfile,
-        /ln -s \/usr\/local\/lib\/node_modules\/npm\/bin\/npx-cli\.js \/usr\/local\/bin\/npx/,
-    );
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
-    assert.match(dockerfile, /rpm --setcaps shadow-utils/);
     assert.match(
         dockerfile,
-        /dnf install -y git iproute libcap netavark aardvark-dns passt slirp4netns util-linux-core/,
+        /dnf install -y git iproute libcap fuse-overlayfs netavark aardvark-dns passt slirp4netns util-linux-core/,
     );
-    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="5"$/m);
-    assert.match(dockerfile, /\/etc\/subuid\)" = 65534/);
-    assert.match(dockerfile, /\/etc\/subgid\)" = 65534/);
-    assert.match(dockerfile, /\/opt\/ploinky\/node_modules/);
-    assert.match(dockerfile, /\/run\/ploinky/);
-    assert.match(dockerfile, /\/home\/podman\/\.config\/containers/);
+    assert.match(dockerfile, /rpm --setcaps shadow-utils/);
+    assert.match(dockerfile, /sha256sum --check --strict/);
+    assert.match(dockerfile, /cloudflared tunnel run --help/);
+    assert.match(dockerfile, /--token-file/);
+    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="6"$/m);
+    assert.match(dockerfile, /printf '6\\n' > \/etc\/ploinky-box/);
+    for (const ownedTarget of [
+        '/opt/ploinky/node_modules',
+        '/workspace',
+        '/run/ploinky',
+        '/home/podman/.config/containers',
+        '/home/podman/.local/share/containers/storage',
+    ]) {
+        assert.ok(dockerfile.includes(ownedTarget), 'missing owned mount target ' + ownedTarget);
+    }
+    assert.match(
+        dockerfile,
+        /chown -R podman:podman[\s\S]*?\/opt\/ploinky[\s\S]*?\/workspace[\s\S]*?\/run\/ploinky[\s\S]*?\/home\/podman\/\.config[\s\S]*?\/home\/podman\/\.local\/share\/containers/,
+    );
     assert.match(dockerfile, /chmod 0700 \/run\/ploinky/);
-    assert.match(dockerfile, /echo 'assistos\/ploinky-box' > \/etc\/ploinky-box/);
     assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
     for (const requiredEnv of [
         'USER=podman',
@@ -406,162 +386,31 @@ test('ploinky-box image is a source-free contract-5 runtime with pinned cloudfla
         '_CONTAINERS_USERNS_CONFIGURED=""',
         'BUILDAH_ISOLATION=chroot',
     ]) {
-        assert.ok(dockerfile.includes(requiredEnv), `missing exact ENV ${requiredEnv}`);
+        assert.ok(dockerfile.includes(requiredEnv), 'missing exact ENV ' + requiredEnv);
     }
     assert.match(
         dockerfile,
-        /^COPY images\/ploinky-box\/entrypoint\.sh \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
+        /^COPY sources\/ploinky\/ploinky-box\/entrypoint\/ploinky-box-entrypoint \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
     );
-    assert.match(
-        dockerfile,
-        /^RUN chmod 0755 \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
-    );
+    assert.match(dockerfile, /^RUN chmod 0755 \/usr\/local\/bin\/ploinky-box-entrypoint$/m);
+    assert.equal(fs.existsSync(path.join(repoRoot, 'images/ploinky-box/entrypoint.sh')), false);
+    assert.doesNotMatch(dockerfile, /COPY images\/ploinky-box\/entrypoint\.sh/);
     assert.match(dockerfile, /^USER podman$/m);
     assert.match(dockerfile, /^WORKDIR \/workspace$/m);
-    assert.match(
-        dockerfile,
-        /^ENTRYPOINT \["\/usr\/local\/bin\/ploinky-box-entrypoint"\]$/m,
-    );
-    assert.doesNotMatch(dockerfile, /COPY sources\/ploinky/);
-    assert.doesNotMatch(dockerfile, /npm install/);
+    assert.match(dockerfile, /^ENTRYPOINT \["\/usr\/local\/bin\/ploinky-box-entrypoint"\]$/m);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'VOLUME').length, 0);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
-
-    for (const command of ['bash', 'node', 'npm', 'npx', 'git', 'podman', 'ss', 'nsenter']) {
-        assert.match(
-            entrypoint,
-            new RegExp(
-                '^command -v ' + command + ' >\\/dev\\/null 2>&1 \\|\\| fail "[^"\\n]+"$',
-                'm',
-            ),
-        );
-    }
-    assert.match(entrypoint, /^EXPECTED_CLOUDFLARED_VERSION=2026\.7\.1$/m);
-    assert.match(entrypoint, /require_cloudflared_contract/);
-    assert.match(entrypoint, /cloudflared tunnel run --help/);
-    assert.match(entrypoint, /--token-file/);
-    assert.match(entrypoint, /^test -f \/etc\/ploinky-box \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^test -x \/opt\/ploinky\/bin\/ploinky \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^test -d \/opt\/ploinky\/node_modules \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^test -w \/opt\/ploinky\/node_modules \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^test -w \/workspace \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^test -e \/dev\/fuse \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /^test -e \/dev\/net\/tun \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /write_box_transport_contract/);
-    assert.match(entrypoint, /ip -j -4 route get 198\.51\.100\.1/);
-    assert.match(entrypoint, /ip -j -4 address show dev "\$transport_interface"/);
-    assert.match(entrypoint, /host_containers_internal_ip=/);
-    assert.match(entrypoint, /PLOINKY_BOX_TRANSPORT_FILE/);
-    assert.match(entrypoint, /require_value PLOINKY_DISABLE_HOST_SANDBOX 1/);
-    assert.match(entrypoint, /require_value _CONTAINERS_USERNS_CONFIGURED ''/);
-    assert.match(entrypoint, /require_helper_privilege newuidmap cap_setuid/);
-    assert.match(entrypoint, /require_helper_privilege newgidmap cap_setgid/);
-    assert.match(entrypoint, /reset_ephemeral_podman_runtime/);
-    assert.match(entrypoint, /\/tmp\/storage-run-\$uid/);
-    assert.match(entrypoint, /\/tmp\/podman-run-\$uid/);
-    assert.match(entrypoint, /podman unshare cat "\$proc_file"/);
-    assert.match(entrypoint, /^EXPECTED_SUBORDINATE_IDS=65534$/m);
-    assert.match(entrypoint, /^EXPECTED_MAPPED_IDS=65535$/m);
-    assert.match(entrypoint, /configured" -eq "\$EXPECTED_SUBORDINATE_IDS/);
-    assert.match(entrypoint, /mapped" -eq "\$EXPECTED_MAPPED_IDS/);
-    assert.match(entrypoint, /^podman version >\/dev\/null 2>&1 \|\| fail "[^"\n]+"$/m);
-    assert.match(entrypoint, /inner podman not functional: \$\{podman_info:-no diagnostic\}/);
-    assert.match(entrypoint, /podman info --format '\{\{\.Host\.Security\.Rootless\}\}'/);
-    assert.match(entrypoint, /inner Podman must be rootless/);
-    assert.match(entrypoint, /^MINIMUM_PODMAN_VERSION=5\.4$/m);
-    assert.match(entrypoint, /inner Podman network backend must be netavark/);
-    assert.match(entrypoint, /command -v pasta/);
-    assert.match(entrypoint, /pasta --version/);
-    assert.match(entrypoint, /^MANAGED_LABEL='io\.assistos\.ploinky\.managed=1'$/m);
-    assert.match(
-        entrypoint,
-        /podman ps --all --quiet --filter "label=\$MANAGED_LABEL"/,
-    );
-    assert.match(entrypoint, /cannot enumerate Ploinky-managed nested containers/);
-    assert.match(entrypoint, /retained Ploinky-managed nested containers were found/);
-    assert.match(entrypoint, /v5 will not delete or import old state/);
-    assert.doesNotMatch(entrypoint, /podman rm/);
-    assert.match(entrypoint, /^\s+exec "\$@"$/m);
-    assert.match(entrypoint, /^exec sleep infinity$/m);
-    assert.doesNotMatch(entrypoint, /achillesAgentLib/);
-    assert.doesNotMatch(entrypoint, /mcp-sdk/);
 });
 
-test('ploinky-box workflow gates native contract-5 digests before moving runtime', () => {
+test('ploinky-box workflow gates native contract-6 digests before runtime promotion', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
-    const resolveJob = workflow.match(/\n  resolve-source:[\s\S]*?(?=\n  build:)/)?.[0] || '';
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
-    const metadataGate = buildJob.match(
-        /- name: Inspect exact contract-5 metadata and platform[\s\S]*?(?=\n      - name:)/,
-    )?.[0] || '';
 
-    assert.ok(resolveJob);
     assert.ok(buildJob);
     assert.ok(mergeJob);
-    assert.match(workflow, /IMAGE_TAG:\s*runtime/);
-    assert.doesNotMatch(workflow, /podman-node24-runtime-v1/);
-    assert.doesNotMatch(workflow, /^\s+image_tag:/m);
-    assert.doesNotMatch(workflow, /Verify immutable tag is unused/);
-    assert.match(resolveJob, /source_sha:\s*\$\{\{ steps\.source\.outputs\.sha \}\}/);
-    assert.match(resolveJob, /\[\[ "\$SOURCE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
-    assert.doesNotMatch(resolveJob, /default:\s*master/);
-    assert.match(resolveJob, /git -C sources\/ploinky rev-parse HEAD/);
-    assert.match(buildJob, /ref:\s*\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
-    assert.match(buildJob, /Gate checked-out Ploinky contract-5 source/);
-    assert.match(buildJob, /REQUIRED_RUNTIME_CONTRACT/);
-    assert.match(buildJob, /assert\.equal\([\s\S]*?REQUIRED_RUNTIME_CONTRACT,[\s\S]*?'5'/);
-    assert.match(buildJob, /networkHardCutSourceAbsence\.test\.mjs/);
-    assert.match(buildJob, /networkContract\.test\.mjs/);
-    assert.match(buildJob, /networkLifecycle\.test\.mjs/);
-    assert.match(buildJob, /runtimeDocumentation\.test\.mjs/);
-    assert.match(buildJob, /container\/runtime-supervisor-tests\.mjs/);
-    const sourceGateIndex = buildJob.indexOf('Gate checked-out Ploinky contract-5 source');
-    const candidateBuildIndex = buildJob.indexOf('Build and push candidate by digest');
-    assert.ok(sourceGateIndex > 0 && sourceGateIndex < candidateBuildIndex);
-    assert.ok(buildJob.indexOf('container/runtime-supervisor-tests.mjs') < candidateBuildIndex);
-    assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
-    assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
-    assert.match(buildJob, /platform:\s*linux\/amd64/);
-    assert.match(buildJob, /platform:\s*linux\/arm64/);
-    assert.doesNotMatch(buildJob, /setup-qemu-action/);
-    assert.match(
-        buildJob,
-        /docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe/,
-    );
-    assert.match(buildJob, /Verify pinned multiarchitecture cloudflared source/);
-    assert.match(buildJob, /docker buildx imagetools inspect --raw/);
-    assert.match(buildJob, /cloudflared_sha256:/);
-    assert.match(buildJob, /sha256sum --check --strict/);
-    assert.match(buildJob, /cloudflared tunnel run --help/);
-    assert.match(buildJob, /--token-file/);
-    assert.match(buildJob, /Require rootless Podman for contract-5 runtime gates/);
-    assert.match(buildJob, /podman info --format '\{\{\.Host\.Security\.Rootless\}\}'/);
-    assert.match(buildJob, /push-by-digest=true/);
-    assert.match(buildJob, /name-canonical=true/);
-    assert.ok(metadataGate);
-    assert.match(metadataGate, /io\.assistos\.ploinky\.runtime-contract/);
-    assert.match(metadataGate, /runtime-contract"\] == "5"/);
-    assert.match(metadataGate, /\(\$env \| length\) == 8/);
-    for (const exactCheck of [
-        '$env.PATH == "/opt/ploinky/bin:/usr/local/bin:/usr/bin"',
-        '$env.USER == "podman"',
-        '$env.HOME == "/home/podman"',
-        '$env.PLOINKY_WORKSPACE_ROOT == "/workspace"',
-        '$env.PLOINKY_DISABLE_HOST_SANDBOX == "1"',
-        '$env.container == "oci"',
-        '$env._CONTAINERS_USERNS_CONFIGURED == ""',
-        '$env.BUILDAH_ISOLATION == "chroot"',
-    ]) {
-        assert.ok(metadataGate.includes(exactCheck), `metadata gate lacks exact check: ${exactCheck}`);
-    }
-    assert.match(metadataGate, /Config\.Cmd == null/);
-    assert.match(metadataGate, /Config\.Volumes == null/);
-    assert.match(buildJob, /ploinky-install-deps/);
-    assert.match(buildJob, /sources\/ploinky:\/opt\/ploinky:ro/);
-    assert.match(buildJob, /Gate exact fixed outer publications and lifecycle/);
-    assert.match(buildJob, /container\/smoke-runtime\.mjs/);
-    for (const sourceRef of [
+    for (const input of [
+        'source_ref',
         'explorer_ref',
         'webmeet_infra_ref',
         'umami_ref',
@@ -569,129 +418,102 @@ test('ploinky-box workflow gates native contract-5 digests before moving runtime
         'proxies_ref',
         'basic_ref',
     ]) {
-        assert.match(workflow, new RegExp(`${sourceRef}:[\\s\\S]*?required:\\s*true`));
-        assert.match(buildJob, new RegExp(`inputs\\.${sourceRef}`));
+        assert.match(workflow, new RegExp(input + ':[\\s\\S]*?required:\\s*true'));
     }
-    assert.match(buildJob, /Require immutable full-graph source SHAs/);
-    assert.match(buildJob, /\[\[ "\$sha" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
-    assert.match(buildJob, /SMOKE_FULL_GRAPH_ARGS_JSON:\s*'\["start","AssistOSExplorer\/explorer","18080"\]'/);
-    assert.match(buildJob, /SMOKE_FULL_GRAPH_REPOSITORIES_JSON/);
+    assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(buildJob, /platform:\s*linux\/amd64/);
+    assert.match(buildJob, /platform:\s*linux\/arm64/);
+    assert.doesNotMatch(buildJob, /setup-qemu-action|--privileged|seccomp=unconfined/);
+    assert.match(buildJob, /SMOKE_GRAPH_ARGS_JSON/);
+    assert.match(buildJob, /SMOKE_GRAPH_REPOSITORIES_JSON/);
+    assert.match(buildJob, /SMOKE_GRAPH_REVISIONS_JSON/);
+    assert.match(buildJob, /\['start', 'AssistOSExplorer\/explorer', '19090'\]/);
     for (const repository of [
-        'AchillesCLI',
         'AssistOSExplorer',
+        'webmeetInfra',
         'UmamiAgent',
+        'AchillesCLI',
+        'proxies',
         'basic',
         'container-image-builds',
-        'proxies',
-        'webmeetInfra',
     ]) {
-        assert.match(buildJob, new RegExp(`full-workspace/${repository}`));
+        assert.match(buildJob, new RegExp(repository));
     }
-    assert.match(buildJob, /podman --version/);
-    assert.match(buildJob, /podman info/);
-    assert.match(buildJob, /Host\.Security\.Rootless/);
-    assert.match(buildJob, /--user podman/);
-    assert.match(buildJob, /--device \/dev\/fuse/);
-    assert.match(buildJob, /--device \/dev\/net\/tun/);
-    assert.match(buildJob, /--security-opt unmask=ALL/);
-    assert.doesNotMatch(buildJob, /--privileged/);
-    assert.doesNotMatch(buildJob, /seccomp=unconfined/);
-    assert.match(buildJob, /newuidmap/);
-    assert.match(buildJob, /newgidmap/);
-    assert.match(buildJob, /\/proc\/self\/uid_map/);
-    assert.match(buildJob, /\/proc\/self\/gid_map/);
-    assert.match(buildJob, /test "\$uid_configured" -eq 65534/);
-    assert.match(buildJob, /test "\$gid_configured" -eq 65534/);
-    assert.match(buildJob, /test "\$uid_mapped" -eq 65535/);
-    assert.match(buildJob, /test "\$gid_mapped" -eq 65535/);
-    assert.match(buildJob, /run -d --name "\$outer" --user podman[\s\S]*?--security-opt unmask=ALL/);
-    assert.doesNotMatch(buildJob, /--privileged|--cap-add|seccomp=unconfined/);
-    assert.doesNotMatch(buildJob, /slirp4netns:allow_host_loopback=true/);
-    assert.match(buildJob, /Gate contract-5 hard cut and native host-gateway topology/);
-    assert.match(buildJob, /old-gateway/);
-    assert.match(buildJob, /old-default-agent/);
-    assert.match(buildJob, /old-multi-agent/);
-    assert.match(buildJob, /manual-running/);
-    assert.match(buildJob, /io\.assistos\.ploinky\.managed=0/);
-    assert.match(buildJob, /io\.assistos\.ploinky\.managed=10/);
-    assert.match(buildJob, /io\.assistos\.ploinky\.managed-extra=1/);
-    assert.match(buildJob, /sentinel-volume/);
-    assert.match(buildJob, /hard-cut-workspace-sentinel/);
-    assert.match(buildJob, /hard-cut-storage-sentinel/);
-    assert.match(buildJob, /hard-cut-deps-sentinel/);
-    assert.match(buildJob, /createNetworkLifecycleAdapter/);
-    assert.match(buildJob, /lifecycle\.ensureNetwork\('primary'\)/);
-    assert.match(buildJob, /lifecycle\.ensureNetwork\('secondary'\)/);
-    assert.match(buildJob, /reused\.created, false/);
-    assert.match(buildJob, /lifecycle\.runManagedContainerTransaction/);
-    assert.match(buildJob, /lifecycle\.agentIdentityLabelArgs\(network\)/);
-    assert.match(buildJob, /lifecycle\.verifyContainerContract/);
-    assert.match(buildJob, /buildRuntimeRouterEnv\('podman'/);
-    assert.match(buildJob, /networkContractHash\(defaultNetwork\)/);
-    assert.match(buildJob, /networkContractHash\(bridgeNetwork\)/);
-    assert.match(buildJob, /schema2-networks-before-hard-cut\.json/);
-    assert.match(buildJob, /managed-topology\.json/);
-    assert.doesNotMatch(buildJob, /managed_args=/);
-    assert.doesNotMatch(buildJob, /run_outer 3/);
-    assert.match(buildJob, /PLOINKY_ROUTER_URL\)" = "http:\/\/host\.containers\.internal:8080"/);
-    assert.match(buildJob, /PLOINKY_INTERNAL_ROUTER_URL\)" = "http:\/\/host\.containers\.internal:\$router_port"/);
-    assert.match(buildJob, /RoutingServer\.js/);
-    assert.match(buildJob, /PORT=8080/);
-    assert.match(buildJob, /router_port=8081/);
-    assert.match(buildJob, /podman exec "\$agent" nc -z -w 3 host\.containers\.internal 8080/);
-    assert.match(buildJob, /! podman exec "\$agent" wget -T 3 -qO- http:\/\/host\.containers\.internal:8080\/status/);
-    assert.match(buildJob, /! podman exec default-agent wget -T 3 -qO- http:\/\/host\.containers\.internal:8080\/status/);
-    assert.match(buildJob, /nc -z -w 3 host\.containers\.internal "\$router_port"/);
-    assert.doesNotMatch(buildJob, /18081/);
-    assert.match(buildJob, /same-network-peer/);
-    assert.match(buildJob, /isolated-peer/);
-    assert.match(buildJob, /https:\/\/example\.com/);
-    assert.match(buildJob, /host\.containers\.internal:18082/);
-    assert.match(buildJob, /networks-before-router-restart\.json/);
-    assert.match(buildJob, /networks-after-router-restart\.json/);
-    assert.match(buildJob, /rpm -q netavark aardvark-dns passt/);
-    assert.match(buildJob, /pasta --version/);
-    assert.match(buildJob, /injected managed-container enumeration failure/);
-    assert.match(buildJob, /EXPLICIT-MANAGED-STATE-REMOVAL-OK/);
-    assert.match(buildJob, /retained-managed-target/);
-    assert.match(buildJob, /v5 will not delete or import old state/);
-    const descriptorIndex = buildJob.indexOf('Export gated candidate digest');
-    const uploadIndex = buildJob.indexOf('Upload gated candidate digest');
-    assert.ok(descriptorIndex > 0 && descriptorIndex < uploadIndex);
-    assert.match(buildJob, /docker image inspect --format '\{\{\.Os\}\}\/\{\{\.Architecture\}\}'/);
+    for (const repository of [
+        'AssistOSExplorer', 'webmeetInfra', 'UmamiAgent', 'AchillesCLI', 'proxies', 'basic',
+    ]) {
+        assert.match(buildJob, new RegExp(`sources/full-workspace/${repository}`));
+    }
+    assert.doesNotMatch(buildJob, /path:\s*full-workspace\//);
+    assert.match(read('.gitignore'), /^sources\/$/m);
+    assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
+    assert.match(buildJob, /find tests -maxdepth 1[\s\S]*?\.test\.js[\s\S]*?\.test\.mjs[\s\S]*?\.test\.cjs/);
+    assert.match(buildJob, /find tests\/unit -maxdepth 1[\s\S]*?ploinkyBox\*\.test\.js[\s\S]*?ploinkyBox\*\.test\.mjs[\s\S]*?ploinkyBox\*\.test\.cjs/);
+
+    const sourceGate = buildJob.indexOf('Run contract-6 entrypoint and Box unit suites');
+    const candidateBuild = buildJob.indexOf('Build and push candidate by digest');
+    const nativeGate = buildJob.indexOf('Run native Box integration, pinned-graph smoke, and installed CLI E2E');
+    const exportGate = buildJob.indexOf('Export gated candidate digest and proxy trace');
+    const uploadGate = buildJob.indexOf('Upload gated candidate evidence');
+    assert.ok(sourceGate > 0 && sourceGate < candidateBuild);
+    assert.ok(candidateBuild < nativeGate && nativeGate < exportGate && exportGate < uploadGate);
+    assert.match(buildJob, /push-by-digest=true/);
+    assert.match(buildJob, /name-canonical=true/);
+    assert.match(buildJob, /PLOINKY_BOX_CANDIDATE_DIGEST/);
+    assert.match(buildJob, /PLOINKY_BOX_REQUIRE_PODMAN:\s*'1'/);
+    assert.match(buildJob, /PLOINKY_BOX_REAL_PODMAN/);
+    assert.match(buildJob, /PLOINKY_BOX_PROXY_TRACE_ARTIFACT/);
+    assert.match(buildJob, /ploinkyBoxNative\.test\.mjs/);
+    assert.match(buildJob, /ploinkyBoxSmokeGraph\.test\.mjs/);
+    assert.match(buildJob, /ploinkyBox\/publicCli\.test\.mjs/);
+    assert.match(buildJob, /PLOINKY_RELAY_TEST_IMAGE/);
+    assert.match(buildJob, /# skipped 2/);
+    assert.match(buildJob, /generated profile can launch a basic macOS command/);
+    assert.match(buildJob, /generated profile denies writes to read-only code, cache, and staged lib/);
+    assert.match(buildJob, /# fail 0/);
+    assert.match(buildJob, /# todo 0/);
+    assert.match(buildJob, /# skipped 0/);
+    assert.match(buildJob, /ploinky-box-proxy-\$\{\{ matrix\.arch \}\}\.trace/);
     assert.match(buildJob, /actions\/upload-artifact@[0-9a-f]{40}/);
 
     assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build/);
     assert.match(mergeJob, /actions\/download-artifact@[0-9a-f]{40}/);
-    assert.match(mergeJob, /test "\$\{#files\[@\]\}" -eq 2/);
-    assert.match(mergeJob, /amd64_file=\/tmp\/ploinky-box-digests\/amd64\.txt/);
-    assert.match(mergeJob, /arm64_file=\/tmp\/ploinky-box-digests\/arm64\.txt/);
-    assert.match(mergeJob, /echo "amd64_digest=\$amd64_digest"/);
-    assert.match(mergeJob, /echo "arm64_digest=\$arm64_digest"/);
-    assert.match(mergeJob, /test "\$amd64_digest" != "\$arm64_digest"/);
-    assert.match(mergeJob, /steps\.candidates\.outputs\.amd64_digest/);
-    assert.match(mergeJob, /steps\.candidates\.outputs\.arm64_digest/);
-    assert.match(mergeJob, /docker buildx imagetools create/);
-    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}/);
-    assert.match(mergeJob, /docker buildx imagetools inspect/);
-    assert.match(mergeJob, /linux\/amd64/);
-    assert.match(mergeJob, /linux\/arm64/);
-    assert.match(mergeJob, /runtime_digest/);
-    assert.doesNotMatch(buildJob, /Move runtime tag/);
+    assert.match(mergeJob, /record\[0\] === 'rewrite'/);
+    assert.match(mergeJob, /docker\.io\/assistos\/ploinky-box@\$\{digest\}/);
+    assert.match(mergeJob, /record\[0\] === 'reject'/);
+    assert.match(mergeJob, /runtime-candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(mergeJob, /Prove the run-scoped staging tag is unused/);
+    assert.match(mergeJob, /io\.assistos\.ploinky\.workflow-run/);
+    assert.match(mergeJob, /io\.assistos\.ploinky\.source-sha/);
+    assert.match(mergeJob, /io\.assistos\.ploinky\.amd64-digest/);
+    assert.match(mergeJob, /io\.assistos\.ploinky\.arm64-digest/);
+    assert.match(mergeJob, /assert\.equal\(index\.manifests\.length, 2\)/);
+    assert.match(mergeJob, /members\.get\('linux\/amd64'\)/);
+    assert.match(mergeJob, /members\.get\('linux\/arm64'\)/);
+    assert.match(mergeJob, /Move runtime by the exact inspected staging digest/);
+    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
+    assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
+    const promote = mergeJob.indexOf('Move runtime by the exact inspected staging digest');
+    const readOnly = mergeJob.indexOf('Read-only post-promotion digest confirmation');
+    assert.ok(promote > 0 && promote < readOnly);
+    assert.doesNotMatch(mergeJob.slice(promote), /node --test|podman run|docker run/);
+
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
-        assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
+        assert.match(use[1], /^[0-9a-f]{40}$/, 'workflow action is not SHA-pinned: ' + use[0]);
     }
 });
 
-test('runtime channel documentation requires an explicit destroy/recreate boundary', () => {
+test('runtime channel documentation separates replacement from hard-cut recovery', () => {
     const readme = read('README.md');
 
-    assert.match(readme, /consults the channel only when creating[\s\S]*?after an explicit destroy/);
-    assert.match(readme, /configuration[\s\S]*?drift is rejected before mutation/);
-    assert.match(readme, /explicit destroy followed by[\s\S]*?recreate/);
-    assert.match(readme, /release channel[\s\S]*?separately authorized registry release action/);
+    assert.match(readme, /consults the channel only when creating[\s\S]*?current-contract replacement/);
+    assert.match(readme, /configuration drift is rejected before mutation/);
+    assert.match(readme, /explicit[\s\S]*?destroy followed by recreate/);
+    assert.match(readme, /release channel[\s\S]*?separately authorized registry release[\s\S]*?action/);
     assert.match(readme, /never a supervisor transaction/);
-    assert.doesNotMatch(readme, /supervisor creates a missing outer box or performs a current-contract/);
+    assert.match(readme, /Reuse, status, stop, and destroy do not pull the channel/);
+    assert.doesNotMatch(readme, /runtime contract 5|runtime-contract=5/);
 });
 
 test('ploinky-node does not install a container engine or client', () => {
