@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'Exact 40-character commit SHA at the tip of AssistOS-AI/webmeetInfra ploinky-box'
+        description: 'Exact 40-character commit SHA at the tip of AssistOS-AI/webmeetInfra ploinky-proxy'
         required: true
         type: string
       egress_image:
@@ -61,17 +61,17 @@ jobs:
           path: sources/webmeetInfra
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Verify ploinky-box source tip
+      - name: Verify ploinky-proxy source tip
         id: source
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
           actual_sha="$(git -C sources/webmeetInfra rev-parse HEAD)"
-          branch_sha="$(git -C sources/webmeetInfra ls-remote --exit-code origin refs/heads/ploinky-box | awk '{print $1}')"
+          branch_sha="$(git -C sources/webmeetInfra ls-remote --exit-code origin refs/heads/ploinky-proxy | awk '{print $1}')"
           test "$actual_sha" = "$SOURCE_REF"
           if [ "$actual_sha" != "$branch_sha" ]; then
-            echo "source_ref must be the current tip of webmeetInfra/ploinky-box" >&2
+            echo "source_ref must be the current tip of webmeetInfra/ploinky-proxy" >&2
             exit 1
           fi
           echo "sha=${actual_sha:0:12}" >> "$GITHUB_OUTPUT"

@@ -239,7 +239,8 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
     assert.match(workflow, /docker\\\.io\/assistos\/livekit-egress@sha256/);
     assert.doesNotMatch(workflow, /source_ref:[\s\S]*?default:\s*['"]?main/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
-    assert.match(workflow, /refs\/heads\/ploinky-box/);
+    assert.match(workflow, /refs\/heads\/ploinky-proxy/);
+    assert.doesNotMatch(workflow, /refs\/heads\/ploinky-box/);
     assert.match(workflow, /git -C sources\/webmeetInfra rev-parse HEAD/);
     assert.match(workflow, /context:\s*\.\/sources\/webmeetInfra\/liveKitServerAgent/);
     assert.match(workflow, /file:\s*\.\/images\/livekit-server-agent\/Dockerfile/);

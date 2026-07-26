@@ -25,7 +25,7 @@ out Ploinky at an exact commit, copies only its canonical contract-6 entrypoint
 into the image, and mounts that same source read-only for candidate verification.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
-current tip of `webmeetInfra/ploinky-box`. It builds and smoke-tests the local
+current tip of `webmeetInfra/ploinky-proxy`. It builds and smoke-tests the local
 architecture before authenticating and publishing the multiarchitecture image.
 Its three base images are pinned by manifest-list digest, and Ubuntu package
 resolution is pinned to a dated repository snapshot with exact direct-package
