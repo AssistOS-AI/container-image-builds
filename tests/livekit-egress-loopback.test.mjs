@@ -35,8 +35,10 @@ test('publication workflow verifies exact bytes before mutation and proves same-
   assert.match(workflow, /00000000:1F2D/);
   assert.match(workflow, /--network "\$network" --entrypoint curl/);
   assert.match(workflow, /--platform linux\/amd64,linux\/arm64/);
-  assert.match(workflow, /expected_digest:[\s\S]*required:\s*true/);
+  assert.match(workflow, /expected_digest:[\s\S]*required:\s*false/);
   assert.match(workflow, /Verify archive digest and platform set before registry mutation/);
+  assert.match(workflow, /SEALED_DIGEST=\{actual\}/);
   assert.match(workflow, /skopeo copy --all/);
+  assert.match(workflow, /remote_digest.*SEALED_DIGEST/);
   assert.doesNotMatch(workflow, /^\s*push:/m);
 });

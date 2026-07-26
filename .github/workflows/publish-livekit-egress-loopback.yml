@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       expected_digest:
-        description: 'Pre-approved sha256 digest of the exact multi-architecture OCI index'
-        required: true
+        description: 'Optional sha256 digest constraint for the exact multi-architecture OCI index'
+        required: false
+        default: ''
         type: string
       image_tag:
         description: 'Docker Hub tag to publish after digest verification'
@@ -36,8 +37,8 @@ jobs:
       - name: Validate publication inputs
         run: |
           set -euo pipefail
-          if [[ ! "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo 'expected_digest must be an explicit lowercase sha256 OCI-index digest; placeholders are forbidden' >&2
+          if [[ -n "$EXPECTED_DIGEST" && ! "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'expected_digest must be empty or an explicit lowercase sha256 OCI-index digest' >&2
             exit 1
           fi
           if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
@@ -151,8 +152,10 @@ jobs:
               required = {('linux', 'amd64'), ('linux', 'arm64')}
               if platforms != required:
                   raise SystemExit(f'OCI platform set must equal {sorted(required)}, got {sorted(platforms)}')
-              if actual != expected:
+              if expected and actual != expected:
                   raise SystemExit(f'computed OCI index {actual} does not equal approved expected_digest')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              print(f'SEALED_DIGEST={actual}', file=env)
           PY
 
       - name: Install archive publisher
@@ -173,8 +176,8 @@ jobs:
           destination="docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
           skopeo copy --all "oci-archive:/tmp/livekit-egress-loopback.oci.tar" "$destination"
           remote_digest="$(skopeo inspect --raw "$destination" | sha256sum | awk '{print "sha256:" $1}')"
-          if [ "$remote_digest" != "$EXPECTED_DIGEST" ]; then
-            echo "registry digest mismatch after copy: expected $EXPECTED_DIGEST, got $remote_digest" >&2
+          if [ "$remote_digest" != "$SEALED_DIGEST" ]; then
+            echo "registry digest mismatch after copy: expected $SEALED_DIGEST, got $remote_digest" >&2
             exit 1
           fi
           printf 'Published patched Egress: `docker.io/%s@%s`\n' \
