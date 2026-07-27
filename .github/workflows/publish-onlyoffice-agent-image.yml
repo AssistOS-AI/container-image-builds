@@ -51,10 +51,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Fix the reproducible build epoch
+        run: |
+          set -euo pipefail
+          source_date_epoch="$(git log -1 --format=%ct -- images/onlyoffice-agent)"
+          if [[ ! "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'OnlyOffice image source commit has no valid reproducible-build epoch' >&2
+            exit 1
+          fi
+          printf 'SOURCE_DATE_EPOCH=%s\n' "$source_date_epoch" >> "$GITHUB_ENV"
+
       - name: Smoke build local architecture
         run: |
           set -euo pipefail
-          docker build -t "$IMAGE_NAME:smoke" images/onlyoffice-agent
+          docker build \
+            --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
+            -t "$IMAGE_NAME:smoke" \
+            images/onlyoffice-agent
           docker run --rm --entrypoint /bin/bash "$IMAGE_NAME:smoke" -lc '
             set -eu
             node --version
@@ -70,8 +83,9 @@ jobs:
           set -euo pipefail
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
+            --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
             --provenance=false \
-            --output type=oci,dest=/tmp/onlyoffice-agent.oci.tar \
+            --output type=oci,dest=/tmp/onlyoffice-agent.oci.tar,rewrite-timestamp=true \
             images/onlyoffice-agent
 
       - name: Verify archive digest and platform set before registry mutation
