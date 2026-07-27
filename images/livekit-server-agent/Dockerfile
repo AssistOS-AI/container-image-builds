@@ -43,10 +43,14 @@ RUN set -eu; \
     sed -Ei \
         "s#https?://(archive|security|ports)\\.ubuntu\\.com/ubuntu(-ports)?/?#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
         /etc/apt/sources.list.d/ubuntu.sources; \
+    sed -Ei \
+        's/^Components: .*/Components: main universe/' \
+        /etc/apt/sources.list.d/ubuntu.sources; \
     printf '%s\n' \
         'Acquire::Check-Valid-Until "false";' \
         'Acquire::Retries "10";' \
         'Acquire::https::Timeout "60";' \
+        'APT::Update::Error-Mode "any";' \
         > /etc/apt/apt.conf.d/99snapshot-valid-until; \
     apt-get update; \
     apt-get install -y --no-install-recommends \

@@ -253,9 +253,11 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
     assert.match(workflow, /Smoke build local architecture/);
     assert.match(workflow, /docker build[\s\S]*sources\/webmeetInfra\/liveKitServerAgent/);
     assert.match(workflow, /for binary in livekit-server egress redis-server pulseaudio setpriv ps node npm git g\+\+ getent ip make curl nc tini/);
-    assert.match(dockerfile, /Acquire::Retries "10"/);
-    assert.match(dockerfile, /Acquire::https::Timeout "60"/);
-    assert.match(dockerfile, /command -v ps/);
+  assert.match(dockerfile, /Acquire::Retries "10"/);
+  assert.match(dockerfile, /Acquire::https::Timeout "60"/);
+  assert.match(dockerfile, /Components: main universe/);
+  assert.match(dockerfile, /APT::Update::Error-Mode "any"/);
+  assert.match(dockerfile, /command -v ps/);
     assert.match(workflow, /for retired in turnserver nginx certbot python3/);
     // Base images are pinned by manifest digest, not tag alone (webmeet
     // network-hardening trim: resolved via the Docker Hub registry v2 API,
