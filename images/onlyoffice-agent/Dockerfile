@@ -67,5 +67,6 @@ RUN set -eu; \
     chown root:root "$contract_file"; \
     chmod 0444 "$contract_file"; \
     test "$(wc -l < "$contract_file")" -eq 5; \
-    find /var/log -type f -exec truncate -s 0 {} +; \
+    find /var/log -type f -exec sh -c \
+      'for file do truncate -s 0 "$file" 2>/dev/null || true; done' sh {} +; \
     rm -f /var/cache/ldconfig/aux-cache /var/cache/debconf/*-old
