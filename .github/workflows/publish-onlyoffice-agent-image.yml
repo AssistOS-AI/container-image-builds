@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Checkout image definitions
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate publication inputs
         run: |

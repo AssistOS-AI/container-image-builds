@@ -60,6 +60,7 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
 
     assert.match(workflow, /images\/onlyoffice-agent/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/onlyoffice-agent/);
+    assert.match(workflow, /uses:\s*actions\/checkout@v4[\s\S]*?fetch-depth:\s*0/);
     assert.match(workflow, /docker\/login-action@v3/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /--platform linux\/amd64,linux\/arm64/);
