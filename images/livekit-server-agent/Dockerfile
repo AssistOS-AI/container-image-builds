@@ -80,6 +80,9 @@ RUN set -eu; \
     command -v node >/dev/null 2>&1 || (echo "node binary missing" >&2 && exit 1); \
     command -v npm >/dev/null 2>&1 || (echo "npm binary missing" >&2 && exit 1); \
     command -v redis-server >/dev/null 2>&1 || (echo "redis-server binary missing" >&2 && exit 1); \
+    command -v pulseaudio >/dev/null 2>&1 || (echo "pulseaudio binary missing" >&2 && exit 1); \
+    command -v setpriv >/dev/null 2>&1 || (echo "setpriv binary missing" >&2 && exit 1); \
+    test "$(id -u egress)" -gt 0 || (echo "unprivileged egress user missing" >&2 && exit 1); \
     contract=/usr/local/share/ploinky/livekit-egress-loopback.contract; \
     test -f "$contract" && test ! -L "$contract" || \
         (echo "patched Egress v5 contract marker missing" >&2 && exit 1); \

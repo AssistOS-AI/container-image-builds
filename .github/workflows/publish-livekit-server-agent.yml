@@ -86,9 +86,10 @@ jobs:
             sources/webmeetInfra/liveKitServerAgent
           docker run --rm --entrypoint sh "$IMAGE_NAME:smoke" -c '
             set -eu
-            for binary in livekit-server egress redis-server node npm git g++ getent ip make curl nc tini; do
+            for binary in livekit-server egress redis-server pulseaudio setpriv node npm git g++ getent ip make curl nc tini; do
               command -v "$binary" >/dev/null
             done
+            test "$(id -u egress)" -gt 0
             for retired in turnserver nginx certbot python3; do
               ! command -v "$retired" >/dev/null 2>&1
             done
