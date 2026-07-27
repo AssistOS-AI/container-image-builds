@@ -75,6 +75,8 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(dockerfile, /^FROM docker\.io\/onlyoffice\/documentserver:9\.3\.1@sha256:[0-9a-f]{64}$/m);
     assert.doesNotMatch(dockerfile, /^ARG (NODE_RUNTIME_IMAGE|ONLYOFFICE_BASE_IMAGE)=/m);
     assert.match(dockerfile, /snapshot\.ubuntu\.com\/ubuntu\/\$\{UBUNTU_SNAPSHOT\}/);
+    assert.match(dockerfile, /Acquire::Retries "10"/);
+    assert.match(dockerfile, /Acquire::https::Timeout "60"/);
     assert.match(dockerfile, /"g\+\+=\$\{GXX_VERSION\}"/);
     assert.match(dockerfile, /"git=\$\{GIT_VERSION\}"/);
     assert.match(dockerfile, /"python3=\$\{PYTHON_VERSION\}"/);
@@ -250,7 +252,7 @@ test('livekit workflow builds source checkout with centralized Dockerfile', () =
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /Smoke build local architecture/);
     assert.match(workflow, /docker build[\s\S]*sources\/webmeetInfra\/liveKitServerAgent/);
-    assert.match(workflow, /for binary in livekit-server egress redis-server node npm git g\+\+ getent ip make curl nc tini/);
+    assert.match(workflow, /for binary in livekit-server egress redis-server pulseaudio setpriv node npm git g\+\+ getent ip make curl nc tini/);
     assert.match(workflow, /for retired in turnserver nginx certbot python3/);
     // Base images are pinned by manifest digest, not tag alone (webmeet
     // network-hardening trim: resolved via the Docker Hub registry v2 API,

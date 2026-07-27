@@ -26,7 +26,10 @@ RUN set -eu; \
         echo 'OnlyOffice build has an unpinned external apt source.' >&2; \
         exit 1; \
     fi; \
-    printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
+    printf '%s\n' \
+        'Acquire::Check-Valid-Until "false";' \
+        'Acquire::Retries "10";' \
+        'Acquire::https::Timeout "60";' \
         > /etc/apt/apt.conf.d/99snapshot-valid-until; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
