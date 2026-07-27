@@ -69,4 +69,5 @@ RUN set -eu; \
     test "$(wc -l < "$contract_file")" -eq 5; \
     find /var/log -type f -exec sh -c \
       'for file do truncate -s 0 "$file" 2>/dev/null || true; done' sh {} +; \
-    rm -f /var/cache/ldconfig/aux-cache /var/cache/debconf/*-old
+    rm -f /var/cache/ldconfig/aux-cache /var/cache/debconf/*-old; \
+    rm -rf /tmp/node-compile-cache

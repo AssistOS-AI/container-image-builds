@@ -92,6 +92,7 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(dockerfile, /chmod 0444/);
     assert.match(dockerfile, /find \/var\/log -type f -exec sh -c/);
     assert.match(dockerfile, /\/var\/cache\/ldconfig\/aux-cache/);
+    assert.match(dockerfile, /rm -rf \/tmp\/node-compile-cache/);
     assert.match(dockerfile, /truncate -s 0 "\$file" 2>\/dev\/null \|\| true/);
     assert.match(bindInterposer, /sin_port == htons\(8000\)/);
     assert.match(bindInterposer, /INADDR_ANY/);
