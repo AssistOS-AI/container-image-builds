@@ -487,12 +487,6 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
                 sharedSecret: 'smoke/turn-rest',
                 credentialConsumers: ['AchillesIDE/webmeetAgent'],
             },
-            security: {
-                hostNetworkAllowedInstances: ['webmeetInfra/liveKitServerAgent'],
-                privateRouteConsumers: {
-                    '/base-agent-additional-server/liveKitServerAgent/7880/twirp/livekit.RoomService/*': ['AchillesIDE/webmeetAgent'],
-                },
-            },
         },
     );
     assert.match(read('.gitignore'), /^sources\/$/m);

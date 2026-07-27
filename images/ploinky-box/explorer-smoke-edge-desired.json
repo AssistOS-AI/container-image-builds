@@ -14,15 +14,5 @@
     "credentialConsumers": [
       "AchillesIDE/webmeetAgent"
     ]
-  },
-  "security": {
-    "hostNetworkAllowedInstances": [
-      "webmeetInfra/liveKitServerAgent"
-    ],
-    "privateRouteConsumers": {
-      "/base-agent-additional-server/liveKitServerAgent/7880/twirp/livekit.RoomService/*": [
-        "AchillesIDE/webmeetAgent"
-      ]
-    }
   }
 }
