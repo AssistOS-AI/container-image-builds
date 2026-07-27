@@ -43,7 +43,10 @@ RUN set -eu; \
     sed -Ei \
         "s#https?://(archive|security|ports)\\.ubuntu\\.com/ubuntu(-ports)?/?#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
         /etc/apt/sources.list.d/ubuntu.sources; \
-    printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
+    printf '%s\n' \
+        'Acquire::Check-Valid-Until "false";' \
+        'Acquire::Retries "10";' \
+        'Acquire::https::Timeout "60";' \
         > /etc/apt/apt.conf.d/99snapshot-valid-until; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -79,6 +82,7 @@ RUN set -eu; \
     command -v nc >/dev/null 2>&1 || (echo "nc binary missing" >&2 && exit 1); \
     command -v node >/dev/null 2>&1 || (echo "node binary missing" >&2 && exit 1); \
     command -v npm >/dev/null 2>&1 || (echo "npm binary missing" >&2 && exit 1); \
+    command -v ps >/dev/null 2>&1 || (echo "ps binary missing" >&2 && exit 1); \
     command -v redis-server >/dev/null 2>&1 || (echo "redis-server binary missing" >&2 && exit 1); \
     command -v pulseaudio >/dev/null 2>&1 || (echo "pulseaudio binary missing" >&2 && exit 1); \
     command -v setpriv >/dev/null 2>&1 || (echo "setpriv binary missing" >&2 && exit 1); \
