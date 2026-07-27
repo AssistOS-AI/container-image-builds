@@ -1,5 +1,4 @@
 {
-  "schemaVersion": 1,
   "hosts": {},
   "media": {
     "publicIPv4": "8.8.8.8",
@@ -20,8 +19,8 @@
     "hostNetworkAllowedInstances": [
       "webmeetInfra/liveKitServerAgent"
     ],
-    "internalServiceConsumers": {
-      "webmeetInfra/liveKitServerAgent/livekit-api": [
+    "privateRouteConsumers": {
+      "/base-agent-additional-server/liveKitServerAgent/7880/twirp/livekit.RoomService/*": [
         "AchillesIDE/webmeetAgent"
       ]
     }

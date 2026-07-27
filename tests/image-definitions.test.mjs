@@ -473,7 +473,6 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     assert.deepEqual(
         JSON.parse(read('images/ploinky-box/explorer-smoke-edge-desired.json')),
         {
-            schemaVersion: 1,
             hosts: {},
             media: {
                 publicIPv4: '8.8.8.8',
@@ -490,8 +489,8 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
             },
             security: {
                 hostNetworkAllowedInstances: ['webmeetInfra/liveKitServerAgent'],
-                internalServiceConsumers: {
-                    'webmeetInfra/liveKitServerAgent/livekit-api': ['AchillesIDE/webmeetAgent'],
+                privateRouteConsumers: {
+                    '/base-agent-additional-server/liveKitServerAgent/7880/twirp/livekit.RoomService/*': ['AchillesIDE/webmeetAgent'],
                 },
             },
         },
