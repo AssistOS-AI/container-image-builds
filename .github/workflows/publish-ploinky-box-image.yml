@@ -215,7 +215,7 @@ jobs:
           test "${#tests[@]}" -gt 0
           node --test "${tests[@]}"
 
-      - name: Run contract-6 entrypoint and Box unit suites
+      - name: Run canonical Box entrypoint and unit suites
         working-directory: sources/ploinky
         run: |
           set -euo pipefail
@@ -265,7 +265,7 @@ jobs:
           podman pull "docker.io/${IMAGE_NAME}@${DIGEST}"
           podman pull docker.io/library/busybox:1.36
 
-      - name: Inspect exact contract-6 metadata and native platform
+      - name: Inspect exact Box metadata and native platform
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}
         run: |
@@ -274,10 +274,11 @@ jobs:
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
+          import { BOX_MARKER_CONTENT } from './sources/ploinky/ploinky-box/constants.mjs';
           const image = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/ploinky-box-image.json'))[0];
           const config = image.Config || {};
-          const labels = config.Labels || {};
-          assert.equal(labels['io.assistos.ploinky.runtime-contract'], '6');
+          assert.equal(BOX_MARKER_CONTENT, 'assistos/ploinky-box\n');
+          assert.deepEqual(config.Labels || {}, {});
           assert.deepEqual(config.Entrypoint, ['/usr/local/bin/ploinky-box-entrypoint']);
           assert.equal(config.Cmd ?? null, null);
           assert.equal(config.Volumes ?? null, null);
@@ -295,7 +296,7 @@ jobs:
           NODE
           podman run --rm --entrypoint /bin/bash "$PLOINKY_BOX_CANDIDATE_REF" -lc '
             set -euo pipefail
-            test "$(cat /etc/ploinky-box)" = 6
+            printf "assistos/ploinky-box\n" | cmp - /etc/ploinky-box
             test "$(stat -c %U:%G /workspace)" = podman:podman
             test "$(stat -c %U:%G /opt/ploinky/node_modules)" = podman:podman
             test "$(stat -c %U:%G /home/podman/.local/share/containers/storage)" = podman:podman
@@ -311,15 +312,15 @@ jobs:
           PLOINKY_EXPLORER_SOURCE: ${{ github.workspace }}/sources/full-workspace/AssistOSExplorer
         run: |
           set -euo pipefail
-          export PLOINKY_TEST_CONTRACT_FILE="$RUNNER_TEMP/ploinky-box-host-contract"
-          printf '6\n' > "$PLOINKY_TEST_CONTRACT_FILE"
+          export PLOINKY_TEST_MARKER_FILE="$RUNNER_TEMP/ploinky-box-host-marker"
+          printf 'assistos/ploinky-box\n' > "$PLOINKY_TEST_MARKER_FILE"
           node --input-type=module <<'NODE'
           import path from 'node:path';
           import { installPinnedDependencies } from './ploinky-box/entrypoint/install-dependencies.mjs';
 
           const result = installPinnedDependencies({
             targetRoot: path.resolve('node_modules'),
-            contractPath: process.env.PLOINKY_TEST_CONTRACT_FILE,
+            markerPath: process.env.PLOINKY_TEST_MARKER_FILE,
           });
           if (!result.changed) throw new Error('clean checkout unexpectedly reused host test dependencies');
           NODE

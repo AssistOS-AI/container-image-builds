@@ -349,7 +349,7 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     assert.match(dockerfile, /COPY startup\.sh install\.sh cli\.sh \/\opt\/soul-gateway\//);
 });
 
-test('ploinky-box image is a source-owned contract-6 rootless Podman appliance', () => {
+test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
     const instructions = dockerfileInstructions(dockerfile);
     const fromInstructions = instructions.filter(({ keyword }) => keyword === 'FROM');
@@ -373,8 +373,9 @@ test('ploinky-box image is a source-owned contract-6 rootless Podman appliance',
     assert.match(dockerfile, /sha256sum --check --strict/);
     assert.match(dockerfile, /cloudflared tunnel run --help/);
     assert.match(dockerfile, /--token-file/);
-    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.runtime-contract="6"$/m);
-    assert.match(dockerfile, /printf '6\\n' > \/etc\/ploinky-box/);
+    assert.doesNotMatch(dockerfile, /^LABEL\s/m);
+    assert.doesNotMatch(dockerfile, /io\.assistos\.ploinky\.runtime-contract/);
+    assert.match(dockerfile, /printf 'assistos\/ploinky-box\\n' > \/etc\/ploinky-box/);
     for (const ownedTarget of [
         '/opt/ploinky/node_modules',
         '/workspace',
@@ -419,7 +420,7 @@ test('ploinky-box image is a source-owned contract-6 rootless Podman appliance',
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 });
 
-test('ploinky-box workflow gates native contract-6 digests before runtime promotion', () => {
+test('ploinky-box workflow gates native immutable digests before runtime promotion', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
@@ -494,7 +495,7 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     assert.match(buildJob, /find tests -maxdepth 1[\s\S]*?\.test\.js[\s\S]*?\.test\.mjs[\s\S]*?\.test\.cjs/);
     assert.match(buildJob, /find tests\/unit -maxdepth 1[\s\S]*?ploinkyBox\*\.test\.js[\s\S]*?ploinkyBox\*\.test\.mjs[\s\S]*?ploinkyBox\*\.test\.cjs/);
 
-    const sourceGate = buildJob.indexOf('Run contract-6 entrypoint and Box unit suites');
+    const sourceGate = buildJob.indexOf('Run canonical Box entrypoint and unit suites');
     const candidateBuild = buildJob.indexOf('Build and push candidate by digest');
     const nativeGate = buildJob.indexOf('Run native Box integration, pinned-graph smoke, and installed CLI E2E');
     const hostDependencyGate = buildJob.indexOf('Prepare immutable host test dependencies and sibling graph');
@@ -505,7 +506,10 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     assert.ok(candidateBuild < hostDependencyGate && hostDependencyGate < localCoreGate);
     assert.ok(candidateBuild < nativeGate && nativeGate < exportGate && exportGate < uploadGate);
     assert.match(buildJob, /installPinnedDependencies/);
-    assert.match(buildJob, /ploinky-box-host-contract/);
+    assert.match(buildJob, /ploinky-box-host-marker/);
+    assert.match(buildJob, /markerPath: process\.env\.PLOINKY_TEST_MARKER_FILE/);
+    assert.match(buildJob, /assert\.deepEqual\(config\.Labels \|\| \{\}, \{\}\)/);
+    assert.match(buildJob, /printf "assistos\/ploinky-box\\n" \| cmp - \/etc\/ploinky-box/);
     assert.match(
         buildJob,
         /test ! -e \/home\/podman\/\.config\/containers\/containers\.conf/,
@@ -559,16 +563,16 @@ test('ploinky-box workflow gates native contract-6 digests before runtime promot
     }
 });
 
-test('runtime channel documentation separates replacement from hard-cut recovery', () => {
+test('runtime channel documentation separates creation from hard-cut recovery', () => {
     const readme = read('README.md');
 
-    assert.match(readme, /consults the channel only when creating[\s\S]*?current-contract replacement/);
-    assert.match(readme, /configuration drift is rejected before mutation/);
-    assert.match(readme, /explicit[\s\S]*?destroy followed by recreate/);
+    assert.match(readme, /consults the channel only when creating[\s\S]*?validated replacement/);
+    assert.match(readme, /Image or configuration\s+drift is rejected before mutation/);
+    assert.match(readme, /explicit[\s\S]*?destroy followed by\s+recreate/);
     assert.match(readme, /release channel[\s\S]*?separately authorized registry release[\s\S]*?action/);
-    assert.match(readme, /never a supervisor transaction/);
-    assert.match(readme, /Reuse, status, stop, and destroy do not pull the channel/);
-    assert.doesNotMatch(readme, /runtime contract 5|runtime-contract=5/);
+    assert.match(readme, /never a supervisor\s+transaction/);
+    assert.match(readme, /Reuse,\s+status, stop, and destroy do not pull the channel/);
+    assert.doesNotMatch(readme, /runtime contract|runtime-contract|contract-[0-9]+/i);
 });
 
 test('ploinky-node does not install a container engine or client', () => {

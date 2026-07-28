@@ -17,11 +17,11 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:runtime` | this repo plus one immutable `AssistOS-AI/ploinky` source commit | repo root; rootless nested-Podman runtime contract `6` with the canonical Ploinky entrypoint and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:runtime` | this repo plus one immutable `AssistOS-AI/ploinky` source commit | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
-out Ploinky at an exact commit, copies only its canonical contract-6 entrypoint
+out Ploinky at an exact commit, copies only its canonical Box entrypoint
 into the image, and mounts that same source read-only for candidate verification.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
@@ -60,10 +60,10 @@ platform manifests exist, and reports the resulting immutable image digest.
 Publishing does not update the consumer manifest; pinning that new output is a
 separate reviewed operation.
 
-## Ploinky box runtime contract
+## Ploinky Box runtime
 
 `docker.io/assistos/ploinky-box:runtime` is the mutable release channel for
-runtime contract 6. The outer appliance supports native rootless Podman only;
+the outer appliance. It supports native rootless Podman only;
 it requires `/dev/fuse`, `/dev/net/tun`, the explicit unmask security option,
 and no engine socket, privilege, added capabilities, or unconfined seccomp
 profile. The image contains Podman, fuse-overlayfs, Node 24, npm/npx, Bash, Git,
@@ -87,11 +87,12 @@ default embedded in the image; real boxes require operator-owned addresses,
 TURN endpoints, secrets, and ACLs.
 
 The final image is reconstructed from a prepared Podman filesystem through a
-clean `FROM scratch` stage. Its metadata contract is exact:
+clean `FROM scratch` stage. Its metadata is exact:
 
 | Field | Value |
 | --- | --- |
-| Contract label | `io.assistos.ploinky.runtime-contract=6` |
+| Image labels | None |
+| Marker | `/etc/ploinky-box` contains exactly `assistos/ploinky-box` followed by one newline |
 | User | `podman` |
 | Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
 | `PATH` | `/opt/ploinky/bin:/usr/local/bin:/usr/bin` |
@@ -126,11 +127,12 @@ health probes use the external authority while the in-box Router remains on
 runtime-owned file is present in the immutable image, including any
 `containers.conf` inherited from the pinned Podman base.
 
-Contract changes are a hard cut. Stop and explicitly destroy an older Box before
-recreation; foreign exact-name containers or volumes are rejected and never
-adopted. The entrypoint also rejects retained managed nested containers without
-deleting or importing them. Inspect retained named volumes before any manual
-recovery, and do not remove them as part of the normal destroy path.
+Runtime-definition changes are a hard cut. Stop and explicitly destroy an
+incompatible Box before recreation; foreign exact-name containers or volumes
+are rejected and never adopted. The entrypoint also rejects retained managed
+nested containers without deleting or importing them. Inspect retained named
+volumes before any manual recovery, and do not remove them as part of the normal
+destroy path.
 
 ## Ploinky box publication
 
@@ -250,12 +252,12 @@ image fail before opening its listener; no mutable-tag fallback is permitted.
 
 `runtime` is intentionally mutable, but an already-created Ploinky Box stays on
 its inspected image ID. The supervisor consults the channel only when creating
-a missing Box or performing a validated current-contract replacement. Contract
-or configuration drift is rejected before mutation and requires an explicit
-destroy followed by recreate. Moving the release channel to a different
-verified contract-6 manifest digest is a separately authorized registry release
-action, never a supervisor transaction; the channel must not point to an older
-contract. Reuse, status, stop, and destroy do not pull the channel.
+a missing Box or performing a validated replacement. Image or configuration
+drift is rejected before mutation and requires an explicit destroy followed by
+recreate. Moving the release channel to a different verified manifest digest is
+a separately authorized registry release action, never a supervisor
+transaction; the channel must not point to an incompatible image. Reuse,
+status, stop, and destroy do not pull the channel.
 
 `publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`, and
 `publish-onlyoffice-agent-image.yml` also run on pushes to their image

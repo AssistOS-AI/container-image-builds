@@ -72,11 +72,15 @@ jobs:
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Verify source and contract
+      - name: Verify source and canonical Box marker
         run: |
           set -euo pipefail
           test "$(git -C sources/ploinky rev-parse HEAD)" = "$PLOINKY_SOURCE_SHA"
-          test "$(node --input-type=module -e 'import { BOX_RUNTIME_CONTRACT } from "./sources/ploinky/ploinky-box/constants.mjs"; process.stdout.write(BOX_RUNTIME_CONTRACT)')" = 6
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { BOX_MARKER_CONTENT } from './sources/ploinky/ploinky-box/constants.mjs';
+          assert.equal(BOX_MARKER_CONTENT, 'assistos/ploinky-box\n');
+          NODE
 
       - name: Require native rootless Podman
         run: |
@@ -89,6 +93,16 @@ jobs:
           podman unshare true
           podman pull "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}"
           test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}")" = '${{ matrix.platform }}'
+          podman image inspect "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}" > /tmp/ploinky-box-image.json
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const [image] = JSON.parse(fs.readFileSync('/tmp/ploinky-box-image.json'));
+          assert.deepEqual(image.Config?.Labels || {}, {});
+          NODE
+          podman run --rm --entrypoint /bin/bash \
+            "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}" \
+            -lc 'printf "assistos/ploinky-box\n" | cmp - /etc/ploinky-box'
 
       - name: Reproduce one nested private-listener request
         env:

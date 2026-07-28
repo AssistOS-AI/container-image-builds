@@ -29,10 +29,10 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && cloudflared --version | grep -E '^cloudflared version 2026\.7\.1([[:space:]]|$)' \
     && cloudflared tunnel run --help 2>&1 | grep -F -- '--token-file'
 
-# The pinned Podman base currently ships a user containers.conf. Contract 6
-# creates that file together with box-transport.json after discovering the
-# outer gateway, so the immutable image must not contain either half of that
-# runtime-owned pair.
+# The pinned Podman base currently ships a user containers.conf. The Box
+# entrypoint creates that file together with box-transport.json after
+# discovering the outer gateway, so the immutable image must not contain
+# either half of that runtime-owned pair.
 RUN rm -f /home/podman/.config/containers/containers.conf \
     && mkdir -p \
         /opt/ploinky/node_modules \
@@ -47,7 +47,7 @@ RUN rm -f /home/podman/.config/containers/containers.conf \
         /home/podman/.config \
         /home/podman/.local/share/containers \
     && chmod 0700 /run/ploinky /home/podman/.config /home/podman/.config/containers \
-    && printf '6\n' > /etc/ploinky-box
+    && printf 'assistos/ploinky-box\n' > /etc/ploinky-box
 
 # The split ranges deliberately skip the podman user's own UID/GID while
 # supplying 65,534 subordinate IDs. Inner root plus IDs through 65,534 then
@@ -66,8 +66,6 @@ COPY --from=prepared-rootfs / /
 # The native publication gates also verify the setuid-root fallback so either
 # supported privilege mechanism remains explicit and testable.
 RUN rpm --setcaps shadow-utils
-
-LABEL io.assistos.ploinky.runtime-contract="6"
 
 ENV PATH=/opt/ploinky/bin:/usr/local/bin:/usr/bin \
     USER=podman \
