@@ -420,7 +420,7 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 });
 
-test('ploinky-box workflow gates native immutable digests before runtime promotion', () => {
+test('ploinky-box workflow publishes two native immutable digests without behavioral gates', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
@@ -431,116 +431,41 @@ test('ploinky-box workflow gates native immutable digests before runtime promoti
     assert.ok(buildJob);
     assert.ok(mergeJob);
     assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
-    for (const input of [
-        'source_ref',
-        'explorer_ref',
-        'webmeet_infra_ref',
-        'umami_ref',
-        'achilles_cli_ref',
-        'proxies_ref',
-        'basic_ref',
-    ]) {
-        assert.match(workflow, new RegExp(input + ':[\\s\\S]*?required:\\s*true'));
-    }
+    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
+    assert.doesNotMatch(
+        workflow,
+        /explorer_ref|webmeet_infra_ref|umami_ref|achilles_cli_ref|proxies_ref|basic_ref/,
+    );
     assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
     assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
     assert.match(buildJob, /platform:\s*linux\/amd64/);
     assert.match(buildJob, /platform:\s*linux\/arm64/);
     assert.doesNotMatch(buildJob, /setup-qemu-action|--privileged|seccomp=unconfined/);
-    assert.match(buildJob, /SMOKE_GRAPH_ARGS_JSON/);
-    assert.match(buildJob, /SMOKE_GRAPH_REPOSITORIES_JSON/);
-    assert.match(buildJob, /SMOKE_GRAPH_REVISIONS_JSON/);
-    assert.match(buildJob, /SMOKE_GRAPH_EDGE_DESIRED_FILE/);
-    assert.match(buildJob, /images\/ploinky-box\/explorer-smoke-edge-desired\.json/);
-    assert.match(buildJob, /\['start', 'AchillesIDE\/explorer', '19090'\]/);
-    assert.doesNotMatch(buildJob, /\['start', 'AssistOSExplorer\/explorer', '19090'\]/);
-    for (const repository of [
-        'AssistOSExplorer',
-        'webmeetInfra',
-        'UmamiAgent',
-        'AchillesCLI',
-        'proxies',
-        'basic',
-        'container-image-builds',
-    ]) {
-        assert.match(buildJob, new RegExp(repository));
-    }
     for (const repository of [
         'AssistOSExplorer', 'webmeetInfra', 'UmamiAgent', 'AchillesCLI', 'proxies', 'basic',
     ]) {
-        assert.match(buildJob, new RegExp(`sources/full-workspace/${repository}`));
+        assert.doesNotMatch(buildJob, new RegExp(repository));
     }
-    assert.doesNotMatch(buildJob, /path:\s*full-workspace\//);
-    assert.deepEqual(
-        JSON.parse(read('images/ploinky-box/explorer-smoke-edge-desired.json')),
-        {
-            hosts: {},
-            media: {
-                publicIPv4: '8.8.8.8',
-                addressMode: 'nat-forward',
-            },
-            turn: {
-                urls: [
-                    'turn:turn.example.test:3478?transport=udp',
-                    'turns:turn.example.test:5349?transport=tcp',
-                ],
-                credentialMode: 'turn-rest',
-                sharedSecret: 'smoke/turn-rest',
-                credentialConsumers: ['AchillesIDE/webmeetAgent'],
-            },
-        },
-    );
     assert.match(read('.gitignore'), /^sources\/$/m);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
-    assert.match(buildJob, /find tests -maxdepth 1[\s\S]*?\.test\.js[\s\S]*?\.test\.mjs[\s\S]*?\.test\.cjs/);
-    assert.match(buildJob, /find tests\/unit -maxdepth 1[\s\S]*?ploinkyBox\*\.test\.js[\s\S]*?ploinkyBox\*\.test\.mjs[\s\S]*?ploinkyBox\*\.test\.cjs/);
-
-    const sourceGate = buildJob.indexOf('Run canonical Box entrypoint and unit suites');
-    const candidateBuild = buildJob.indexOf('Build and push candidate by digest');
-    const nativeGate = buildJob.indexOf('Run native Box integration, pinned-graph smoke, and installed CLI E2E');
-    const hostDependencyGate = buildJob.indexOf('Prepare immutable host test dependencies and sibling graph');
-    const localCoreGate = buildJob.indexOf('Run current local-core parity through ploinky-local');
-    const exportGate = buildJob.indexOf('Export gated candidate digest and proxy trace');
-    const uploadGate = buildJob.indexOf('Upload gated candidate evidence');
-    assert.ok(sourceGate > 0 && sourceGate < candidateBuild);
-    assert.ok(candidateBuild < hostDependencyGate && hostDependencyGate < localCoreGate);
-    assert.ok(candidateBuild < nativeGate && nativeGate < exportGate && exportGate < uploadGate);
-    assert.match(buildJob, /installPinnedDependencies/);
-    assert.match(buildJob, /ploinky-box-host-marker/);
-    assert.match(buildJob, /markerPath: process\.env\.PLOINKY_TEST_MARKER_FILE/);
-    assert.match(buildJob, /assert\.deepEqual\(config\.Labels \|\| \{\}, \{\}\)/);
-    assert.match(buildJob, /printf "assistos\/ploinky-box\\n" \| cmp - \/etc\/ploinky-box/);
-    assert.match(
-        buildJob,
-        /test ! -e \/home\/podman\/\.config\/containers\/containers\.conf/,
-    );
-    assert.match(buildJob, /test ! -e \/run\/ploinky\/box-transport\.json/);
-    assert.match(buildJob, /ln -s "\$PLOINKY_EXPLORER_SOURCE" \.\.\/AssistOSExplorer/);
-    assert.match(buildJob, /realpath \.\.\/AssistOSExplorer/);
+    assert.match(buildJob, /Build and push architecture image by digest/);
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
-    assert.match(buildJob, /PLOINKY_BOX_CANDIDATE_DIGEST/);
-    assert.match(buildJob, /PLOINKY_BOX_REQUIRE_PODMAN:\s*'1'/);
-    assert.match(buildJob, /PLOINKY_BOX_REAL_PODMAN/);
-    assert.match(buildJob, /PLOINKY_BOX_PROXY_TRACE_ARTIFACT/);
-    assert.match(buildJob, /ploinkyBoxNative\.test\.mjs/);
-    assert.match(buildJob, /ploinkyBoxSmokeGraph\.test\.mjs/);
-    assert.match(buildJob, /ploinkyBox\/publicCli\.test\.mjs/);
-    assert.match(buildJob, /PLOINKY_RELAY_TEST_IMAGE/);
-    assert.match(buildJob, /# skipped 2/);
-    assert.match(buildJob, /generated profile can launch a basic macOS command/);
-    assert.match(buildJob, /generated profile denies writes to read-only code, cache, and staged lib/);
-    assert.match(buildJob, /# fail 0/);
-    assert.match(buildJob, /# todo 0/);
-    assert.match(buildJob, /# skipped 0/);
-    assert.match(buildJob, /ploinky-box-proxy-\$\{\{ matrix\.arch \}\}\.trace/);
+    assert.match(buildJob, /Record architecture digest evidence/);
+    assert.match(buildJob, /\^sha256:\[0-9a-f\]\{64\}\$/);
+    assert.match(buildJob, /ploinky-box-digest-\$\{\{ matrix\.arch \}\}/);
     assert.match(buildJob, /actions\/upload-artifact@[0-9a-f]{40}/);
+    assert.doesNotMatch(
+        workflow,
+        /\bnode --test\b|tests\/(?:unit|integration|e2e)\/|\bpodman\b|SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/,
+    );
+    assert.doesNotMatch(workflow, /\bgated?\b/i);
 
     assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build/);
     assert.match(mergeJob, /actions\/download-artifact@[0-9a-f]{40}/);
-    assert.match(mergeJob, /record\[0\] === 'rewrite'/);
-    assert.match(mergeJob, /docker\.io\/assistos\/ploinky-box@\$\{digest\}/);
-    assert.match(mergeJob, /record\[0\] === 'reject'/);
+    assert.match(mergeJob, /pattern:\s*ploinky-box-digest-\*/);
+    assert.match(mergeJob, /test "\$\{#digest_files\[@\]\}" -eq 2/);
     assert.match(mergeJob, /runtime-candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
     assert.match(mergeJob, /Prove the run-scoped staging tag is unused/);
     assert.match(mergeJob, /io\.assistos\.ploinky\.workflow-run/);
@@ -550,6 +475,7 @@ test('ploinky-box workflow gates native immutable digests before runtime promoti
     assert.match(mergeJob, /assert\.equal\(index\.manifests\.length, 2\)/);
     assert.match(mergeJob, /members\.get\('linux\/amd64'\)/);
     assert.match(mergeJob, /members\.get\('linux\/arm64'\)/);
+    assert.match(mergeJob, /Assemble and inspect the exact two-member manifest/);
     assert.match(mergeJob, /Move runtime by the exact inspected staging digest/);
     assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
     assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
@@ -557,6 +483,8 @@ test('ploinky-box workflow gates native immutable digests before runtime promoti
     const readOnly = mergeJob.indexOf('Read-only post-promotion digest confirmation');
     assert.ok(promote > 0 && promote < readOnly);
     assert.doesNotMatch(mergeJob.slice(promote), /node --test|podman run|docker run/);
+    assert.match(mergeJob, /Published immutable image:/);
+    assert.match(mergeJob, /GITHUB_STEP_SUMMARY/);
 
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, 'workflow action is not SHA-pinned: ' + use[0]);

@@ -22,7 +22,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 The `bwrap-runner` and `livekit-server-agent` workflows check out their source
 repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
 out Ploinky at an exact commit, copies only its canonical Box entrypoint
-into the image, and mounts that same source read-only for candidate verification.
+into the image, and publishes native architecture images by immutable digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
 current tip of `webmeetInfra/ploinky-proxy`. It builds and smoke-tests the local
@@ -76,15 +76,7 @@ The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
 The cloudflared source is likewise pinned, and the Dockerfile verifies the exact
 architecture-specific binary digest, version 2026.7.1, and `--token-file`
-support. Both amd64 and arm64 are built and tested on native runners.
-
-The pinned Explorer graph gate stages
-`images/ploinky-box/explorer-smoke-edge-desired.json` as the explicit operator
-configuration for its disposable workspace. That local-only fixture grants the
-one exact LiveKit host-network owner and supplies deterministic media, TURN,
-and private-service ACL inputs. It is release-test data, not a production
-default embedded in the image; real boxes require operator-owned addresses,
-TURN endpoints, secrets, and ACLs.
+support. Both amd64 and arm64 are built on native runners.
 
 The final image is reconstructed from a prepared Podman filesystem through a
 clean `FROM scratch` stage. Its metadata is exact:
@@ -136,37 +128,22 @@ destroy path.
 
 ## Ploinky box publication
 
-Manual dispatch requires seven exact 40-character revision inputs:
-`source_ref` for Ploinky plus `explorer_ref`, `webmeet_infra_ref`,
-`umami_ref`, `achilles_cli_ref`, `proxies_ref`, and `basic_ref`.
-The smoke graph stages exactly AssistOSExplorer, webmeetInfra, UmamiAgent,
-AchillesCLI, proxies, basic, and container-image-builds; the last repository is
-pinned to `GITHUB_SHA`. Ploinky is mounted separately at `/opt/ploinky` and
-is not an eighth graph repository. Every checkout must be canonical, clean, and
-at the supplied immutable SHA.
-The physical AssistOSExplorer checkout is staged under Ploinky's predefined
-logical repository name `AchillesIDE`, so the pinned smoke start targets
-`AchillesIDE/explorer`.
+Manual dispatch requires one exact 40-character Ploinky commit in `source_ref`.
+The workflow verifies that immutable source checkout and its own image-definition
+checkout are clean and at the requested revisions. It performs no behavioral,
+unit, integration, E2E, Podman, or sibling-repository test execution.
 
-Each native architecture job runs all top-level image tests across
-`.test.js`, `.test.mjs`, and `.test.cjs`; all Ploinky Box units; the local
-core parity suite through `ploinky-local`; native lifecycle integration; the
-pinned-graph smoke; and installed-package public CLI E2E. The lifecycle tests
-use one candidate digest. The public CLI test has no image override: a generated
-mode-0700 rootless-Podman proxy rewrites only the fixed logical runtime pull and
-read-only inspect calls to that candidate and records a NUL-safe trace. Candidate
-blobs are pushed by immutable digest only, and the gated digest and proxy trace
-are uploaded only after every functional gate passes.
-
-The merge job requires both architecture attestations and both proxy traces,
+Each native architecture job builds and pushes one image blob by immutable
+digest, validates the digest format, and uploads only that digest as publication
+evidence. The merge job requires exactly one amd64 digest and one arm64 digest,
 proves the run-scoped
 `runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused, and creates
-a staging manifest from the two exact gated digests. It annotates and inspects
-that manifest, requires exactly the gated amd64 and arm64 members, records its
+a staging manifest from those two exact digests. It annotates and inspects
+that manifest, requires exactly the supplied amd64 and arm64 members, records its
 immutable digest, and moves `runtime` by that exact staging digest. Only
 read-only digest confirmation follows promotion. The staging tag is retained as
-provenance, workflow concurrency prevents competing promotion, and publication
-remains a separately authorized operation.
+provenance, workflow concurrency prevents competing promotion, and functional
+validation remains separate from this publication-only workflow.
 
 ## Secrets
 
@@ -234,13 +211,7 @@ gh workflow run publish-soul-gateway-image.yml \
 
 gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref="$(git -C ../ploinky rev-parse HEAD)" \
-  -f explorer_ref="$(git -C ../AssistOSExplorer rev-parse HEAD)" \
-  -f webmeet_infra_ref="$(git -C ../webmeetInfra rev-parse HEAD)" \
-  -f umami_ref="$(git -C ../UmamiAgent rev-parse HEAD)" \
-  -f achilles_cli_ref="$(git -C ../AchillesCLI rev-parse HEAD)" \
-  -f proxies_ref="$(git -C ../proxies rev-parse HEAD)" \
-  -f basic_ref="$(git -C ../basic rev-parse HEAD)"
+  -f source_ref="$(git -C ../ploinky rev-parse HEAD)"
 ```
 
 WebTTY publication is a two-step hard cut. The workflow accepts only the
