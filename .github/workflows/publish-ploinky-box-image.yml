@@ -174,7 +174,6 @@ jobs:
             "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
             "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
           docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/staging-index.json"
-          docker buildx imagetools inspect "$STAGING_REF" > "$RUNNER_TEMP/staging-inspect.txt"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
@@ -188,7 +187,8 @@ jobs:
           assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
           assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
           NODE
-          staging_digest="$(sed -n 's/^Digest: //p' "$RUNNER_TEMP/staging-inspect.txt" | head -1)"
+          staging_hex="$(sha256sum "$RUNNER_TEMP/staging-index.json" | cut -d ' ' -f1)"
+          staging_digest="sha256:${staging_hex}"
           [[ "$staging_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "STAGING_DIGEST=$staging_digest" >> "$GITHUB_ENV"
 
@@ -203,8 +203,12 @@ jobs:
         id: confirm
         run: |
           set -euo pipefail
-          staging_digest="$(docker buildx imagetools inspect "$STAGING_REF" | sed -n 's/^Digest: //p' | head -1)"
-          runtime_digest="$(docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" | sed -n 's/^Digest: //p' | head -1)"
+          docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/confirmed-staging-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/confirmed-runtime-index.json"
+          staging_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-staging-index.json" | cut -d ' ' -f1)"
+          runtime_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-runtime-index.json" | cut -d ' ' -f1)"
+          [[ "$staging_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$staging_digest" = "$STAGING_DIGEST"
           test "$runtime_digest" = "$STAGING_DIGEST"
           docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${runtime_digest}" > /dev/null

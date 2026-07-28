@@ -476,6 +476,9 @@ test('ploinky-box workflow publishes two native immutable digests without behavi
     assert.match(mergeJob, /members\.get\('linux\/amd64'\)/);
     assert.match(mergeJob, /members\.get\('linux\/arm64'\)/);
     assert.match(mergeJob, /Assemble and inspect the exact two-member manifest/);
+    assert.match(mergeJob, /imagetools inspect --raw "\$STAGING_REF"/);
+    assert.match(mergeJob, /sha256sum "\$RUNNER_TEMP\/staging-index\.json"/);
+    assert.doesNotMatch(mergeJob, /sed -n 's\/\^Digest:/);
     assert.match(mergeJob, /Move runtime by the exact inspected staging digest/);
     assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
     assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
