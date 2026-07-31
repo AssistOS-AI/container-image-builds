@@ -15,3 +15,5 @@ RUN apt-get update \
         openssh-client \
         python3 \
     && rm -rf /var/lib/apt/lists/*
+
+USER 1000:1000

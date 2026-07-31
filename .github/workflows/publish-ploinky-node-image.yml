@@ -15,7 +15,7 @@ on:
         type: string
   push:
     branches:
-      - main
+      - ploinky-proxy
     paths:
       - 'images/ploinky-node/**'
       - '.github/workflows/publish-ploinky-node-image.yml'
