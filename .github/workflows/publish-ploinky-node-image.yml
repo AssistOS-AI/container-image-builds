@@ -63,7 +63,7 @@ jobs:
             --build-arg NODE_BASE='${{ steps.image.outputs.node_base }}' \
             -t "$IMAGE_NAME:smoke" \
             images/ploinky-node
-          docker run --rm "$IMAGE_NAME:smoke" sh -lc 'node --version && npm --version && git --version && python3 --version && make --version && g++ --version && ffmpeg -version | head -1'
+          docker run --rm "$IMAGE_NAME:smoke" sh -lc 'node --version && npm --version && git --version && python3 --version && make --version && g++ --version && bwrap --version && ffmpeg -version | head -1'
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

@@ -49,6 +49,7 @@ test('ploinky-node workflow builds the local image definition', () => {
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
     assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim$/m);
+    assert.match(dockerfile, /\bbubblewrap\b/);
     assert.match(dockerfile, /\bffmpeg\b/);
     assert.match(dockerfile, /\bpython3\b/);
     assert.match(dockerfile, /^USER 1000:1000$/m);
