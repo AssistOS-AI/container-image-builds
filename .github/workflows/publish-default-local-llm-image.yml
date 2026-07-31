@@ -70,7 +70,7 @@ jobs:
 
       - name: Smoke pushed digest
         run: |
-          docker run --rm "docker.io/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" sh -lc 'node --version && llama-server --version && test -f "$LLAMA_MODEL_PATH"'
+          docker run --rm "docker.io/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" sh -lc 'test "$(id -u):$(id -g)" = 1000:1000 && node --version && bwrap --version && llama-server --version && test -r "$LLAMA_MODEL_PATH"'
 
       - name: Export digest
         env:

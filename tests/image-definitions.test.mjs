@@ -185,6 +185,10 @@ test('default-local-llm workflow publishes the Qwen2.5 Coder image as multi-arch
     assert.match(dockerfile, /^ARG MODEL_FILE=Qwen2\.5-Coder-1\.5B-Instruct-Q4_K_M\.gguf$/m);
     assert.match(dockerfile, /GGML_NATIVE=OFF/);
     assert.match(dockerfile, /llama-server/);
+    assert.match(dockerfile, /^USER root$/m);
+    assert.match(dockerfile, /^USER 1000:1000$/m);
+    assert.match(workflow, /test "\$\(id -u\):\$\(id -g\)" = 1000:1000/);
+    assert.match(workflow, /bwrap --version/);
 });
 
 test('umami-agent workflow builds the all-in-one Umami stack', () => {

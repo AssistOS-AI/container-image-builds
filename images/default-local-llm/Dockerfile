@@ -10,6 +10,10 @@ ARG LLAMA_CPP_TAG=b6096
 
 ENV LLAMA_MODEL_PATH=/opt/models/${MODEL_FILE}
 
+# The Ploinky Node base runs as the attested numeric user. Elevate only while
+# constructing the immutable image, then restore that exact runtime identity.
+USER root
+
 # Build llama-server from a pinned tag, then strip build deps.
 # GGML_NATIVE=OFF is REQUIRED for this distributed image: the build runner's CPU is
 # not the deployment CPU, and a -mcpu=native build silently miscomputes (degenerate
@@ -32,5 +36,7 @@ RUN set -eux; \
     mkdir -p /opt/models; \
     curl -fL "https://huggingface.co/${MODEL_REPO}/resolve/${MODEL_REVISION}/${MODEL_FILE}" -o "/opt/models/${MODEL_FILE}"; \
     test -f "/opt/models/${MODEL_FILE}"
+
+USER 1000:1000
 
 CMD ["bash"]
