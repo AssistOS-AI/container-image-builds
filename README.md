@@ -19,8 +19,16 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:runtime` | this repo plus one immutable `AssistOS-AI/ploinky` source commit | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
-The `bwrap-runner` and `livekit-server-agent` workflows check out their source
-repositories under `sources/` as build inputs. The `ploinky-box` workflow checks
+The `bwrap-runner` workflow checks out exact full-SHA `basic`, `copilot-agents`,
+and `AchillesCLI` inputs under `sources/`; the latter two supply the Open
+Interpreter and GPTResearcher consumer gates. Those two SHAs are explicitly
+prepublication consumer-code inputs: they contain the ABI/disposition adapters
+while retaining the existing privileged declarations and mutable image
+references. The workflow neither requires nor creates the later digest-pin and
+privilege-removal commits, so publication remains the input to those consumer
+changes rather than depending on them. The `livekit-server-agent`
+workflow also checks out its source repository under `sources/`. The
+`ploinky-box` workflow checks
 out Ploinky at an exact commit, copies only its canonical Box entrypoint
 into the image, and publishes native architecture images by immutable digest.
 
@@ -59,6 +67,45 @@ publishes an amd64/arm64 index with provenance and an SBOM, verifies that both
 platform manifests exist, and reports the resulting immutable image digest.
 Publishing does not update the consumer manifest; pinning that new output is a
 separate reviewed operation.
+
+## Bubblewrap runner publication
+
+`publish-bwrap-runner.yml` accepts only exact 40-character commits for the
+runner source and both consumer-source gates. There is no branch/ref fallback.
+The consumer SHAs are evidence-only prepublication code selections, recorded as
+`prepublication-code-only`; they do not authorize or perform manifest pinning.
+Native `ubuntu-24.04` amd64 and `ubuntu-24.04-arm` jobs each build and push one
+architecture by digest without moving the stable tag. Each job requires
+rootless Podman and runs the digest with all capabilities dropped,
+`no-new-privileges`, no host namespace options, and no unconfined profile. It
+records the image's effective UID/GID, capability and namespace state, SUID
+inventory, Bubblewrap mode/file capabilities, platform, pinned base image,
+workflow/action identity, and every exact source commit.
+
+The native gate has no skip path. It executes both private- and empty-proc
+production policies, the canonical healthcheck, and a representative staged
+runner task with network disabled and filesystem write confinement. Separate
+consumer gates prepare Open Interpreter with installation-only network access,
+then require its networkless terminal
+`PLOINKY_OPEN_INTERPRETER_BOX_UNAVAILABLE` disposition, and perform a real
+GPTResearcher cold install in a networked container followed by import,
+UI/readiness, and lightweight task-adapter checks in a separate networkless
+container over the same persisted install. Installation egress is not
+task-time network authority.
+
+Only after both architecture jobs upload their digest and evidence artifacts
+does the assemble job create a run-scoped candidate index from exactly those
+two digests and verify exact `linux/amd64` and `linux/arm64` membership. The
+candidate digest is always reported. The `node24-python-bookworm` convenience
+tag moves only when dispatch explicitly sets `promote_stable=true`, and only
+after all prior gates; no behavioral check occurs after promotion. Consumer
+manifests must use the recorded `docker.io/assistos/bwrap-runner@sha256:...`
+identity, never the convenience tag. The compatibility runner intentionally
+retains privilege until this native proof exists and its later consumer update
+pins the approved digest. The workflow uploads both per-architecture proof
+directories and an assembled candidate evidence artifact containing the exact
+index, source identities, member digests, base image, workflow run, and
+multiarchitecture digest.
 
 ## Ploinky Box runtime
 
@@ -196,8 +243,10 @@ gh workflow run publish-umami-agent-image.yml \
 
 gh workflow run publish-bwrap-runner.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref=main \
-  -f image_tag=node24-python-bookworm
+  -f source_ref="$(git -C ../basic rev-parse HEAD)" \
+  -f copilot_agents_ref="$(git -C ../copilot-agents rev-parse HEAD)" \
+  -f achilles_cli_ref="$(git -C ../AchillesCLI rev-parse HEAD)" \
+  -f promote_stable=false
 
 gh workflow run publish-livekit-server-agent.yml \
   --repo AssistOS-AI/container-image-builds \

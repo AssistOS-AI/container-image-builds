@@ -222,23 +222,87 @@ test('umami-agent workflow builds the all-in-one Umami stack', () => {
     assert.doesNotMatch(dockerfile, /(?:postgresql-latest|curl[^\n]*\|\s*(?:ba)?sh|git clone --depth|refs\/heads\/|checkout (?:origin\/)?(?:main|master)\b)/);
 });
 
-test('bwrap-runner workflow builds source checkout with centralized Dockerfile', () => {
+test('bwrap-runner workflow publishes only digest-proven native candidates before optional promotion', () => {
     const workflow = read('.github/workflows/publish-bwrap-runner.yml');
     const dockerfile = read('images/bwrap-runner/Dockerfile');
+    const gptSmoke = read('scripts/smoke-gpt-researcher.sh');
 
+    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /copilot_agents_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /achilles_cli_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /prepublication consumer-code SHAs/);
+    assert.doesNotMatch(workflow, /source_ref:[\s\S]*?default:\s*['"]?main/);
+    assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
     assert.match(workflow, /repository:\s*AssistOS-AI\/basic/);
     assert.match(workflow, /path:\s*sources\/basic/);
-    assert.match(workflow, /git -C sources\/basic rev-parse --short=12 HEAD/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/copilot-agents/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/AchillesCLI/);
+    assert.match(workflow, /git -C sources\/basic rev-parse HEAD/);
+    assert.match(workflow, /git -C sources\/copilot-agents rev-parse HEAD/);
+    assert.match(workflow, /git -C sources\/AchillesCLI rev-parse HEAD/);
+    assert.match(workflow, /git status --porcelain=v1/);
     assert.match(workflow, /context:\s*\.\/sources\/basic\/bwrap-runner/);
     assert.match(workflow, /file:\s*\.\/images\/bwrap-runner\/Dockerfile/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/bwrap-runner/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /platform:\s*linux\/amd64/);
+    assert.match(workflow, /platform:\s*linux\/arm64/);
+    assert.doesNotMatch(workflow, /setup-qemu-action/);
+    assert.match(workflow, /push-by-digest=true/);
+    assert.match(workflow, /name-canonical=true/);
+    assert.match(workflow, /\^sha256:\[0-9a-f\]\{64\}\$/);
+    assert.match(workflow, /podman info --format '\{\{\.Host\.Security\.Rootless\}\}'/);
+    assert.match(workflow, /--cap-drop=all/);
+    assert.match(workflow, /--security-opt=no-new-privileges/);
+    assert.match(workflow, /for field in CapInh CapPrm CapEff CapBnd CapAmb/);
+    assert.doesNotMatch(workflow, /--privileged|--cap-add|seccomp=unconfined|apparmor=unconfined/);
+    assert.match(workflow, /bwrapRunnerNative\.mjs/);
+    assert.match(workflow, /Run canonical health and representative task by digest/);
+    assert.match(workflow, /Prepare Open Interpreter and prove deterministic disposition/);
+    assert.match(workflow, /PLOINKY_OPEN_INTERPRETER_BOX_UNAVAILABLE/);
+    assert.match(workflow, /Run GPTResearcher cold-install, readiness, and task smoke/);
+    const gptStep = workflow.match(
+        /- name: Run GPTResearcher cold-install, readiness, and task smoke[\s\S]*?(?=\n      - name:)/,
+    )?.[0] || '';
+    assert.ok(gptStep);
+    assert.ok(gptStep.indexOf('/smoke-gpt-researcher.sh install') < gptStep.indexOf('--network=none'));
+    assert.ok(gptStep.indexOf('--network=none') < gptStep.indexOf('/smoke-gpt-researcher.sh smoke'));
+    assert.match(workflow, /bwrap-runner-proof-\$\{\{ matrix\.arch \}\}/);
+    assert.match(workflow, /Assemble and inspect only the proven native digests/);
+    assert.match(workflow, /assert\.equal\(index\.manifests\.length, 2\)/);
+    assert.match(workflow, /members\.get\('linux\/amd64'\)/);
+    assert.match(workflow, /members\.get\('linux\/arm64'\)/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /Upload assembled candidate evidence/);
+    assert.match(workflow, /release-evidence\.json/);
+    assert.match(workflow, /candidateDigest: process\.env\.CANDIDATE_DIGEST/);
+    assert.match(workflow, /consumerCodeBoundary: 'prepublication-code-only'/);
+    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_stable == true \}\}/);
+    const assemble = workflow.indexOf('Assemble and inspect only the proven native digests');
+    const promote = workflow.indexOf('Move stable tag by exact proven candidate digest');
+    const confirm = workflow.indexOf('Read-only post-promotion digest confirmation');
+    assert.ok(assemble > 0 && assemble < promote && promote < confirm);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(dockerfile, /^FROM node:24\.15\.0-bookworm-slim$/m);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
+    }
+
+    const baseDigest = '4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d';
+    assert.match(dockerfile, new RegExp(`^FROM node:24\\.15\\.0-bookworm-slim@sha256:${baseDigest}$`, 'm'));
+    assert.match(workflow, new RegExp(`BASE_IMAGE: docker\\.io/library/node:24\\.15\\.0-bookworm-slim@sha256:${baseDigest}`));
+    assert.match(dockerfile, /\blibcap2-bin\b/);
     assert.match(dockerfile, /COPY\s+bin\/\s+\/opt\/bwrap-runner\/bin\//);
     assert.match(dockerfile, /COPY\s+lib\/\s+\/opt\/bwrap-runner\/lib\//);
     assert.match(dockerfile, /\/usr\/local\/bin\/bwrap-sandbox-exec/);
+
+    assert.match(gptSmoke, /install-gpt-researcher\.sh/);
+    assert.match(gptSmoke, /gpt-researcher-import-ok/);
+    assert.match(gptSmoke, /readiness\.sh/);
+    assert.match(gptSmoke, /gpt-researcher-task-adapter-ok/);
+    assert.match(gptSmoke, /start-research\.py <\/dev\/null/);
+    assert.match(gptSmoke, /"coldInstall":true/);
+    assert.match(gptSmoke, /"network":"none","readiness":true,"minimalTask":true/);
 });
 
 test('livekit workflow builds source checkout with centralized Dockerfile', () => {

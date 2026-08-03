@@ -4,15 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'AssistOS-AI/basic ref to build from'
-        required: false
-        default: 'main'
+        description: Exact 40-character AssistOS-AI/basic commit SHA
+        required: true
         type: string
-      image_tag:
-        description: 'Docker Hub tag to publish'
-        required: false
-        default: 'node24-python-bookworm'
+      copilot_agents_ref:
+        description: Exact prepublication AssistOS-AI/copilot-agents code SHA for Open Interpreter smoke
+        required: true
         type: string
+      achilles_cli_ref:
+        description: Exact prepublication AssistOS-AI/AchillesCLI code SHA for GPTResearcher smoke
+        required: true
+        type: string
+      promote_stable:
+        description: Move the stable convenience tag after every digest-addressed gate passes
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,56 +30,517 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/bwrap-runner
-  IMAGE_TAG: ${{ inputs.image_tag || 'node24-python-bookworm' }}
+  IMAGE_TAG: node24-python-bookworm
+  BASE_IMAGE: docker.io/library/node:24.15.0-bookworm-slim@sha256:4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d
 
 jobs:
-  publish:
-    name: Build and push Docker Hub image
-    runs-on: ubuntu-latest
+  resolve-source:
+    name: Resolve immutable inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.input.outputs.source_sha }}
+      copilot_agents_sha: ${{ steps.input.outputs.copilot_agents_sha }}
+      achilles_cli_sha: ${{ steps.input.outputs.achilles_cli_sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Require runner and prepublication consumer-code SHAs
+        id: input
+        env:
+          SOURCE_SHA: ${{ inputs.source_ref }}
+          COPILOT_AGENTS_SHA: ${{ inputs.copilot_agents_ref }}
+          ACHILLES_CLI_SHA: ${{ inputs.achilles_cli_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COPILOT_AGENTS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ACHILLES_CLI_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "copilot_agents_sha=$COPILOT_AGENTS_SHA" >> "$GITHUB_OUTPUT"
+          echo "achilles_cli_sha=$ACHILLES_CLI_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout basic source
-        uses: actions/checkout@v4
+  build:
+    name: Build and prove ${{ matrix.platform }}
+    needs: resolve-source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Checkout immutable basic source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: AssistOS-AI/basic
-          ref: ${{ inputs.source_ref || 'main' }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
           path: sources/basic
+          fetch-depth: 0
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Resolve source revision
-        id: source
-        run: echo "sha=$(git -C sources/basic rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Checkout immutable Open Interpreter consumer source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/copilot-agents
+          ref: ${{ needs.resolve-source.outputs.copilot_agents_sha }}
+          path: sources/copilot-agents
+          fetch-depth: 0
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Checkout immutable GPTResearcher consumer source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/AchillesCLI
+          ref: ${{ needs.resolve-source.outputs.achilles_cli_sha }}
+          path: sources/AchillesCLI
+          fetch-depth: 0
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Verify exact clean source and image-definition inputs
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          COPILOT_AGENTS_SHA: ${{ needs.resolve-source.outputs.copilot_agents_sha }}
+          ACHILLES_CLI_SHA: ${{ needs.resolve-source.outputs.achilles_cli_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(git -C sources/basic rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C sources/copilot-agents rev-parse HEAD)" = "$COPILOT_AGENTS_SHA"
+          test "$(git -C sources/AchillesCLI rev-parse HEAD)" = "$ACHILLES_CLI_SHA"
+          test -z "$(git -C sources/basic status --porcelain=v1)"
+          test -z "$(git -C sources/copilot-agents status --porcelain=v1)"
+          test -z "$(git -C sources/AchillesCLI status --porcelain=v1)"
+          test -f sources/basic/bwrap-runner/lib/capability.mjs
+          test -f sources/basic/tests/integration/bwrapRunnerNative.mjs
+          test -f sources/copilot-agents/openInterpreterAgent/tools/status.mjs
+          test -f sources/AchillesCLI/GPTResearcher/scripts/install-gpt-researcher.sh
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ env.IMAGE_TAG }}
-            type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.source.outputs.sha }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Build and push native architecture image by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./sources/basic/bwrap-runner
           file: ./images/bwrap-runner/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve-source.outputs.source_sha }}
+            org.opencontainers.image.source=https://github.com/AssistOS-AI/basic
+            io.assistos.bwrap-runner.runner-abi=2
+            io.assistos.bwrap-runner.workflow-sha=${{ github.sha }}
           provenance: false
+
+      - name: Require rootless Podman native smoke runtime
+        run: |
+          set -euo pipefail
+          command -v podman
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman version
+
+      - name: Pull and verify the exact architecture digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          podman pull "docker.io/${IMAGE_NAME}@${DIGEST}"
+          image_digest="$(podman image inspect --format '{{.Digest}}' "docker.io/${IMAGE_NAME}@${DIGEST}")"
+          test "$image_digest" = "$DIGEST"
+
+      - name: Inspect unprivileged image security contract
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
+          mkdir -p "$evidence"
+          config_user="$(podman image inspect --format '{{.Config.User}}' "docker.io/${IMAGE_NAME}@${DIGEST}")"
+          test -z "$config_user"
+          podman image inspect "docker.io/${IMAGE_NAME}@${DIGEST}" > "$evidence/image-inspect.json"
+          podman run --rm \
+            --network=none \
+            --cap-drop=all \
+            --security-opt=no-new-privileges \
+            "docker.io/${IMAGE_NAME}@${DIGEST}" \
+            bash -euo pipefail -c '
+              test "$(id -u):$(id -g)" = 0:0
+              for field in CapInh CapPrm CapEff CapBnd CapAmb; do
+                test "$(sed -n "s/^${field}:[[:space:]]*//p" /proc/self/status)" = 0000000000000000
+              done
+              test "$(sed -n "s/^NoNewPrivs:[[:space:]]*//p" /proc/self/status)" = 1
+              mode="$(stat -c %a /usr/bin/bwrap)"
+              test "$((8#$mode & 06000))" -eq 0
+              test -z "$(getcap /usr/bin/bwrap)"
+              printf "uid=%s gid=%s bwrap_mode=%s bwrap_caps=none\n" "$(id -u)" "$(id -g)" "$mode"
+              grep -E "^(Cap(Inh|Prm|Eff|Bnd|Amb)|NoNewPrivs):" /proc/self/status
+              for ns in mnt pid user net ipc uts; do printf "%s=%s\n" "$ns" "$(readlink /proc/self/ns/$ns)"; done
+              find / -xdev -type f -perm /6000 -print 2>/dev/null | sort
+            ' | tee "$evidence/security.txt"
+
+      - name: Run non-skipping private and empty production-policy gates
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          podman run --rm \
+            --network=none \
+            --cap-drop=all \
+            --security-opt=no-new-privileges \
+            --volume "$PWD/sources/basic:/source:ro" \
+            "docker.io/${IMAGE_NAME}@${DIGEST}" \
+            node /source/tests/integration/bwrapRunnerNative.mjs \
+            | tee "$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}/native-policy.json"
+
+      - name: Run canonical health and representative task by digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
+          podman run --rm \
+            --network=none \
+            --cap-drop=all \
+            --security-opt=no-new-privileges \
+            "docker.io/${IMAGE_NAME}@${DIGEST}" \
+            node /opt/bwrap-runner/bin/healthcheck.mjs \
+            | tee "$evidence/health.json"
+          printf '%s' '{"command":"printf representative-task-ok > /outputs/result.txt && cat /outputs/result.txt","files":[{"path":"input.txt","content":"staged"}]}' \
+            | podman run --rm -i \
+                --network=none \
+                --cap-drop=all \
+                --security-opt=no-new-privileges \
+                "docker.io/${IMAGE_NAME}@${DIGEST}" \
+                /usr/local/bin/bwrap-sandbox-exec \
+            | tee "$evidence/task.json"
+          node --input-type=module - "$evidence/health.json" "$evidence/task.json" <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const health = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const task = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          assert.equal(health.ok, true);
+          assert.equal(health.code, 'BWRAP_RUNNER_READY');
+          assert.equal(health.runnerAbi, 2);
+          assert.match(health.capability.mode, /^(?:private|empty)$/);
+          assert.equal(task.ok, true);
+          assert.equal(task.runnerAbi, 2);
+          assert.equal(task.procMode, health.capability.mode);
+          assert.equal(task.procMinimum, 'private-or-empty');
+          assert.equal(task.network, 'none');
+          assert.equal(task.stdout.text, 'representative-task-ok');
+          NODE
+
+      - name: Prepare Open Interpreter and prove deterministic disposition
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
+          oi_data="$RUNNER_TEMP/open-interpreter-data-${{ matrix.arch }}"
+          mkdir -p "$oi_data"
+          printf '%s' '{}' \
+            | podman run --rm -i \
+                --cap-drop=all \
+                --security-opt=no-new-privileges \
+                --volume "$PWD/sources/copilot-agents/openInterpreterAgent:/code:ro" \
+                --volume "$oi_data:/data" \
+                --env OI_RUNTIME_ROOT=/data/research-runtimes \
+                --env OI_PREPARE_PYTHON=/usr/bin/python3 \
+                "docker.io/${IMAGE_NAME}@${DIGEST}" \
+                node /code/tools/prepare-runtime.mjs \
+            | tee "$evidence/open-interpreter-prepare.json"
+          printf '%s' '{}' \
+            | podman run --rm -i \
+                --network=none \
+                --cap-drop=all \
+                --security-opt=no-new-privileges \
+                --volume "$PWD/sources/copilot-agents/openInterpreterAgent:/code:ro" \
+                --volume "$oi_data:/data" \
+                --env OI_RUNTIME_ROOT=/data/research-runtimes \
+                --env PLOINKY_ROUTER_URL=http://127.0.0.1:8080 \
+                "docker.io/${IMAGE_NAME}@${DIGEST}" \
+                node /code/tools/status.mjs \
+            | tee "$evidence/open-interpreter-status.json"
+          node --input-type=module - "$evidence/open-interpreter-prepare.json" "$evidence/open-interpreter-status.json" <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const prepared = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const status = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          assert.equal(prepared.ok, true);
+          assert.equal(prepared.manifest.compatibility.runnerAbi, 2);
+          assert.equal(prepared.manifest.compatibility.procMinimum, 'private');
+          assert.equal(status.ok, true);
+          assert.equal(status.availability.available, false);
+          assert.equal(status.availability.terminal, true);
+          assert.equal(status.availability.status, 422);
+          assert.equal(status.availability.code, 'PLOINKY_OPEN_INTERPRETER_BOX_UNAVAILABLE');
+          assert.equal(status.sandbox.runnerAbi, 2);
+          assert.equal(status.sandbox.procMinimum, 'private');
+          NODE
+
+      - name: Run GPTResearcher cold-install, readiness, and task smoke
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
+          gpt_opt="$RUNNER_TEMP/gpt-researcher-opt-${{ matrix.arch }}"
+          gpt_state="$RUNNER_TEMP/gpt-researcher-state-${{ matrix.arch }}"
+          mkdir -p "$gpt_opt" "$gpt_state/home" "$gpt_state/workspace"
+
+          # Only the cold installer receives network authority. Its exact
+          # /opt and state outputs are then reused read-write by a distinct
+          # networkless container for import, adapter, UI, and readiness.
+          podman run --rm \
+            --cap-drop=all \
+            --security-opt=no-new-privileges \
+            --volume "$PWD/sources/AchillesCLI/GPTResearcher:/consumer:ro" \
+            --volume "$PWD/scripts/smoke-gpt-researcher.sh:/smoke-gpt-researcher.sh:ro" \
+            --volume "$gpt_opt:/opt" \
+            --volume "$gpt_state:/gpt-state" \
+            --env HOME=/gpt-state/home \
+            --env WORKSPACE_PATH=/gpt-state/workspace \
+            "docker.io/${IMAGE_NAME}@${DIGEST}" \
+            /smoke-gpt-researcher.sh install \
+            | tee "$evidence/gpt-researcher-install.json"
+          podman run --rm \
+            --network=none \
+            --cap-drop=all \
+            --security-opt=no-new-privileges \
+            --volume "$PWD/sources/AchillesCLI/GPTResearcher:/consumer:ro" \
+            --volume "$PWD/scripts/smoke-gpt-researcher.sh:/smoke-gpt-researcher.sh:ro" \
+            --volume "$gpt_opt:/opt" \
+            --volume "$gpt_state:/gpt-state" \
+            --env HOME=/gpt-state/home \
+            --env WORKSPACE_PATH=/gpt-state/workspace \
+            "docker.io/${IMAGE_NAME}@${DIGEST}" \
+            /smoke-gpt-researcher.sh smoke \
+            | tee "$evidence/gpt-researcher.json"
+
+      - name: Record architecture digest and source evidence
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          COPILOT_AGENTS_SHA: ${{ needs.resolve-source.outputs.copilot_agents_sha }}
+          ACHILLES_CLI_SHA: ${{ needs.resolve-source.outputs.achilles_cli_sha }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
+          node --input-type=module <<'NODE' > "$evidence/source-evidence.json"
+          const evidence = {
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            architecture: '${{ matrix.arch }}',
+            platform: '${{ matrix.platform }}',
+            basicSha: process.env.SOURCE_SHA,
+            copilotAgentsSha: process.env.COPILOT_AGENTS_SHA,
+            achillesCliSha: process.env.ACHILLES_CLI_SHA,
+            consumerCodeBoundary: 'prepublication-code-only',
+            imageDigest: process.env.DIGEST,
+            baseImage: process.env.BASE_IMAGE,
+            runnerAbi: 2,
+            actions: {
+              checkout: 'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5',
+              setupBuildx: 'docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f',
+              registryLogin: 'docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9',
+              buildPush: 'docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8',
+              uploadArtifact: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+            },
+          };
+          process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+
+      - name: Upload architecture proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bwrap-runner-proof-${{ matrix.arch }}
+          path: ${{ runner.temp }}/bwrap-runner-evidence-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble:
+    name: Assemble proven multiarchitecture candidate
+    needs:
+      - resolve-source
+      - build
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.candidate.outputs.digest }}
+    steps:
+      - name: Download native architecture proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: bwrap-runner-proof-*
+          path: /tmp/bwrap-runner-proofs
+
+      - name: Verify exactly two proven architecture digests
+        id: digests
+        run: |
+          set -euo pipefail
+          mapfile -t digest_files < <(find /tmp/bwrap-runner-proofs -mindepth 2 -maxdepth 2 -type f -name digest.txt | sort)
+          test "${#digest_files[@]}" -eq 2
+          amd64_digest="$(cat /tmp/bwrap-runner-proofs/bwrap-runner-proof-amd64/digest.txt)"
+          arm64_digest="$(cat /tmp/bwrap-runner-proofs/bwrap-runner-proof-arm64/digest.txt)"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$amd64_digest" != "$arm64_digest"
+          echo "amd64_digest=$amd64_digest" >> "$GITHUB_OUTPUT"
+          echo "arm64_digest=$arm64_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Prove the run-scoped staging tag is unused
+        run: |
+          set -euo pipefail
+          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing staging tag: $staging" >&2
+            exit 1
+          fi
+          echo "STAGING_REF=$staging" >> "$GITHUB_ENV"
+
+      - name: Assemble and inspect only the proven native digests
+        id: candidate
+        env:
+          AMD64_DIGEST: ${{ steps.digests.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.digests.outputs.arm64_digest }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          COPILOT_AGENTS_SHA: ${{ needs.resolve-source.outputs.copilot_agents_sha }}
+          ACHILLES_CLI_SHA: ${{ needs.resolve-source.outputs.achilles_cli_sha }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --annotation "index:io.assistos.bwrap-runner.workflow-run=${GITHUB_RUN_ID}" \
+            --annotation "index:io.assistos.bwrap-runner.source-sha=${SOURCE_SHA}" \
+            --annotation "index:io.assistos.bwrap-runner.copilot-agents-sha=${COPILOT_AGENTS_SHA}" \
+            --annotation "index:io.assistos.bwrap-runner.achilles-cli-sha=${ACHILLES_CLI_SHA}" \
+            --annotation "index:io.assistos.bwrap-runner.amd64-digest=${AMD64_DIGEST}" \
+            --annotation "index:io.assistos.bwrap-runner.arm64-digest=${ARM64_DIGEST}" \
+            --tag "$STAGING_REF" \
+            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
+            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+          docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/candidate-index.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const index = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/candidate-index.json'));
+          assert.equal(index.manifests.length, 2);
+          const members = new Map(index.manifests.map((entry) => [
+            `${entry.platform.os}/${entry.platform.architecture}`,
+            entry.digest,
+          ]));
+          assert.deepEqual([...members.keys()].sort(), ['linux/amd64', 'linux/arm64']);
+          assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
+          assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
+          NODE
+          candidate_digest="sha256:$(sha256sum "$RUNNER_TEMP/candidate-index.json" | cut -d ' ' -f1)"
+          [[ "$candidate_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${candidate_digest}" > /dev/null
+          mkdir -p "$RUNNER_TEMP/bwrap-runner-candidate-evidence"
+          cp "$RUNNER_TEMP/candidate-index.json" "$RUNNER_TEMP/bwrap-runner-candidate-evidence/candidate-index.json"
+          CANDIDATE_DIGEST="$candidate_digest" node --input-type=module <<'NODE' > "$RUNNER_TEMP/bwrap-runner-candidate-evidence/release-evidence.json"
+          const evidence = {
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            basicSha: process.env.SOURCE_SHA,
+            copilotAgentsSha: process.env.COPILOT_AGENTS_SHA,
+            achillesCliSha: process.env.ACHILLES_CLI_SHA,
+            baseImage: process.env.BASE_IMAGE,
+            candidateRef: process.env.STAGING_REF,
+            candidateDigest: process.env.CANDIDATE_DIGEST,
+            members: {
+              'linux/amd64': process.env.AMD64_DIGEST,
+              'linux/arm64': process.env.ARM64_DIGEST,
+            },
+            actions: {
+              downloadArtifact: 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+              setupBuildx: 'docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f',
+              registryLogin: 'docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9',
+              uploadArtifact: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+            },
+          };
+          process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          printf 'Proven candidate: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
+          printf 'basic source: `%s`\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'amd64: `%s`\narm64: `%s`\n' "$AMD64_DIGEST" "$ARM64_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload assembled candidate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bwrap-runner-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bwrap-runner-candidate-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  promote:
+    name: Promote proven candidate convenience tag
+    if: ${{ inputs.promote_stable == true }}
+    needs:
+      - resolve-source
+      - build
+      - assemble
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.confirm.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Move stable tag by exact proven candidate digest
+        env:
+          CANDIDATE_DIGEST: ${{ needs.assemble.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}" > "$RUNNER_TEMP/candidate-index.json"
+          test "sha256:$(sha256sum "$RUNNER_TEMP/candidate-index.json" | cut -d ' ' -f1)" = "$CANDIDATE_DIGEST"
+          docker buildx imagetools create \
+            --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}"
+
+      - name: Read-only post-promotion digest confirmation
+        id: confirm
+        env:
+          CANDIDATE_DIGEST: ${{ needs.assemble.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/stable-index.json"
+          stable_digest="sha256:$(sha256sum "$RUNNER_TEMP/stable-index.json" | cut -d ' ' -f1)"
+          test "$stable_digest" = "$CANDIDATE_DIGEST"
+          echo "digest=$stable_digest" >> "$GITHUB_OUTPUT"
+          printf 'Promoted convenience tag: `docker.io/%s:%s` -> `%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$stable_digest" >> "$GITHUB_STEP_SUMMARY"
