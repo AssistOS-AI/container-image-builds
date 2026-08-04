@@ -21,7 +21,8 @@ test('ploinky-box image consumes only the canonical Box entrypoint source', () =
     assert.equal(fs.existsSync(path.join(ROOT, 'images/ploinky-box/entrypoint.sh')), false);
     assert.match(workflow, /Checkout immutable Ploinky source/);
     assert.match(workflow, /path:\s*sources\/ploinky/);
-    assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink/);
+    assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
+    assert.match(dockerfile, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
     assert.match(dockerfile, /preexec-barrier=R\/G/);
     assert.match(dockerfile, /credential-bound=4096/);
 });
@@ -52,6 +53,38 @@ test('native Bubblewrap gate covers helper HOME ordering, empty readiness, and o
     assert.ok(providerDescriptor.indexOf("directory('/home')") < providerDescriptor.indexOf("home('.data/native-helper')"));
     assert.ok(readinessDescriptor.indexOf("tmpfs('/workspace')") < readinessDescriptor.indexOf("directory('/workspace/readiness')"));
     assert.ok(readinessDescriptor.indexOf("directory('/home')") < readinessDescriptor.indexOf("home('.data/native-readiness')"));
+    assert.match(nativeGate, /function readOnlyDataPath\(source, target\)/);
+    assert.match(nativeGate, /return encodeRecord\(12, payload\)/);
+    assert.match(providerDescriptor, /\.\.\.productionReadOnlyDataPathRecords\(\)/);
+    assert.match(readinessDescriptor, /\.\.\.productionReadOnlyDataPathRecords\(\)/);
+    let mappingOffset = -1;
+    for (const mapping of [
+        "source: '/etc/resolv.conf', target: '/etc/resolv.conf'",
+        "source: '/etc/hosts', target: '/etc/hosts'",
+        "source: '/etc/passwd', target: '/etc/passwd'",
+        "source: '/etc/group', target: '/etc/group'",
+        "source: '/etc/authselect/nsswitch.conf', target: '/etc/nsswitch.conf'",
+        "source: '/etc/ld.so.cache', target: '/etc/ld.so.cache'",
+    ]) {
+        const nextOffset = nativeGate.indexOf(mapping, mappingOffset + 1);
+        assert.ok(nextOffset > mappingOffset, `production read-only data path is missing or out of order: ${mapping}`);
+        mappingOffset = nextOffset;
+    }
+    assert.match(nativeGate, /PLOINKY_MOUNT_DESTINATION_UNSUPPORTED/);
+    assert.match(nativeGate, /resolverMode, 0o444/);
+    assert.match(nativeGate, /resolverMutationCodes/);
+    assert.match(nativeGate, /chmodSync\(resolverPath, 0o644\)/);
+    assert.match(nativeGate, /appendFileSync\(resolverPath/);
+    assert.match(nativeGate, /truncateSync\(resolverPath, 0\)/);
+    assert.match(nativeGate, /renameSync\(resolverPath, resolverMovedPath\)/);
+    assert.match(nativeGate, /unlinkSync\(resolverPath\)/);
+    assert.match(nativeGate, /resolverBeforeBytes\.equals\(resolverAfterBytes\)/);
+    assert.match(nativeGate, /resolverIdentityAfter, readiness\.resolverIdentityBefore/);
+    assert.match(nativeGate, /pinnedDataPathSources/);
+    assert.match(nativeGate, /sandboxBytes\.equals\(pinnedDataPathSources\[index\]\.bytes\)/);
+    assert.match(nativeGate, /source-to-target remap/);
+    assert.match(nativeGate, /sources must have distinct content/);
+    assert.match(nativeGate, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
     assert.match(nativeGate, /spawnSync\('\/usr\/local\/bin\/npm', \['--version'\]/);
     assert.match(nativeGate, /appendFileSync\('\/usr\/local\/bin\/node'/);
     assert.match(nativeGate, /helperReadiness\.namespaces\[name\][\s\S]*?outerNamespaces\[name\]/);

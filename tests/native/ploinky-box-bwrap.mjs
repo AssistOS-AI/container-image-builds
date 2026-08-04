@@ -10,6 +10,14 @@ const HELPER = '/usr/local/libexec/ploinky-bwrap-launch';
 const SOURCE_SHA = process.env.PLOINKY_SOURCE_SHA || '';
 const NATIVE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const fixtureSource = path.join(NATIVE_DIR, 'fixtures', 'real-provider.mjs');
+const PRODUCTION_READ_ONLY_DATA_PATHS = Object.freeze([
+    Object.freeze({ source: '/etc/resolv.conf', target: '/etc/resolv.conf' }),
+    Object.freeze({ source: '/etc/hosts', target: '/etc/hosts' }),
+    Object.freeze({ source: '/etc/passwd', target: '/etc/passwd' }),
+    Object.freeze({ source: '/etc/group', target: '/etc/group' }),
+    Object.freeze({ source: '/etc/authselect/nsswitch.conf', target: '/etc/nsswitch.conf' }),
+    Object.freeze({ source: '/etc/ld.so.cache', target: '/etc/ld.so.cache' }),
+]);
 const evidence = {
     architecture: process.arch,
     bwrap: null,
@@ -253,6 +261,23 @@ function preexecBarrier(readyWriteFd, releaseReadFd) {
     return encodeRecord(11, payload);
 }
 
+function readOnlyDataPath(source, target) {
+    const sourceBytes = Buffer.from(source);
+    const targetBytes = Buffer.from(target);
+    assert.ok(sourceBytes.length > 0 && sourceBytes.length <= 0xffff);
+    assert.ok(targetBytes.length > 0 && targetBytes.length <= 0xffff);
+    const payload = Buffer.alloc(4 + sourceBytes.length + targetBytes.length);
+    payload.writeUInt16BE(sourceBytes.length, 0);
+    payload.writeUInt16BE(targetBytes.length, 2);
+    sourceBytes.copy(payload, 4);
+    targetBytes.copy(payload, 4 + sourceBytes.length);
+    return encodeRecord(12, payload);
+}
+
+function productionReadOnlyDataPathRecords() {
+    return PRODUCTION_READ_ONLY_DATA_PATHS.map(({ source, target }) => readOnlyDataPath(source, target));
+}
+
 function helperLaunchDescriptor({ signalMode = false } = {}) {
     return encodeDescriptor([
         arg('--die-with-parent'),
@@ -275,6 +300,7 @@ function helperLaunchDescriptor({ signalMode = false } = {}) {
         systemSymlink('/bin'),
         systemSymlink('/lib'),
         systemSymlink('/lib64'),
+        ...productionReadOnlyDataPathRecords(),
         workspace(1),
         tmpfs('/workspace/.ploinky'),
         tmpfs('/workspace/.data'),
@@ -312,6 +338,89 @@ if (fs.readFileSync('/home/agent/readiness-home-marker', 'utf8') !== 'private re
 if (process.env.PLOINKY_SECRET_CANARY !== undefined) {
     throw new Error('parent environment crossed the readiness boundary');
 }
+const sandboxDataPathMappings = [
+    { source: '/etc/resolv.conf', target: '/etc/resolv.conf' },
+    { source: '/etc/hosts', target: '/etc/hosts' },
+    { source: '/etc/passwd', target: '/etc/passwd' },
+    { source: '/etc/group', target: '/etc/group' },
+    { source: '/etc/authselect/nsswitch.conf', target: '/etc/nsswitch.conf' },
+    { source: '/etc/ld.so.cache', target: '/etc/ld.so.cache' },
+];
+for (const { target } of sandboxDataPathMappings) {
+    const bytes = fs.readFileSync(target);
+    if (bytes.length === 0) {
+        throw new Error('read-only data path was empty: ' + target);
+    }
+    const mode = fs.statSync(target).mode & 0o777;
+    if (mode !== 0o444) {
+        throw new Error('read-only data path mode was not 0444: ' + target + ': ' + mode.toString(8));
+    }
+}
+const resolverPath = '/etc/resolv.conf';
+const resolverMovedPath = '/etc/resolv.conf.ploinky-native-mutation';
+if (fs.existsSync(resolverMovedPath)) {
+    throw new Error('resolver mutation target unexpectedly exists');
+}
+const stableStatIdentity = (target) => {
+    const stat = fs.statSync(target, { bigint: true });
+    return Object.fromEntries(
+        ['dev', 'ino', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'size', 'blksize', 'blocks', 'mtimeNs', 'ctimeNs']
+            .map((field) => [field, stat[field].toString()]),
+    );
+};
+const requireDenied = (label, operation, allowedCodes) => {
+    let failure = null;
+    try {
+        operation();
+    } catch (error) {
+        failure = error;
+    }
+    if (failure === null) {
+        throw new Error(label + ' unexpectedly succeeded');
+    }
+    if (!allowedCodes.includes(failure.code)) {
+        throw new Error(label + ' failed with unexpected code: ' + failure.code);
+    }
+    return failure.code;
+};
+const resolverBeforeBytes = fs.readFileSync(resolverPath);
+if (resolverBeforeBytes.length === 0) {
+    throw new Error('read-only data path was empty');
+}
+const resolverIdentityBefore = stableStatIdentity(resolverPath);
+const resolverMode = Number(BigInt(resolverIdentityBefore.mode) & 0o777n);
+if (resolverMode !== 0o444) {
+    throw new Error('read-only data path mode was not 0444: ' + resolverMode.toString(8));
+}
+const mutationCodes = ['EACCES', 'EROFS', 'EPERM'];
+const mutationOrMountpointCodes = [...mutationCodes, 'EBUSY'];
+const resolverMutationCodes = {
+    chmod: requireDenied('resolver chmod', () => fs.chmodSync(resolverPath, 0o644), mutationCodes),
+    append: requireDenied('resolver append', () => fs.appendFileSync(resolverPath, 'must not be written\n'), mutationCodes),
+    truncate: requireDenied('resolver truncate', () => fs.truncateSync(resolverPath, 0), mutationCodes),
+    rename: requireDenied(
+        'resolver rename',
+        () => fs.renameSync(resolverPath, resolverMovedPath),
+        mutationOrMountpointCodes,
+    ),
+    unlink: requireDenied('resolver unlink', () => fs.unlinkSync(resolverPath), mutationOrMountpointCodes),
+};
+if (!fs.existsSync(resolverPath) || fs.existsSync(resolverMovedPath)) {
+    throw new Error('read-only data path changed identity after mutation attempts');
+}
+const resolverAfterBytes = fs.readFileSync(resolverPath);
+const resolverIdentityAfter = stableStatIdentity(resolverPath);
+if (!resolverBeforeBytes.equals(resolverAfterBytes)) {
+    throw new Error('read-only data path bytes changed after mutation attempts');
+}
+if (JSON.stringify(resolverIdentityBefore) !== JSON.stringify(resolverIdentityAfter)) {
+    throw new Error('read-only data path stat identity changed after mutation attempts');
+}
+const dataPathCopies = sandboxDataPathMappings.map(({ source, target }) => ({
+    source,
+    target,
+    bytesBase64: fs.readFileSync(target).toString('base64'),
+}));
 const npm = childProcess.spawnSync('/usr/local/bin/npm', ['--version'], { encoding: 'utf8' });
 if (npm.status !== 0 || !/^\d+\.\d+\.\d+$/.test(npm.stdout.trim())) {
     throw new Error('npm readiness failed: ' + npm.status + ': ' + npm.stderr);
@@ -340,11 +449,17 @@ if (!visiblePids.includes(1) || visiblePids.length > 4) {
 console.log(JSON.stringify({
     event: 'empty-readiness-complete',
     cwd: process.cwd(),
+    dataPathCopies,
     home: process.env.HOME,
     node: process.version,
     nodeWriteCode,
     npm: npm.stdout.trim(),
     namespaces,
+    resolverBytes: resolverBeforeBytes.length,
+    resolverIdentityAfter,
+    resolverIdentityBefore,
+    resolverMode,
+    resolverMutationCodes,
     visiblePids,
     workspaceEntries,
 }));
@@ -369,6 +484,7 @@ function helperEmptyReadinessDescriptor() {
         systemSymlink('/bin'),
         systemSymlink('/lib'),
         systemSymlink('/lib64'),
+        ...productionReadOnlyDataPathRecords(),
         tmpfs('/workspace'),
         directory('/workspace/readiness'),
         directory('/home'),
@@ -538,6 +654,11 @@ async function runHelperEmptyReadinessGate() {
     const dataRoot = '/workspace/.data';
     const readinessHome = `${dataRoot}/native-readiness`;
     const dataRootExisted = fs.existsSync(dataRoot);
+    const pinnedDataPathSources = [];
+    for (const mapping of PRODUCTION_READ_ONLY_DATA_PATHS) {
+        const fd = fs.openSync(mapping.source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        pinnedDataPathSources.push({ ...mapping, fd, bytes: fs.readFileSync(fd) });
+    }
     assert.equal(fs.existsSync(canaryPath), false, `readiness canary already exists: ${canaryPath}`);
     assert.equal(fs.existsSync(readinessHome), false, `readiness HOME already exists: ${readinessHome}`);
     fs.mkdirSync(readinessHome, { recursive: true, mode: 0o700 });
@@ -561,20 +682,75 @@ async function runHelperEmptyReadinessGate() {
             `empty-readiness provider failed (${result.code}/${result.signal}): ${captured.stderr}`,
         );
         const readinessLine = captured.stdout.trim().split('\n').find((line) => line.startsWith('{'));
-        assert.ok(readinessLine, `empty-readiness provider produced no JSON evidence: ${captured.stdout}`);
+        assert.ok(readinessLine, 'empty-readiness provider produced no JSON evidence');
         const readiness = JSON.parse(readinessLine);
         assert.equal(readiness.event, 'empty-readiness-complete');
+        assert.deepEqual(
+            readiness.dataPathCopies.map(({ source, target }) => ({ source, target })),
+            PRODUCTION_READ_ONLY_DATA_PATHS,
+        );
+        const verifiedDataPathCopies = readiness.dataPathCopies.map(({ source, target, bytesBase64 }, index) => {
+            const sandboxBytes = Buffer.from(bytesBase64, 'base64');
+            assert.equal(sandboxBytes.toString('base64'), bytesBase64, `invalid base64 evidence for ${target}`);
+            assert.equal(
+                sandboxBytes.equals(pinnedDataPathSources[index].bytes),
+                true,
+                `${target} did not match the pinned outer source ${source}`,
+            );
+            return { source, target, bytes: sandboxBytes.length };
+        });
+        const remappedNsswitchIndex = PRODUCTION_READ_ONLY_DATA_PATHS.findIndex(
+            ({ target }) => target === '/etc/nsswitch.conf',
+        );
+        const hostsIndex = PRODUCTION_READ_ONLY_DATA_PATHS.findIndex(({ target }) => target === '/etc/hosts');
+        assert.notEqual(remappedNsswitchIndex, -1);
+        assert.notEqual(hostsIndex, -1);
+        assert.notEqual(
+            pinnedDataPathSources[remappedNsswitchIndex].source,
+            pinnedDataPathSources[remappedNsswitchIndex].target,
+            'nsswitch coverage must exercise a source-to-target remap',
+        );
+        assert.equal(
+            pinnedDataPathSources[remappedNsswitchIndex].bytes.equals(pinnedDataPathSources[hostsIndex].bytes),
+            false,
+            'remap and control sources must have distinct content',
+        );
+        assert.equal(
+            Buffer.from(readiness.dataPathCopies[remappedNsswitchIndex].bytesBase64, 'base64')
+                .equals(Buffer.from(readiness.dataPathCopies[hostsIndex].bytesBase64, 'base64')),
+            false,
+            'sandbox remap and control targets must have distinct content',
+        );
+        readiness.dataPathCopies = verifiedDataPathCopies;
         assert.equal(readiness.cwd, '/workspace/readiness');
         assert.equal(readiness.home, '/home/agent');
         assert.match(readiness.node, /^v24\./);
         assert.match(readiness.npm, /^\d+\.\d+\.\d+$/);
         assert.ok(['EACCES', 'EROFS', 'EPERM', 'ETXTBSY'].includes(readiness.nodeWriteCode));
+        assert.ok(readiness.resolverBytes > 0);
+        assert.equal(readiness.resolverMode, 0o444);
+        for (const operation of ['chmod', 'append', 'truncate']) {
+            assert.ok(
+                ['EACCES', 'EROFS', 'EPERM'].includes(readiness.resolverMutationCodes[operation]),
+                `unexpected resolver ${operation} result: ${readiness.resolverMutationCodes[operation]}`,
+            );
+        }
+        for (const operation of ['rename', 'unlink']) {
+            assert.ok(
+                ['EACCES', 'EROFS', 'EPERM', 'EBUSY'].includes(readiness.resolverMutationCodes[operation]),
+                `unexpected resolver ${operation} result: ${readiness.resolverMutationCodes[operation]}`,
+            );
+        }
+        assert.deepEqual(readiness.resolverIdentityAfter, readiness.resolverIdentityBefore);
         assert.deepEqual(readiness.workspaceEntries, ['readiness']);
         assert.equal(fs.readFileSync(canaryPath, 'utf8'), 'must remain outside readiness\n');
         assert.equal(fs.readFileSync(`${readinessHome}/readiness-state`, 'utf8'), 'ready\n');
         assert.equal(fs.existsSync('/workspace/readiness/readiness-write'), false);
         return readiness;
     } finally {
+        for (const { fd } of pinnedDataPathSources) {
+            fs.closeSync(fd);
+        }
         fs.rmSync(canaryPath, { force: true });
         fs.rmSync(readinessHome, { recursive: true, force: true });
         if (!dataRootExisted) {
@@ -721,12 +897,10 @@ assert.equal(run('getcap', ['/usr/bin/bwrap']), '');
 evidence.helper = run(HELPER, ['--version']);
 assert.equal(evidence.helper, `ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA}`);
 const helperCapabilities = run(HELPER, ['--capabilities']);
-assert.match(helperCapabilities, /protocol=1 descriptor-fd=3/);
-assert.match(helperCapabilities, /path-resolution=openat2-beneath-no-magiclinks-no-symlinks/);
-assert.match(helperCapabilities, /bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms/);
-assert.match(helperCapabilities, /typed-fs=dir,tmpfs,proc,dev,system-symlink/);
-assert.match(helperCapabilities, /preexec-barrier=R\/G/);
-assert.match(helperCapabilities, /credential-bound=4096/);
+assert.equal(
+    helperCapabilities,
+    `ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096`,
+);
 assert.equal(run('stat', ['-c', '%a:%u:%g', HELPER]), '755:0:0');
 assert.equal(run('getcap', [HELPER]), '');
 
@@ -742,6 +916,15 @@ helperFailures.push(await runHelperFailure(
     encodeDescriptor([directory('/workspace/readiness'), arg('--'), arg('/usr/bin/true')]),
     64,
     'PLOINKY_BWRAP_MOUNT_ORDER_INVALID',
+));
+helperFailures.push(await runHelperFailure(
+    encodeDescriptor([
+        readOnlyDataPath('/etc/resolv.conf', '/etc/not-an-approved-system-file'),
+        arg('--'),
+        arg('/usr/bin/true'),
+    ]),
+    73,
+    'PLOINKY_MOUNT_DESTINATION_UNSUPPORTED',
 ));
 helperFailures.push(await runHelperFailure(
     encodeDescriptor([workdir('.'), arg('--'), arg('/usr/bin/true')]),

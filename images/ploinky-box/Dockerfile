@@ -96,7 +96,7 @@ RUN test -x /usr/local/libexec/ploinky-bwrap-launch \
     && test ! -g /usr/local/libexec/ploinky-bwrap-launch \
     && test "$(stat -c '%a:%u:%g' /usr/local/libexec/ploinky-bwrap-launch)" = '755:0:0' \
     && test "$(/usr/local/libexec/ploinky-bwrap-launch --version)" = "ploinky-bwrap-launch-v1 source-sha=${PLOINKY_SOURCE_SHA}" \
-    && test "$(/usr/local/libexec/ploinky-bwrap-launch --capabilities)" = "ploinky-bwrap-launch-v1 source-sha=${PLOINKY_SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink preexec-barrier=R/G credential-bound=4096"
+    && test "$(/usr/local/libexec/ploinky-bwrap-launch --capabilities)" = "ploinky-bwrap-launch-v1 source-sha=${PLOINKY_SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096"
 
 # The pinned Podman base currently ships a user containers.conf. The Box
 # entrypoint creates that file together with box-transport.json after

@@ -129,7 +129,10 @@ BuildKit named context. A builder stage compiles and strips only
 runtime image. The helper's version and complete capability line must name the
 same source SHA recorded by the final image label and must advertise protocol 1,
 fd-pinned `openat2` resolution, typed filesystem records, the pre-exec barrier,
-and the bounded credential transport.
+the bounded credential transport, and the type-12 `ro-data-path-file` record.
+For each record, the helper pins and opens the fixed system file, copies at most
+4 MiB into a sealed memfd, verifies the write/grow/shrink/seal locks, and exposes
+the immutable copy through Bubblewrap `--ro-bind-data` with mode `0444`.
 
 The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
