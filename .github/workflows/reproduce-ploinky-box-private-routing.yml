@@ -98,7 +98,9 @@ jobs:
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
           const [image] = JSON.parse(fs.readFileSync('/tmp/ploinky-box-image.json'));
-          assert.deepEqual(image.Config?.Labels || {}, {});
+          assert.deepEqual(image.Config?.Labels || {}, {
+            'io.assistos.ploinky.source-sha': process.env.PLOINKY_SOURCE_SHA,
+          });
           NODE
           podman run --rm --entrypoint /bin/bash \
             "docker.io/assistos/ploinky-box@${CANDIDATE_DIGEST}" \
