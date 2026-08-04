@@ -214,7 +214,7 @@ jobs:
             brew install podman
           fi
           podman machine init \
-            --cpus 4 \
+            --cpus 2 \
             --memory 4096 \
             --disk-size 40 \
             --now \

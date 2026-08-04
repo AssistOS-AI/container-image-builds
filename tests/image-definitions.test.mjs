@@ -583,6 +583,7 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.match(workflow, /podman-machine-gate:/);
     assert.match(workflow, /runs-on:\s*macos-15/);
     assert.match(workflow, /podman machine init/);
+    assert.match(workflow, /podman machine init[\s\S]*?--cpus 2/);
     assert.match(workflow, /ploinky-box-native-podman-machine/);
     assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);
 
