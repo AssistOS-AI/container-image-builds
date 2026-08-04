@@ -29,11 +29,17 @@ test('ploinky-box image consumes only the canonical Box entrypoint source', () =
 
 test('publication workflow gates candidate publication on native Bubblewrap behavior', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
+    const podmanMachineJob = workflow.match(/\n  podman-machine-gate:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
 
+    assert.ok(podmanMachineJob);
     assert.match(workflow, /Run native Bubblewrap behavior gate/);
     assert.match(workflow, /tests\/native:\/opt\/ploinky-native-tests:ro/);
     assert.match(workflow, /ploinky-box-bwrap\.mjs/);
     assert.match(workflow, /Podman Machine Bubblewrap gate/);
+    assert.match(podmanMachineJob, /runs-on:\s*macos-15-intel/);
+    assert.match(podmanMachineJob, /podman machine init[\s\S]*?podman machine start/);
+    assert.doesNotMatch(podmanMachineJob, /--now/);
+    assert.match(podmanMachineJob, /ploinky-box-podman-machine-startup\.log/);
     assert.match(workflow, /\bpodman run --rm\b/);
     assert.doesNotMatch(workflow, /--privileged|seccomp=unconfined/);
     assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);

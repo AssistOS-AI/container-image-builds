@@ -541,12 +541,14 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
 test('ploinky-box workflow publishes only a gated run-scoped candidate index', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
+    const podmanMachineJob = workflow.match(/\n  podman-machine-gate:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
     const ploinkyCheckout = buildJob.match(
         /- name: Checkout immutable Ploinky source[\s\S]*?(?=\n      - name:)/,
     )?.[0] || '';
 
     assert.ok(buildJob);
+    assert.ok(podmanMachineJob);
     assert.ok(mergeJob);
     assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
@@ -594,11 +596,17 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     const behaviorGate = buildJob.indexOf('Run native Bubblewrap behavior gate');
     const digestUpload = buildJob.indexOf('Upload architecture digest evidence');
     assert.ok(behaviorGate > 0 && behaviorGate < digestUpload);
-    assert.match(workflow, /podman-machine-gate:/);
-    assert.match(workflow, /runs-on:\s*macos-15/);
-    assert.match(workflow, /podman machine init/);
-    assert.match(workflow, /podman machine init[\s\S]*?--cpus 2/);
-    assert.match(workflow, /ploinky-box-native-podman-machine/);
+    assert.match(podmanMachineJob, /runs-on:\s*macos-15-intel/);
+    assert.doesNotMatch(podmanMachineJob, /runs-on:\s*macos-15\s*$/m);
+    assert.match(podmanMachineJob, /test "\$\(uname -m\)" = x86_64/);
+    assert.match(podmanMachineJob, /podman machine init/);
+    assert.match(podmanMachineJob, /podman machine init[\s\S]*?--cpus 2/);
+    assert.doesNotMatch(podmanMachineJob, /--now/);
+    assert.match(podmanMachineJob, /podman machine inspect "\$MACHINE_NAME"/);
+    assert.match(podmanMachineJob, /if ! podman machine start "\$MACHINE_NAME"[\s\S]*?capture_machine_failure[\s\S]*?exit 1/);
+    assert.match(podmanMachineJob, /ploinky-box-podman-machine-startup\.log/);
+    assert.match(podmanMachineJob, /if:\s*always\(\)[\s\S]*?ploinky-box-podman-machine-startup\.log/);
+    assert.match(podmanMachineJob, /ploinky-box-native-podman-machine/);
     assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);
 
     assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build\s*\n\s+- podman-machine-gate/);

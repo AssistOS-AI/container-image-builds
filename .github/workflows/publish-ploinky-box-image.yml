@@ -193,7 +193,7 @@ jobs:
     needs:
       - resolve-source
       - build
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 45
     env:
       MACHINE_NAME: ploinky-native-${{ github.run_id }}-${{ github.run_attempt }}
@@ -215,13 +215,43 @@ jobs:
           if ! command -v podman >/dev/null; then
             brew install podman
           fi
+          startup_log="$RUNNER_TEMP/ploinky-box-podman-machine-startup.log"
+          capture_machine_failure() {
+            {
+              echo 'Podman Machine failed to start; collecting diagnostics.'
+              podman machine inspect "$MACHINE_NAME" || true
+              for log_root in \
+                "$HOME/.config/containers/podman/machine" \
+                "$HOME/.local/share/containers/podman/machine"; do
+                test -d "$log_root" || continue
+                while IFS= read -r -d '' log_file; do
+                  printf '\n--- %s ---\n' "$log_file"
+                  sed -n '1,400p' "$log_file"
+                done < <(find "$log_root" -type f -name '*.log' -print0)
+              done
+            } >> "$startup_log" 2>&1
+          }
+          {
+            test "$(uname -m)" = x86_64
+            uname -a
+            sw_vers
+            sysctl kern.hv_support || true
+            podman --version
+            podman machine info --format json
+          } 2>&1 | tee "$startup_log"
           podman machine init \
             --cpus 2 \
             --memory 4096 \
             --disk-size 40 \
-            --now \
-            "$MACHINE_NAME"
-          podman info
+            "$MACHINE_NAME" \
+            2>&1 | tee -a "$startup_log"
+          podman machine inspect "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"
+          if ! podman machine start "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"; then
+            capture_machine_failure
+            exit 1
+          fi
+          podman machine inspect "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"
+          podman info 2>&1 | tee -a "$startup_log"
 
       - name: Select the native candidate digest
         run: |
@@ -259,7 +289,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ploinky-box-native-podman-machine
-          path: ${{ runner.temp }}/ploinky-box-bwrap-podman-machine-*.log
+          path: |
+            ${{ runner.temp }}/ploinky-box-podman-machine-startup.log
+            ${{ runner.temp }}/ploinky-box-bwrap-podman-machine-*.log
           if-no-files-found: warn
           retention-days: 30
 
