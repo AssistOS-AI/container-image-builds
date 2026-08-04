@@ -198,6 +198,11 @@ jobs:
     env:
       MACHINE_NAME: ploinky-native-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+      CONTAINERS_MACHINE_PROVIDER: applehv
+      PODMAN_INSTALLER_VERSION: 5.8.2
+      PODMAN_INSTALLER_URL: https://github.com/podman-container-tools/podman/releases/download/v5.8.2/podman-installer-macos-amd64.pkg
+      PODMAN_INSTALLER_SHA256: 2312f91523aeb168709f35d41576ade763c891c3991befe7173aac0edf133af9
+      PODMAN_MACHINE_IMAGE: docker://quay.io/podman/machine-os@sha256:ee3be164d467497fcc2563684711c443ddb4b33decae1f816f50901d41dce5cc
     steps:
       - name: Checkout image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -212,10 +217,8 @@ jobs:
       - name: Start a fresh Podman Machine
         run: |
           set -euo pipefail
-          if ! command -v podman >/dev/null; then
-            brew install podman
-          fi
           startup_log="$RUNNER_TEMP/ploinky-box-podman-machine-startup.log"
+          : > "$startup_log"
           capture_machine_failure() {
             {
               echo 'Podman Machine failed to start; collecting diagnostics.'
@@ -232,17 +235,58 @@ jobs:
             } >> "$startup_log" 2>&1
           }
           {
-            test "$(uname -m)" = x86_64
             uname -a
             sw_vers
             sysctl kern.hv_support || true
+            test "$(uname -m)" = x86_64
+            test "$(sysctl -n kern.hv_support)" = 1
+            printf 'Podman installer: %s (sha256:%s)\n' \
+              "$PODMAN_INSTALLER_URL" "$PODMAN_INSTALLER_SHA256"
+            printf 'Podman Machine image: %s\n' "$PODMAN_MACHINE_IMAGE"
+          } 2>&1 | tee -a "$startup_log"
+          podman_pkg="$RUNNER_TEMP/podman-installer-macos-amd64.pkg"
+          if ! curl \
+            --fail \
+            --location \
+            --proto '=https' \
+            --proto-redir '=https' \
+            --retry 3 \
+            --retry-all-errors \
+            --output "$podman_pkg" \
+            "$PODMAN_INSTALLER_URL" \
+            2>&1 | tee -a "$startup_log"; then
+            echo 'Pinned Podman installer download failed.' | tee -a "$startup_log"
+            exit 1
+          fi
+          printf '%s  %s\n' "$PODMAN_INSTALLER_SHA256" "$podman_pkg" \
+            | shasum -a 256 --check \
+            2>&1 | tee -a "$startup_log"
+          if ! signature_report="$(pkgutil --check-signature "$podman_pkg" 2>&1)"; then
+            printf '%s\n' "$signature_report" | tee -a "$startup_log"
+            exit 1
+          fi
+          printf '%s\n' "$signature_report" | tee -a "$startup_log"
+          if ! grep -F 'Developer ID Installer: Red Hat, Inc. (HYSCB8KRL2)' \
+            <<< "$signature_report" >/dev/null; then
+            echo 'Pinned Podman installer has an unexpected signer.' | tee -a "$startup_log"
+            exit 1
+          fi
+          if ! sudo installer -pkg "$podman_pkg" -target / 2>&1 | tee -a "$startup_log"; then
+            echo 'Pinned Podman installer failed.' | tee -a "$startup_log"
+            exit 1
+          fi
+          export PATH="/opt/podman/bin:$PATH"
+          echo '/opt/podman/bin' >> "$GITHUB_PATH"
+          {
+            test "$(podman --version)" = "podman version ${PODMAN_INSTALLER_VERSION}"
             podman --version
             podman machine info --format json
-          } 2>&1 | tee "$startup_log"
+          } 2>&1 | tee -a "$startup_log"
           podman machine init \
             --cpus 2 \
             --memory 4096 \
             --disk-size 40 \
+            --image "$PODMAN_MACHINE_IMAGE" \
             "$MACHINE_NAME" \
             2>&1 | tee -a "$startup_log"
           podman machine inspect "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"
@@ -297,7 +341,10 @@ jobs:
 
       - name: Remove the test Podman Machine
         if: always()
-        run: podman machine rm --force "$MACHINE_NAME" || true
+        run: |
+          if test -x /opt/podman/bin/podman; then
+            /opt/podman/bin/podman machine rm --force "$MACHINE_NAME" || true
+          fi
 
   merge:
     name: Publish gated run-scoped candidate index

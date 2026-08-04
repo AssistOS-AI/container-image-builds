@@ -37,8 +37,13 @@ test('publication workflow gates candidate publication on native Bubblewrap beha
     assert.match(workflow, /ploinky-box-bwrap\.mjs/);
     assert.match(workflow, /Podman Machine Bubblewrap gate/);
     assert.match(podmanMachineJob, /runs-on:\s*macos-15-intel/);
+    assert.match(podmanMachineJob, /podman-installer-macos-amd64\.pkg/);
+    assert.match(podmanMachineJob, /shasum -a 256 --check/);
+    assert.match(podmanMachineJob, /Developer ID Installer: Red Hat, Inc\. \(HYSCB8KRL2\)/);
+    assert.doesNotMatch(podmanMachineJob, /brew install podman/);
     assert.match(podmanMachineJob, /podman machine init[\s\S]*?podman machine start/);
     assert.doesNotMatch(podmanMachineJob, /--now/);
+    assert.match(podmanMachineJob, /--image "\$PODMAN_MACHINE_IMAGE"/);
     assert.match(podmanMachineJob, /ploinky-box-podman-machine-startup\.log/);
     assert.match(workflow, /\bpodman run --rm\b/);
     assert.doesNotMatch(workflow, /--privileged|seccomp=unconfined/);

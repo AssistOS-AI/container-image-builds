@@ -598,15 +598,58 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.ok(behaviorGate > 0 && behaviorGate < digestUpload);
     assert.match(podmanMachineJob, /runs-on:\s*macos-15-intel/);
     assert.doesNotMatch(podmanMachineJob, /runs-on:\s*macos-15\s*$/m);
+    assert.match(podmanMachineJob, /CONTAINERS_MACHINE_PROVIDER:\s*applehv/);
     assert.match(podmanMachineJob, /test "\$\(uname -m\)" = x86_64/);
+    assert.match(podmanMachineJob, /test "\$\(sysctl -n kern\.hv_support\)" = 1/);
+    assert.match(podmanMachineJob, /PODMAN_INSTALLER_VERSION:\s*5\.8\.2/);
+    assert.match(
+        podmanMachineJob,
+        /PODMAN_INSTALLER_URL:\s*https:\/\/github\.com\/podman-container-tools\/podman\/releases\/download\/v5\.8\.2\/podman-installer-macos-amd64\.pkg/,
+    );
+    assert.match(
+        podmanMachineJob,
+        /PODMAN_INSTALLER_SHA256:\s*2312f91523aeb168709f35d41576ade763c891c3991befe7173aac0edf133af9/,
+    );
+    assert.match(
+        podmanMachineJob,
+        /PODMAN_MACHINE_IMAGE:\s*docker:\/\/quay\.io\/podman\/machine-os@sha256:ee3be164d467497fcc2563684711c443ddb4b33decae1f816f50901d41dce5cc/,
+    );
+    assert.doesNotMatch(podmanMachineJob, /brew install podman/);
+    assert.match(podmanMachineJob, /curl[\s\S]*?--proto '=https'[\s\S]*?"\$PODMAN_INSTALLER_URL"/);
+    assert.match(podmanMachineJob, /shasum -a 256 --check/);
+    assert.match(podmanMachineJob, /pkgutil --check-signature "\$podman_pkg"/);
+    assert.match(podmanMachineJob, /Developer ID Installer: Red Hat, Inc\. \(HYSCB8KRL2\)/);
+    assert.match(
+        podmanMachineJob,
+        /unexpected signer\.[\s\S]*?tee -a "\$startup_log"[\s\S]*?exit 1/,
+    );
+    assert.match(
+        podmanMachineJob,
+        /if ! sudo installer -pkg "\$podman_pkg" -target \/[\s\S]*?tee -a "\$startup_log"[\s\S]*?Pinned Podman installer failed\.[\s\S]*?exit 1/,
+    );
+    assert.match(podmanMachineJob, /echo '\/opt\/podman\/bin' >> "\$GITHUB_PATH"/);
+    assert.match(podmanMachineJob, /test "\$\(podman --version\)" = "podman version \$\{PODMAN_INSTALLER_VERSION\}"/);
     assert.match(podmanMachineJob, /podman machine init/);
     assert.match(podmanMachineJob, /podman machine init[\s\S]*?--cpus 2/);
+    assert.match(podmanMachineJob, /podman machine init[\s\S]*?--image "\$PODMAN_MACHINE_IMAGE"/);
     assert.doesNotMatch(podmanMachineJob, /--now/);
     assert.match(podmanMachineJob, /podman machine inspect "\$MACHINE_NAME"/);
     assert.match(podmanMachineJob, /if ! podman machine start "\$MACHINE_NAME"[\s\S]*?capture_machine_failure[\s\S]*?exit 1/);
     assert.match(podmanMachineJob, /ploinky-box-podman-machine-startup\.log/);
     assert.match(podmanMachineJob, /if:\s*always\(\)[\s\S]*?ploinky-box-podman-machine-startup\.log/);
     assert.match(podmanMachineJob, /ploinky-box-native-podman-machine/);
+    const startupEvidence = podmanMachineJob.indexOf(': > "$startup_log"');
+    const installerDownload = podmanMachineJob.indexOf('if ! curl');
+    const installerChecksum = podmanMachineJob.indexOf('shasum -a 256 --check');
+    const installerRun = podmanMachineJob.indexOf('sudo installer');
+    const machineInit = podmanMachineJob.indexOf('podman machine init');
+    assert.ok(
+        startupEvidence > 0
+            && startupEvidence < installerDownload
+            && installerDownload < installerChecksum
+            && installerChecksum < installerRun
+            && installerRun < machineInit,
+    );
     assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);
 
     assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build\s*\n\s+- podman-machine-gate/);
