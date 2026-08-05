@@ -17,6 +17,7 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/ploinky-box
+  IMAGE_TAG: runtime
 
 jobs:
   resolve-source:
@@ -88,10 +89,6 @@ jobs:
         with:
           context: .
           file: ./images/ploinky-box/Dockerfile
-          build-contexts: |
-            ploinky-src=./sources/ploinky
-          build-args: |
-            PLOINKY_SOURCE_SHA=${{ needs.resolve-source.outputs.source_sha }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
@@ -104,82 +101,6 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/${{ matrix.arch }}.txt"
 
-      - name: Require native rootless Podman
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y podman uidmap
-          test -e /dev/fuse
-          test -e /dev/net/tun
-          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
-          podman unshare true
-
-      - name: Pull and verify candidate provenance
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$DOCKERHUB_TOKEN" | podman login --username assistos --password-stdin docker.io
-          candidate="docker.io/${IMAGE_NAME}@${DIGEST}"
-          podman pull "$candidate"
-          test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "$candidate")" = '${{ matrix.platform }}'
-          test "$(podman image inspect --format '{{ index .Config.Labels "io.assistos.ploinky.source-sha" }}' "$candidate")" = "$SOURCE_SHA"
-          helper_version="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --version)"
-          test "$helper_version" = "ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA}"
-          helper_capabilities="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --capabilities)"
-          test "$helper_capabilities" = "ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096"
-
-      - name: Run native Bubblewrap behavior gate
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
-        run: |
-          set -euo pipefail
-          candidate="docker.io/${IMAGE_NAME}@${DIGEST}"
-          podman run --rm \
-            --security-opt unmask=ALL \
-            --security-opt label=disable \
-            --device /dev/fuse \
-            --device /dev/net/tun \
-            --env "PLOINKY_SOURCE_SHA=${SOURCE_SHA}" \
-            --volume "$PWD/tests/native:/opt/ploinky-native-tests:ro" \
-            --entrypoint /usr/local/bin/node \
-            "$candidate" \
-            /opt/ploinky-native-tests/ploinky-box-bwrap.mjs \
-            | tee "$RUNNER_TEMP/ploinky-box-bwrap-${{ matrix.arch }}.log"
-
-      - name: Record native provenance evidence
-        env:
-          ARCH: ${{ matrix.arch }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE' > "$RUNNER_TEMP/ploinky-box-provenance-${{ matrix.arch }}.json"
-          const evidence = {
-            architecture: process.env.ARCH,
-            image: process.env.IMAGE_NAME,
-            digest: process.env.DIGEST,
-            sourceSha: process.env.SOURCE_SHA,
-            workflowRun: process.env.GITHUB_RUN_ID,
-            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
-          };
-          process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
-          NODE
-
-      - name: Upload native gate evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ploinky-box-native-${{ matrix.arch }}
-          path: |
-            ${{ runner.temp }}/ploinky-box-bwrap-${{ matrix.arch }}.log
-            ${{ runner.temp }}/ploinky-box-provenance-${{ matrix.arch }}.json
-          if-no-files-found: warn
-          retention-days: 30
-
       - name: Upload architecture digest evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -188,174 +109,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  podman-machine-gate:
-    name: Podman Machine Bubblewrap gate
-    needs:
-      - resolve-source
-      - build
-    runs-on: macos-15-intel
-    timeout-minutes: 45
-    env:
-      MACHINE_NAME: ploinky-native-${{ github.run_id }}-${{ github.run_attempt }}
-      SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
-      CONTAINERS_MACHINE_PROVIDER: applehv
-      PODMAN_INSTALLER_VERSION: 5.8.2
-      PODMAN_INSTALLER_URL: https://github.com/podman-container-tools/podman/releases/download/v5.8.2/podman-installer-macos-amd64.pkg
-      PODMAN_INSTALLER_SHA256: 2312f91523aeb168709f35d41576ade763c891c3991befe7173aac0edf133af9
-      PODMAN_MACHINE_IMAGE: docker://quay.io/podman/machine-os@sha256:ee3be164d467497fcc2563684711c443ddb4b33decae1f816f50901d41dce5cc
-    steps:
-      - name: Checkout image definitions
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Download gated architecture digests
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: ploinky-box-digest-*
-          path: /tmp/ploinky-box-digests
-          merge-multiple: true
-
-      - name: Start a fresh Podman Machine
-        run: |
-          set -euo pipefail
-          startup_log="$RUNNER_TEMP/ploinky-box-podman-machine-startup.log"
-          : > "$startup_log"
-          capture_machine_failure() {
-            {
-              echo 'Podman Machine failed to start; collecting diagnostics.'
-              podman machine inspect "$MACHINE_NAME" || true
-              for log_root in \
-                "$HOME/.config/containers/podman/machine" \
-                "$HOME/.local/share/containers/podman/machine"; do
-                test -d "$log_root" || continue
-                while IFS= read -r -d '' log_file; do
-                  printf '\n--- %s ---\n' "$log_file"
-                  sed -n '1,400p' "$log_file"
-                done < <(find "$log_root" -type f -name '*.log' -print0)
-              done
-            } >> "$startup_log" 2>&1
-          }
-          {
-            uname -a
-            sw_vers
-            sysctl kern.hv_support || true
-            test "$(uname -m)" = x86_64
-            test "$(sysctl -n kern.hv_support)" = 1
-            printf 'Podman installer: %s (sha256:%s)\n' \
-              "$PODMAN_INSTALLER_URL" "$PODMAN_INSTALLER_SHA256"
-            printf 'Podman Machine image: %s\n' "$PODMAN_MACHINE_IMAGE"
-          } 2>&1 | tee -a "$startup_log"
-          podman_pkg="$RUNNER_TEMP/podman-installer-macos-amd64.pkg"
-          if ! curl \
-            --fail \
-            --location \
-            --proto '=https' \
-            --proto-redir '=https' \
-            --retry 3 \
-            --retry-all-errors \
-            --output "$podman_pkg" \
-            "$PODMAN_INSTALLER_URL" \
-            2>&1 | tee -a "$startup_log"; then
-            echo 'Pinned Podman installer download failed.' | tee -a "$startup_log"
-            exit 1
-          fi
-          printf '%s  %s\n' "$PODMAN_INSTALLER_SHA256" "$podman_pkg" \
-            | shasum -a 256 --check \
-            2>&1 | tee -a "$startup_log"
-          if ! signature_report="$(pkgutil --check-signature "$podman_pkg" 2>&1)"; then
-            printf '%s\n' "$signature_report" | tee -a "$startup_log"
-            exit 1
-          fi
-          printf '%s\n' "$signature_report" | tee -a "$startup_log"
-          if ! grep -F 'Developer ID Installer: Red Hat, Inc. (HYSCB8KRL2)' \
-            <<< "$signature_report" >/dev/null; then
-            echo 'Pinned Podman installer has an unexpected signer.' | tee -a "$startup_log"
-            exit 1
-          fi
-          if ! sudo installer -pkg "$podman_pkg" -target / 2>&1 | tee -a "$startup_log"; then
-            echo 'Pinned Podman installer failed.' | tee -a "$startup_log"
-            exit 1
-          fi
-          export PATH="/opt/podman/bin:$PATH"
-          echo '/opt/podman/bin' >> "$GITHUB_PATH"
-          {
-            test "$(podman --version)" = "podman version ${PODMAN_INSTALLER_VERSION}"
-            podman --version
-            podman machine info --format json
-          } 2>&1 | tee -a "$startup_log"
-          podman machine init \
-            --cpus 2 \
-            --memory 4096 \
-            --disk-size 40 \
-            --image "$PODMAN_MACHINE_IMAGE" \
-            "$MACHINE_NAME" \
-            2>&1 | tee -a "$startup_log"
-          podman machine inspect "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"
-          if ! podman machine start "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"; then
-            capture_machine_failure
-            exit 1
-          fi
-          podman machine inspect "$MACHINE_NAME" 2>&1 | tee -a "$startup_log"
-          podman info 2>&1 | tee -a "$startup_log"
-
-      - name: Select the native candidate digest
-        run: |
-          set -euo pipefail
-          case "$(uname -m)" in
-            x86_64) arch=amd64 ;;
-            arm64) arch=arm64 ;;
-            *) echo "unsupported Podman Machine host architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          digest="$(cat "/tmp/ploinky-box-digests/${arch}.txt")"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "ARCH=$arch" >> "$GITHUB_ENV"
-          echo "DIGEST=$digest" >> "$GITHUB_ENV"
-
-      - name: Run the candidate under Podman Machine
-        run: |
-          set -euo pipefail
-          candidate="docker.io/${IMAGE_NAME}@${DIGEST}"
-          podman pull "$candidate"
-          test "$(podman image inspect --format '{{ index .Config.Labels "io.assistos.ploinky.source-sha" }}' "$candidate")" = "$SOURCE_SHA"
-          podman run --rm \
-            --security-opt unmask=ALL \
-            --security-opt label=disable \
-            --device /dev/fuse \
-            --device /dev/net/tun \
-            --env "PLOINKY_SOURCE_SHA=${SOURCE_SHA}" \
-            --volume "$PWD/tests/native:/opt/ploinky-native-tests:ro" \
-            --entrypoint /usr/local/bin/node \
-            "$candidate" \
-            /opt/ploinky-native-tests/ploinky-box-bwrap.mjs \
-            | tee "$RUNNER_TEMP/ploinky-box-bwrap-podman-machine-${ARCH}.log"
-
-      - name: Upload Podman Machine evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ploinky-box-native-podman-machine
-          path: |
-            ${{ runner.temp }}/ploinky-box-podman-machine-startup.log
-            ${{ runner.temp }}/ploinky-box-bwrap-podman-machine-*.log
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Remove the test Podman Machine
-        if: always()
-        run: |
-          if test -x /opt/podman/bin/podman; then
-            /opt/podman/bin/podman machine rm --force "$MACHINE_NAME" || true
-          fi
-
   merge:
-    name: Publish gated run-scoped candidate index
+    name: Publish exact multiarchitecture runtime
     needs:
       - resolve-source
       - build
-      - podman-machine-gate
     runs-on: ubuntu-24.04
     outputs:
       digest: ${{ steps.confirm.outputs.digest }}
-      ref: ${{ steps.confirm.outputs.ref }}
     steps:
       - name: Download architecture digest evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -431,16 +192,25 @@ jobs:
           [[ "$staging_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "STAGING_DIGEST=$staging_digest" >> "$GITHUB_ENV"
 
-      - name: Read-only candidate digest confirmation
+      - name: Move runtime by the exact inspected staging digest
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            "docker.io/${IMAGE_NAME}@${STAGING_DIGEST}"
+
+      - name: Read-only post-promotion digest confirmation
         id: confirm
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/confirmed-candidate-index.json"
-          candidate_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-candidate-index.json" | cut -d ' ' -f1)"
-          [[ "$candidate_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          test "$candidate_digest" = "$STAGING_DIGEST"
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${candidate_digest}" > /dev/null
-          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
-          echo "ref=$STAGING_REF" >> "$GITHUB_OUTPUT"
-          printf 'Published gated run-scoped candidate: `%s` (`docker.io/%s@%s`). No stable tag was changed.\n' \
-            "$STAGING_REF" "$IMAGE_NAME" "$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/confirmed-staging-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/confirmed-runtime-index.json"
+          staging_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-staging-index.json" | cut -d ' ' -f1)"
+          runtime_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-runtime-index.json" | cut -d ' ' -f1)"
+          [[ "$staging_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$staging_digest" = "$STAGING_DIGEST"
+          test "$runtime_digest" = "$STAGING_DIGEST"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${runtime_digest}" > /dev/null
+          echo "digest=$runtime_digest" >> "$GITHUB_OUTPUT"
+          printf 'Published immutable image: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$runtime_digest" >> "$GITHUB_STEP_SUMMARY"

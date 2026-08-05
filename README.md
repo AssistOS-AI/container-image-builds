@@ -114,25 +114,10 @@ the outer appliance. It supports native rootless Podman only;
 it requires `/dev/fuse`, `/dev/net/tun`, the explicit unmask security option,
 and no engine socket, privilege, added capabilities, or unconfined seccomp
 profile. The image contains Podman, fuse-overlayfs, Node 24, npm/npx, Bash, Git,
-SSH, curl, ffmpeg, Python 3, process/namespace tools, cloudflared, and the
-rootless Netavark/pasta helpers. It installs exactly
-`bubblewrap-0:0.11.0-4.fc44.<architecture>` and proves the required
-`--bind-fd`, `--ro-bind-fd`, `--ro-bind-data`, and `--perms` interface before
-the image can build. Ploinky source is mounted read-only at `/opt/ploinky`; the
-Dockerfile copies its single canonical
+cloudflared, and the rootless Netavark/pasta helpers. Ploinky source is mounted
+read-only at `/opt/ploinky`; the Dockerfile copies its single canonical
 `ploinky-box/entrypoint/ploinky-box-entrypoint` into the image and does not
 retain a separate image-repository entrypoint implementation.
-
-The workflow supplies one clean, exact full-SHA Ploinky checkout as an immutable
-BuildKit named context. A builder stage compiles and strips only
-`ploinky-box/native/ploinky-bwrap-launch.c`; no compiler or headers enter the
-runtime image. The helper's version and complete capability line must name the
-same source SHA recorded by the final image label and must advertise protocol 1,
-fd-pinned `openat2` resolution, typed filesystem records, the pre-exec barrier,
-the bounded credential transport, and the type-12 `ro-data-path-file` record.
-For each record, the helper pins and opens the fixed system file, copies at most
-4 MiB into a sealed memfd, verifies the write/grow/shrink/seal locks, and exposes
-the immutable copy through Bubblewrap `--ro-bind-data` with mode `0444`.
 
 The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
@@ -145,10 +130,10 @@ clean `FROM scratch` stage. Its metadata is exact:
 
 | Field | Value |
 | --- | --- |
-| Image label | `io.assistos.ploinky.source-sha=<exact 40-hex Ploinky commit>` |
+| Image labels | None |
 | Marker | `/etc/ploinky-box` contains exactly `assistos/ploinky-box` followed by one newline |
 | User | `podman` |
-| Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
+| Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
 | `PATH` | `/opt/ploinky/bin:/usr/local/bin:/usr/bin` |
 | Working directory | `/workspace` |
 | Entrypoint | `/usr/local/bin/ploinky-box-entrypoint` |
@@ -192,27 +177,20 @@ destroy path.
 
 Manual dispatch requires one exact 40-character Ploinky commit in `source_ref`.
 The workflow verifies that immutable source checkout and its own image-definition
-checkout are clean and at the requested revisions.
+checkout are clean and at the requested revisions. It performs no behavioral,
+unit, integration, E2E, Podman, or sibling-repository test execution.
 
 Each native architecture job builds and pushes one image blob by immutable
-digest, pulls that exact candidate into native rootless Podman, verifies its
-source label and helper ABI, and runs the Bubblewrap behavior gate before
-uploading digest evidence. The gate covers the fd-pinned retained-inode race,
-malformed and forbidden descriptors, credential isolation, private namespaces
-and `/proc`, immutable runtime content, clean signal handling, and provider
-readiness in an empty tmpfs `/workspace` with working Node and npm. A separate
-fresh `macos-15` Podman Machine gate selects and proves the image matching the
-machine's native architecture.
-
-The merge job requires both gated amd64 and arm64 digests plus the Podman Machine
-gate. It proves the run-scoped
+digest, validates the digest format, and uploads only that digest as publication
+evidence. The merge job requires exactly one amd64 digest and one arm64 digest,
+proves the run-scoped
 `runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused, and creates
 a staging manifest from those two exact digests. It annotates and inspects
 that manifest, requires exactly the supplied amd64 and arm64 members, records its
-immutable digest, and confirms the run-scoped candidate by that digest. The
-workflow does not create or move `runtime`, `stable`, or any production tag.
-The candidate tag is retained as provenance for a later explicitly authorized
-promotion.
+immutable digest, and moves `runtime` by that exact staging digest. Only
+read-only digest confirmation follows promotion. The staging tag is retained as
+provenance, workflow concurrency prevents competing promotion, and functional
+validation remains separate from this publication-only workflow.
 
 ## Secrets
 

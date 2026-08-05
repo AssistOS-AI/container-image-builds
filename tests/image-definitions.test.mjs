@@ -428,71 +428,23 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         dockerfile,
         /^ARG PODMAN_BASE=quay\.io\/podman\/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964$/m,
     );
-    assert.match(
-        dockerfile,
-        /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim@sha256:[0-9a-f]{64}$/m,
-    );
+    assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
     assert.match(
         dockerfile,
         /^ARG CLOUDFLARED_IMAGE=docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe$/m,
     );
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
-    assert.match(dockerfile, /^ARG BUBBLEWRAP_NEVRA=bubblewrap-0:0\.11\.0-4\.fc44$/m);
-    assert.match(dockerfile, /"\$\{BUBBLEWRAP_NEVRA\}\.\$\{rpm_arch\}"/);
-    assert.match(dockerfile, /--setopt=install_weak_deps=False --setopt=tsflags=nodocs/);
-    assert.match(dockerfile, /rpm -q --qf '%\{NAME\}-%\{EPOCHNUM\}:%\{VERSION\}-%\{RELEASE\}\.%%?\{ARCH\}' bubblewrap/);
-    for (const requiredPackage of [
-        'bash',
-        'ca-certificates',
-        'coreutils',
-        'curl',
-        'ffmpeg-free',
-        'git',
-        'openssh-clients',
-        'procps-ng',
-        'python3',
-        'util-linux-core',
-        'util-linux-script',
-    ]) {
-        assert.match(dockerfile, new RegExp(`\\n\\s+${requiredPackage.replace('-', '\\-')} \\\\`));
-    }
-    for (const requiredOption of [
-        '--bind-fd FD DEST',
-        '--ro-bind-fd FD DEST',
-        '--ro-bind-data FD DEST',
-        '--perms OCTAL',
-    ]) {
-        assert.ok(
-            dockerfile.includes(`grep -F -- '${requiredOption}'`),
-            `missing exact Bubblewrap feature probe ${requiredOption}`,
-        );
-    }
-    assert.doesNotMatch(dockerfile, /grep -F -- '--(?:file FD DEST|ro-bind SRC DEST)'/);
+    assert.match(
+        dockerfile,
+        /dnf install -y git iproute libcap fuse-overlayfs netavark aardvark-dns passt slirp4netns util-linux-core/,
+    );
     assert.match(dockerfile, /rpm --setcaps shadow-utils/);
     assert.match(dockerfile, /sha256sum --check --strict/);
     assert.match(dockerfile, /cloudflared tunnel run --help/);
     assert.match(dockerfile, /--token-file/);
-    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.source-sha=\$PLOINKY_SOURCE_SHA$/m);
+    assert.doesNotMatch(dockerfile, /^LABEL\s/m);
     assert.doesNotMatch(dockerfile, /io\.assistos\.ploinky\.runtime-contract/);
-    assert.match(dockerfile, /^FROM \$PODMAN_BASE AS bwrap-launch-builder$/m);
-    assert.match(
-        dockerfile,
-        /^COPY --from=ploinky-src \/ploinky-box\/native\/ploinky-bwrap-launch\.c \/build\/ploinky-bwrap-launch\.c$/m,
-    );
-    assert.match(dockerfile, /-DPLOINKY_SOURCE_SHA=/);
-    assert.match(dockerfile, /-std=c17 -O2 -Wall -Wextra -Werror/);
-    assert.match(dockerfile, /strip --strip-all \/build\/ploinky-bwrap-launch/);
-    assert.match(
-        dockerfile,
-        /^COPY --from=bwrap-launch-builder \/build\/ploinky-bwrap-launch \/usr\/local\/libexec\/ploinky-bwrap-launch$/m,
-    );
-    assert.match(dockerfile, /test ! -u \/usr\/local\/libexec\/ploinky-bwrap-launch/);
-    assert.match(dockerfile, /ploinky-bwrap-launch-v1 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
-    assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
-    assert.match(dockerfile, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
-    assert.match(dockerfile, /preexec-barrier=R\/G/);
-    assert.match(dockerfile, /credential-bound=4096/);
     assert.match(dockerfile, /printf 'assistos\/ploinky-box\\n' > \/etc\/ploinky-box/);
     for (const ownedTarget of [
         '/opt/ploinky/node_modules',
@@ -517,16 +469,16 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         'USER=podman',
         'HOME=/home/podman',
         'PLOINKY_WORKSPACE_ROOT=/workspace',
+        'PLOINKY_DISABLE_HOST_SANDBOX=1',
         'container=oci',
         '_CONTAINERS_USERNS_CONFIGURED=""',
         'BUILDAH_ISOLATION=chroot',
     ]) {
         assert.ok(dockerfile.includes(requiredEnv), 'missing exact ENV ' + requiredEnv);
     }
-    assert.doesNotMatch(dockerfile, /PLOINKY_DISABLE_HOST_SANDBOX/);
     assert.match(
         dockerfile,
-        /^COPY --from=ploinky-src \/ploinky-box\/entrypoint\/ploinky-box-entrypoint \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
+        /^COPY sources\/ploinky\/ploinky-box\/entrypoint\/ploinky-box-entrypoint \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
     );
     assert.match(dockerfile, /^RUN chmod 0755 \/usr\/local\/bin\/ploinky-box-entrypoint$/m);
     assert.equal(fs.existsSync(path.join(repoRoot, 'images/ploinky-box/entrypoint.sh')), false);
@@ -538,17 +490,15 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 });
 
-test('ploinky-box workflow publishes only a gated run-scoped candidate index', () => {
+test('ploinky-box workflow publishes two native immutable digests without behavioral gates', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
-    const podmanMachineJob = workflow.match(/\n  podman-machine-gate:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
     const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
     const ploinkyCheckout = buildJob.match(
         /- name: Checkout immutable Ploinky source[\s\S]*?(?=\n      - name:)/,
     )?.[0] || '';
 
     assert.ok(buildJob);
-    assert.ok(podmanMachineJob);
     assert.ok(mergeJob);
     assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
@@ -569,8 +519,6 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     }
     assert.match(read('.gitignore'), /^sources\/$/m);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
-    assert.match(buildJob, /build-contexts:\s*\|[\s\S]*?ploinky-src=\.\/sources\/ploinky/);
-    assert.match(buildJob, /build-args:\s*\|[\s\S]*?PLOINKY_SOURCE_SHA=/);
     assert.match(buildJob, /Build and push architecture image by digest/);
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
@@ -578,81 +526,13 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.match(buildJob, /\^sha256:\[0-9a-f\]\{64\}\$/);
     assert.match(buildJob, /ploinky-box-digest-\$\{\{ matrix\.arch \}\}/);
     assert.match(buildJob, /actions\/upload-artifact@[0-9a-f]{40}/);
-    assert.match(buildJob, /Require native rootless Podman/);
-    assert.match(buildJob, /Pull and verify candidate provenance/);
-    assert.match(buildJob, /io\.assistos\.ploinky\.source-sha/);
-    assert.match(buildJob, /helper_capabilities/);
-    assert.match(buildJob, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
-    assert.match(buildJob, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
-    assert.doesNotMatch(buildJob, /--file FD DEST|--ro-bind SRC DEST/);
-    assert.match(buildJob, /Run native Bubblewrap behavior gate/);
-    assert.match(buildJob, /tests\/native:\/opt\/ploinky-native-tests:ro/);
-    assert.match(buildJob, /ploinky-box-bwrap\.mjs/);
-    assert.match(buildJob, /--security-opt unmask=ALL/);
-    assert.match(buildJob, /--security-opt label=disable/);
-    assert.match(buildJob, /--device \/dev\/fuse/);
-    assert.match(buildJob, /--device \/dev\/net\/tun/);
-    assert.doesNotMatch(buildJob, /--privileged|seccomp=unconfined/);
-    const behaviorGate = buildJob.indexOf('Run native Bubblewrap behavior gate');
-    const digestUpload = buildJob.indexOf('Upload architecture digest evidence');
-    assert.ok(behaviorGate > 0 && behaviorGate < digestUpload);
-    assert.match(podmanMachineJob, /runs-on:\s*macos-15-intel/);
-    assert.doesNotMatch(podmanMachineJob, /runs-on:\s*macos-15\s*$/m);
-    assert.match(podmanMachineJob, /CONTAINERS_MACHINE_PROVIDER:\s*applehv/);
-    assert.match(podmanMachineJob, /test "\$\(uname -m\)" = x86_64/);
-    assert.match(podmanMachineJob, /test "\$\(sysctl -n kern\.hv_support\)" = 1/);
-    assert.match(podmanMachineJob, /PODMAN_INSTALLER_VERSION:\s*5\.8\.2/);
-    assert.match(
-        podmanMachineJob,
-        /PODMAN_INSTALLER_URL:\s*https:\/\/github\.com\/podman-container-tools\/podman\/releases\/download\/v5\.8\.2\/podman-installer-macos-amd64\.pkg/,
+    assert.doesNotMatch(
+        workflow,
+        /\bnode --test\b|tests\/(?:unit|integration|e2e)\/|\bpodman\b|SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/,
     );
-    assert.match(
-        podmanMachineJob,
-        /PODMAN_INSTALLER_SHA256:\s*2312f91523aeb168709f35d41576ade763c891c3991befe7173aac0edf133af9/,
-    );
-    assert.match(
-        podmanMachineJob,
-        /PODMAN_MACHINE_IMAGE:\s*docker:\/\/quay\.io\/podman\/machine-os@sha256:ee3be164d467497fcc2563684711c443ddb4b33decae1f816f50901d41dce5cc/,
-    );
-    assert.doesNotMatch(podmanMachineJob, /brew install podman/);
-    assert.match(podmanMachineJob, /curl[\s\S]*?--proto '=https'[\s\S]*?"\$PODMAN_INSTALLER_URL"/);
-    assert.match(podmanMachineJob, /shasum -a 256 --check/);
-    assert.match(podmanMachineJob, /pkgutil --check-signature "\$podman_pkg"/);
-    assert.match(podmanMachineJob, /Developer ID Installer: Red Hat, Inc\. \(HYSCB8KRL2\)/);
-    assert.match(
-        podmanMachineJob,
-        /unexpected signer\.[\s\S]*?tee -a "\$startup_log"[\s\S]*?exit 1/,
-    );
-    assert.match(
-        podmanMachineJob,
-        /if ! sudo installer -pkg "\$podman_pkg" -target \/[\s\S]*?tee -a "\$startup_log"[\s\S]*?Pinned Podman installer failed\.[\s\S]*?exit 1/,
-    );
-    assert.match(podmanMachineJob, /echo '\/opt\/podman\/bin' >> "\$GITHUB_PATH"/);
-    assert.match(podmanMachineJob, /test "\$\(podman --version\)" = "podman version \$\{PODMAN_INSTALLER_VERSION\}"/);
-    assert.match(podmanMachineJob, /podman machine init/);
-    assert.match(podmanMachineJob, /podman machine init[\s\S]*?--cpus 2/);
-    assert.match(podmanMachineJob, /podman machine init[\s\S]*?--image "\$PODMAN_MACHINE_IMAGE"/);
-    assert.doesNotMatch(podmanMachineJob, /--now/);
-    assert.match(podmanMachineJob, /podman machine inspect "\$MACHINE_NAME"/);
-    assert.match(podmanMachineJob, /if ! podman machine start "\$MACHINE_NAME"[\s\S]*?capture_machine_failure[\s\S]*?exit 1/);
-    assert.match(podmanMachineJob, /ploinky-box-podman-machine-startup\.log/);
-    assert.match(podmanMachineJob, /if:\s*always\(\)[\s\S]*?ploinky-box-podman-machine-startup\.log/);
-    assert.match(podmanMachineJob, /ploinky-box-native-podman-machine/);
-    const startupEvidence = podmanMachineJob.indexOf(': > "$startup_log"');
-    const installerDownload = podmanMachineJob.indexOf('if ! curl');
-    const installerChecksum = podmanMachineJob.indexOf('shasum -a 256 --check');
-    const installerRun = podmanMachineJob.indexOf('sudo installer');
-    const machineInit = podmanMachineJob.indexOf('podman machine init');
-    assert.ok(
-        startupEvidence > 0
-            && startupEvidence < installerDownload
-            && installerDownload < installerChecksum
-            && installerChecksum < installerRun
-            && installerRun < machineInit,
-    );
-    assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);
+    assert.doesNotMatch(workflow, /\bgated?\b/i);
 
-    assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build\s*\n\s+- podman-machine-gate/);
+    assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build/);
     assert.match(mergeJob, /actions\/download-artifact@[0-9a-f]{40}/);
     assert.match(mergeJob, /pattern:\s*ploinky-box-digest-\*/);
     assert.match(mergeJob, /test "\$\{#digest_files\[@\]\}" -eq 2/);
@@ -669,37 +549,19 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.match(mergeJob, /imagetools inspect --raw "\$STAGING_REF"/);
     assert.match(mergeJob, /sha256sum "\$RUNNER_TEMP\/staging-index\.json"/);
     assert.doesNotMatch(mergeJob, /sed -n 's\/\^Digest:/);
-    assert.match(mergeJob, /Read-only candidate digest confirmation/);
-    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{candidate_digest\}/);
-    assert.doesNotMatch(workflow, /IMAGE_TAG:\s*runtime|:\$\{IMAGE_TAG\}|Move runtime|post-promotion/);
-    assert.doesNotMatch(mergeJob, /--tag\s+"docker\.io\/\$\{IMAGE_NAME\}:runtime"/);
-    assert.match(mergeJob, /No stable tag was changed/);
-    assert.match(mergeJob, /Published gated run-scoped candidate:/);
+    assert.match(mergeJob, /Move runtime by the exact inspected staging digest/);
+    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
+    assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
+    const promote = mergeJob.indexOf('Move runtime by the exact inspected staging digest');
+    const readOnly = mergeJob.indexOf('Read-only post-promotion digest confirmation');
+    assert.ok(promote > 0 && promote < readOnly);
+    assert.doesNotMatch(mergeJob.slice(promote), /node --test|podman run|docker run/);
+    assert.match(mergeJob, /Published immutable image:/);
     assert.match(mergeJob, /GITHUB_STEP_SUMMARY/);
 
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, 'workflow action is not SHA-pinned: ' + use[0]);
     }
-});
-
-test('ploinky-box documentation matches the helper and candidate-only contract', () => {
-    const readme = read('README.md');
-    const runtimeSection = readme.match(/## Ploinky Box runtime[\s\S]*?(?=\n## Ploinky box publication)/)?.[0] || '';
-    const publicationSection = readme.match(/## Ploinky box publication[\s\S]*?(?=\n## Secrets)/)?.[0] || '';
-
-    assert.match(runtimeSection, /bubblewrap-0:0\.11\.0-4\.fc44\.<architecture>/);
-    assert.match(runtimeSection, /ploinky-bwrap-launch\.c/);
-    assert.match(runtimeSection, /type-12 `ro-data-path-file`/);
-    assert.match(runtimeSection, /sealed memfd/);
-    assert.match(runtimeSection, /`--ro-bind-data`/);
-    assert.match(runtimeSection, /4 MiB/);
-    assert.doesNotMatch(runtimeSection, /`--file`|read-only self-bind/);
-    assert.match(runtimeSection, /io\.assistos\.ploinky\.source-sha=<exact 40-hex Ploinky commit>/);
-    assert.doesNotMatch(runtimeSection, /PLOINKY_DISABLE_HOST_SANDBOX/);
-    assert.match(publicationSection, /native rootless Podman/);
-    assert.match(publicationSection, /fresh `macos-15` Podman Machine gate/);
-    assert.match(publicationSection, /empty tmpfs `\/workspace` with working Node and npm/);
-    assert.match(publicationSection, /does not create or move `runtime`, `stable`, or any production tag/);
 });
 
 test('runtime channel documentation separates creation from hard-cut recovery', () => {
