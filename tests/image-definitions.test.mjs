@@ -43,6 +43,9 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     const workflow = read('.github/workflows/publish-ploinky-node-image.yml');
     const dockerfile = read('images/ploinky-node/Dockerfile');
     const nativeGate = read('tests/native/ploinky-node-bwrap.mjs');
+    const waitForExit = nativeGate.match(
+        /function waitForExit[\s\S]*?(?=\n}\n\nfunction waitForBarrier)/,
+    )?.[0] || '';
 
     assert.match(
         dockerfile,
@@ -145,6 +148,9 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     assert.match(nativeGate, /containerNativeHome\(\)/);
     assert.match(nativeGate, /fs\.readFileSync\('\/root\/provider-state\.txt'/);
     assert.match(nativeGate, /npm:/);
+    assert.ok(waitForExit);
+    assert.match(waitForExit, /child\.once\('close'/);
+    assert.doesNotMatch(waitForExit, /child\.once\('exit'/);
 });
 
 test('onlyoffice-agent workflow layers Node onto the standard Document Server image', () => {

@@ -60,7 +60,7 @@ function waitForExit(child, timeoutMs = 10_000) {
             clearTimeout(timer);
             reject(error);
         });
-        child.once('exit', (code, signal) => {
+        child.once('close', (code, signal) => {
             clearTimeout(timer);
             resolve({ code, signal });
         });

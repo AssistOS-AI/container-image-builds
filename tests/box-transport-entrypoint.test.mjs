@@ -55,6 +55,9 @@ test('publication workflow gates candidate publication on native Bubblewrap beha
 
 test('native Bubblewrap gate covers helper HOME ordering, empty readiness, and owned signals', () => {
     const nativeGate = read('tests/native/ploinky-box-bwrap.mjs');
+    const waitForExit = nativeGate.match(
+        /function waitForExit[\s\S]*?(?=\n}\n\nfunction waitForPath)/,
+    )?.[0] || '';
     const providerDescriptor = nativeGate.match(
         /function helperLaunchDescriptor[\s\S]*?(?=\n}\n\nconst EMPTY_READINESS_SCRIPT)/,
     )?.[0] || '';
@@ -118,6 +121,9 @@ test('native Bubblewrap gate covers helper HOME ordering, empty readiness, and o
     assert.match(nativeGate, /identity\.argv\.includes\('\/workspace\/project\/real-provider\.mjs'\)/);
     assert.match(nativeGate, /signalOwnedProvider\(child\.pid, provider\)/);
     assert.doesNotMatch(nativeGate, /process\.kill\(-1,/);
+    assert.ok(waitForExit);
+    assert.match(waitForExit, /child\.once\('close'/);
+    assert.doesNotMatch(waitForExit, /child\.once\('exit'/);
 });
 
 test('Box image and reproduction workflow bind the source label to the immutable checkout', () => {
