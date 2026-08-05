@@ -82,6 +82,7 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     assert.match(dockerfile, /test -z "\$\(getcap \/usr\/local\/libexec\/ploinky-bwrap-launch\)"/);
     assert.match(dockerfile, /ploinky-bwrap-launch-v2 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
     assert.match(dockerfile, /protocol=2 descriptor-fd=3/);
+    assert.match(dockerfile, /task-broker-transport=type13-sealed-memfd-ro-bind-data-0400/);
     assert.match(dockerfile, /path-resolution=openat2-beneath-no-magiclinks-no-symlinks/);
     assert.match(dockerfile, /bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms/);
     assert.match(dockerfile, /home-sources=sandbox-workspace-v2,container-native/);
@@ -590,6 +591,7 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.match(dockerfile, /protocol=2 descriptor-fd=3/);
     assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
     assert.match(dockerfile, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(dockerfile, /task-broker-transport=type13-sealed-memfd-ro-bind-data-0400/);
     assert.match(dockerfile, /home-sources=sandbox-workspace-v2,container-native/);
     assert.match(dockerfile, /home-marker=ploinky-home-v2-schema-2/);
     assert.match(dockerfile, /home-revalidation=post-barrier-G/);
@@ -692,6 +694,7 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.match(buildJob, /protocol=2 descriptor-fd=3/);
     assert.match(buildJob, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
     assert.match(buildJob, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(buildJob, /task-broker-transport=type13-sealed-memfd-ro-bind-data-0400/);
     assert.match(buildJob, /home-sources=sandbox-workspace-v2,container-native/);
     assert.match(buildJob, /home-marker=ploinky-home-v2-schema-2/);
     assert.match(buildJob, /home-revalidation=post-barrier-G/);

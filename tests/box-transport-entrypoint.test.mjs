@@ -23,6 +23,7 @@ test('ploinky-box image consumes only the canonical Box entrypoint source', () =
     assert.match(workflow, /path:\s*sources\/ploinky/);
     assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
     assert.match(dockerfile, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(dockerfile, /task-broker-transport=type13-sealed-memfd-ro-bind-data-0400/);
     assert.match(dockerfile, /home-sources=sandbox-workspace-v2,container-native/);
     assert.match(dockerfile, /home-marker=ploinky-home-v2-schema-2/);
     assert.match(dockerfile, /home-revalidation=post-barrier-G/);
@@ -113,6 +114,7 @@ test('native Bubblewrap gate covers helper HOME ordering, empty readiness, and o
     assert.match(nativeGate, /source-to-target remap/);
     assert.match(nativeGate, /sources must have distinct content/);
     assert.match(nativeGate, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(nativeGate, /task-broker-transport=type13-sealed-memfd-ro-bind-data-0400/);
     assert.match(nativeGate, /spawnSync\('\/usr\/local\/bin\/npm', \['--version'\]/);
     assert.match(nativeGate, /appendFileSync\('\/usr\/local\/bin\/node'/);
     assert.match(nativeGate, /helperReadiness\.namespaces\[name\][\s\S]*?outerNamespaces\[name\]/);

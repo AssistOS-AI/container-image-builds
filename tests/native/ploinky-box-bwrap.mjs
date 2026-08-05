@@ -988,7 +988,7 @@ assert.equal(evidence.helper, `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA}`
 const helperCapabilities = run(HELPER, ['--capabilities']);
 assert.equal(
     helperCapabilities,
-    `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA} protocol=2 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data home-sources=sandbox-workspace-v2,container-native home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G preexec-barrier=R/G credential-bound=4096`,
+    `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA} protocol=2 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data task-broker-transport=type13-sealed-memfd-ro-bind-data-0400 home-sources=sandbox-workspace-v2,container-native home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G preexec-barrier=R/G credential-bound=4096`,
 );
 assert.equal(run('stat', ['-c', '%a:%u:%g', HELPER]), '755:0:0');
 assert.equal(run('getcap', [HELPER]), '');

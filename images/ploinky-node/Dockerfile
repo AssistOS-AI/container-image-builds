@@ -72,7 +72,7 @@ RUN test -x /usr/local/libexec/ploinky-bwrap-launch \
     && test "$(stat -c '%a:%u:%g' /usr/local/libexec/ploinky-bwrap-launch)" = '755:0:0' \
     && test -z "$(getcap /usr/local/libexec/ploinky-bwrap-launch)" \
     && test "$(/usr/local/libexec/ploinky-bwrap-launch --version)" = "ploinky-bwrap-launch-v2 source-sha=${PLOINKY_SOURCE_SHA}" \
-    && test "$(/usr/local/libexec/ploinky-bwrap-launch --capabilities)" = "ploinky-bwrap-launch-v2 source-sha=${PLOINKY_SOURCE_SHA} protocol=2 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data home-sources=sandbox-workspace-v2,container-native home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G preexec-barrier=R/G credential-bound=4096" \
+    && test "$(/usr/local/libexec/ploinky-bwrap-launch --capabilities)" = "ploinky-bwrap-launch-v2 source-sha=${PLOINKY_SOURCE_SHA} protocol=2 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data task-broker-transport=type13-sealed-memfd-ro-bind-data-0400 home-sources=sandbox-workspace-v2,container-native home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G preexec-barrier=R/G credential-bound=4096" \
     && install -d -m 0700 -o 1000 -g 1000 /workspace /root
 
 LABEL io.assistos.ploinky.source-sha=$PLOINKY_SOURCE_SHA
