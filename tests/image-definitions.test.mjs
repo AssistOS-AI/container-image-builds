@@ -77,9 +77,13 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     );
     assert.match(dockerfile, /test ! -u \/usr\/local\/libexec\/ploinky-bwrap-launch/);
     assert.match(dockerfile, /test -z "\$\(getcap \/usr\/local\/libexec\/ploinky-bwrap-launch\)"/);
-    assert.match(dockerfile, /ploinky-bwrap-launch-v1 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
+    assert.match(dockerfile, /ploinky-bwrap-launch-v2 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
+    assert.match(dockerfile, /protocol=2 descriptor-fd=3/);
     assert.match(dockerfile, /path-resolution=openat2-beneath-no-magiclinks-no-symlinks/);
     assert.match(dockerfile, /bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms/);
+    assert.match(dockerfile, /home-sources=sandbox-workspace-v2,container-native/);
+    assert.match(dockerfile, /home-marker=ploinky-home-v2-schema-2/);
+    assert.match(dockerfile, /home-revalidation=post-barrier-G/);
     assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.source-sha=\$PLOINKY_SOURCE_SHA$/m);
     assert.doesNotMatch(dockerfile, /\n\s+bubblewrap \\/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
@@ -103,9 +107,15 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     assert.match(workflow, /name-canonical=true/);
     assert.match(workflow, /io\.assistos\.ploinky\.source-sha/);
     assert.match(workflow, /ploinky-bwrap-launch/);
+    assert.match(workflow, /ploinky-bwrap-launch-v2 source-sha=\$\{SOURCE_SHA\}/);
+    assert.match(workflow, /protocol=2 descriptor-fd=3/);
+    assert.match(workflow, /home-sources=sandbox-workspace-v2,container-native/);
+    assert.match(workflow, /home-marker=ploinky-home-v2-schema-2/);
+    assert.match(workflow, /home-revalidation=post-barrier-G/);
     assert.match(workflow, /ploinky-node-bwrap\.mjs/);
     assert.match(workflow, /--cap-drop=all/);
     assert.match(workflow, /--security-opt=no-new-privileges/);
+    assert.doesNotMatch(workflow, /--tmpfs \/root:[^\n]*(?:uid|gid)=/);
     assert.match(workflow, /pattern:\s*ploinky-node-digest-\*/);
     assert.match(workflow, /test "\$\{#digest_files\[@\]\}" -eq 2/);
     assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
@@ -120,7 +130,7 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     }
     assert.match(dockerfile, /\bffmpeg\b/);
     assert.match(dockerfile, /\bpython3\b/);
-    assert.match(dockerfile, /install -d -m 0700 -o 1000 -g 1000 \/workspace/);
+    assert.match(dockerfile, /install -d -m 0700 -o 1000 -g 1000 \/workspace \/root/);
     assert.match(dockerfile, /^USER 1000:1000$/m);
     assert.doesNotMatch(workflow, /--tmpfs \/workspace:[^\n]*(?:uid|gid)=/);
     assert.match(nativeGate, /--wait-for-signal/);
@@ -131,6 +141,9 @@ test('ploinky-node carries the canonical fd-safe provider launcher from immutabl
     assert.match(nativeGate, /CapBnd/);
     assert.match(nativeGate, /NoNewPrivs/);
     assert.match(nativeGate, /postOpenSymlinkSwap/);
+    assert.match(nativeGate, /header\.write\('PLBWLP02'/);
+    assert.match(nativeGate, /containerNativeHome\(\)/);
+    assert.match(nativeGate, /fs\.readFileSync\('\/root\/provider-state\.txt'/);
     assert.match(nativeGate, /npm:/);
 });
 
@@ -567,9 +580,13 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         /^COPY --from=bwrap-launch-builder \/build\/ploinky-bwrap-launch \/usr\/local\/libexec\/ploinky-bwrap-launch$/m,
     );
     assert.match(dockerfile, /test ! -u \/usr\/local\/libexec\/ploinky-bwrap-launch/);
-    assert.match(dockerfile, /ploinky-bwrap-launch-v1 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
+    assert.match(dockerfile, /ploinky-bwrap-launch-v2 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
+    assert.match(dockerfile, /protocol=2 descriptor-fd=3/);
     assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
     assert.match(dockerfile, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(dockerfile, /home-sources=sandbox-workspace-v2,container-native/);
+    assert.match(dockerfile, /home-marker=ploinky-home-v2-schema-2/);
+    assert.match(dockerfile, /home-revalidation=post-barrier-G/);
     assert.match(dockerfile, /preexec-barrier=R\/G/);
     assert.match(dockerfile, /credential-bound=4096/);
     assert.match(dockerfile, /printf 'assistos\/ploinky-box\\n' > \/etc\/ploinky-box/);
@@ -665,8 +682,13 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.match(buildJob, /Pull and verify candidate provenance/);
     assert.match(buildJob, /io\.assistos\.ploinky\.source-sha/);
     assert.match(buildJob, /helper_capabilities/);
+    assert.match(buildJob, /ploinky-bwrap-launch-v2 source-sha=\$\{SOURCE_SHA\}/);
+    assert.match(buildJob, /protocol=2 descriptor-fd=3/);
     assert.match(buildJob, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
     assert.match(buildJob, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(buildJob, /home-sources=sandbox-workspace-v2,container-native/);
+    assert.match(buildJob, /home-marker=ploinky-home-v2-schema-2/);
+    assert.match(buildJob, /home-revalidation=post-barrier-G/);
     assert.doesNotMatch(buildJob, /--file FD DEST|--ro-bind SRC DEST/);
     assert.match(buildJob, /Run native Bubblewrap behavior gate/);
     assert.match(buildJob, /tests\/native:\/opt\/ploinky-native-tests:ro/);
@@ -772,6 +794,11 @@ test('ploinky-box documentation matches the helper and candidate-only contract',
 
     assert.match(runtimeSection, /bubblewrap-0:0\.11\.0-4\.fc44\.<architecture>/);
     assert.match(runtimeSection, /ploinky-bwrap-launch\.c/);
+    assert.match(runtimeSection, /protocol 2/);
+    assert.match(runtimeSection, /`sandbox-workspace-v2` and `container-native`/);
+    assert.match(runtimeSection, /canonical schema-2[\s\S]*?`ploinky-home-v2` marker/);
+    assert.match(runtimeSection, /revalidated after the pre-exec release byte/);
+    assert.match(runtimeSection, /pinned `\/root` directory/);
     assert.match(runtimeSection, /type-12 `ro-data-path-file`/);
     assert.match(runtimeSection, /sealed memfd/);
     assert.match(runtimeSection, /`--ro-bind-data`/);
@@ -779,6 +806,11 @@ test('ploinky-box documentation matches the helper and candidate-only contract',
     assert.doesNotMatch(runtimeSection, /`--file`|read-only self-bind/);
     assert.match(runtimeSection, /io\.assistos\.ploinky\.source-sha=<exact 40-hex Ploinky commit>/);
     assert.doesNotMatch(runtimeSection, /PLOINKY_DISABLE_HOST_SANDBOX/);
+    assert.equal(
+        (readme.match(/source_ref="\$\(git -C \.\.\/Ploinky rev-parse HEAD\)"/g) || []).length,
+        2,
+    );
+    assert.equal((readme.match(/--ref ploinky-bwrap/g) || []).length, 2);
     assert.match(publicationSection, /native rootless Podman/);
     assert.match(publicationSection, /fresh `macos-15` Podman Machine gate/);
     assert.match(publicationSection, /empty tmpfs `\/workspace` with working Node and npm/);

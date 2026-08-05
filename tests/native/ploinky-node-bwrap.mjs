@@ -11,11 +11,14 @@ const NATIVE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_SOURCE = path.join(NATIVE_DIR, 'fixtures', 'real-provider.mjs');
 const WORKSPACE = '/workspace';
 const HELPER_CAPABILITIES =
-    `ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA} protocol=1 descriptor-fd=3 `
+    `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA} protocol=2 descriptor-fd=3 `
     + 'path-resolution=openat2-beneath-no-magiclinks-no-symlinks '
     + 'bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms '
     + 'typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file '
-    + 'ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096';
+    + 'ro-data-path-hardening=sealed-memfd-ro-bind-data '
+    + 'home-sources=sandbox-workspace-v2,container-native '
+    + 'home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G '
+    + 'preexec-barrier=R/G credential-bound=4096';
 
 function run(command, args, options = {}) {
     const result = spawnSync(command, args, {
@@ -41,7 +44,7 @@ function encodeRecord(type, payload) {
 
 function encodeDescriptor(records) {
     const header = Buffer.alloc(16);
-    header.write('PLBWLP01', 0, 'ascii');
+    header.write('PLBWLP02', 0, 'ascii');
     header.writeUInt32BE(records.length, 8);
     return Buffer.concat([header, ...records]);
 }
@@ -49,7 +52,7 @@ function encodeDescriptor(records) {
 const arg = (value) => encodeRecord(1, value);
 const workspace = (access = 1) => encodeRecord(2, Buffer.from([access]));
 const workdir = (relativePath) => encodeRecord(3, relativePath);
-const home = (relativePath) => encodeRecord(4, relativePath);
+const containerNativeHome = () => encodeRecord(4, Buffer.from([2]));
 const directory = (target) => encodeRecord(6, target);
 const tmpfs = (target) => encodeRecord(7, target);
 const proc = () => encodeRecord(8, Buffer.alloc(0));
@@ -103,7 +106,7 @@ function providerDescriptor({ signalMode = false } = {}) {
         tmpfs('/workspace/.data'),
         workdir('project'),
         directory('/home'),
-        home('.data/native-helper'),
+        containerNativeHome(),
         preexecBarrier(4, 5),
         arg('--setenv'), arg('HOME'), arg('/home/agent'),
         arg('--setenv'), arg('PATH'), arg('/usr/local/bin:/usr/bin'),
@@ -284,6 +287,9 @@ assert.match(SOURCE_SHA, /^[0-9a-f]{40}$/, 'PLOINKY_SOURCE_SHA must be an exact 
 assert.equal(process.getuid(), 1000, 'coding-image native gate must run as UID 1000');
 assert.equal(process.getgid(), 1000, 'coding-image native gate must run as GID 1000');
 assert.equal(fs.statSync(WORKSPACE).uid, 1000, '/workspace must be owned by the service user');
+assert.equal(fs.statSync('/root').uid, 1000, 'container-native HOME must be owned by the service user');
+assert.equal(fs.statSync('/root').gid, 1000, 'container-native HOME must use the service group');
+assert.equal(fs.statSync('/root').mode & 0o777, 0o700, 'container-native HOME must use mode 0700');
 
 const expectedArchitecture = process.arch === 'x64' ? 'amd64' : process.arch;
 assert.ok(['amd64', 'arm64'].includes(expectedArchitecture), `unsupported architecture ${process.arch}`);
@@ -297,7 +303,7 @@ for (const requiredOption of ['--bind-fd', '--ro-bind-fd', '--ro-bind-data', '--
 }
 assert.equal(run('stat', ['-c', '%a:%u:%g', '/usr/bin/bwrap']), '755:0:0');
 assert.equal(run('getcap', ['/usr/bin/bwrap']), '');
-assert.equal(run(HELPER, ['--version']), `ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA}`);
+assert.equal(run(HELPER, ['--version']), `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA}`);
 assert.equal(run(HELPER, ['--capabilities']), HELPER_CAPABILITIES);
 assert.equal(run('stat', ['-c', '%a:%u:%g', HELPER]), '755:0:0');
 assert.equal(run('getcap', [HELPER]), '');
@@ -325,7 +331,7 @@ assert.equal(
 fs.mkdirSync(path.join(WORKSPACE, 'project'), { recursive: true, mode: 0o700 });
 fs.mkdirSync(path.join(WORKSPACE, 'sibling'), { mode: 0o700 });
 fs.mkdirSync(path.join(WORKSPACE, '.ploinky'), { mode: 0o700 });
-fs.mkdirSync(path.join(WORKSPACE, '.data', 'native-helper'), { recursive: true, mode: 0o700 });
+fs.mkdirSync(path.join(WORKSPACE, '.data'), { mode: 0o700 });
 fs.writeFileSync(path.join(WORKSPACE, 'project', 'identity.txt'), 'retained\n', { mode: 0o600 });
 fs.writeFileSync(path.join(WORKSPACE, '.ploinky', 'control-secret'), 'hidden\n', { mode: 0o600 });
 fs.writeFileSync(path.join(WORKSPACE, '.data', 'other-home-secret'), 'hidden\n', { mode: 0o600 });
@@ -371,7 +377,7 @@ assert.equal(
 assert.equal(fs.existsSync(path.join(WORKSPACE, 'project', 'provider-write.txt')), false);
 assert.equal(fs.existsSync(path.join(WORKSPACE, 'sibling', 'forbidden.txt')), false);
 assert.equal(
-    fs.readFileSync(path.join(WORKSPACE, '.data', 'native-helper', 'provider-state.txt'), 'utf8'),
+    fs.readFileSync('/root/provider-state.txt', 'utf8'),
     'provider home state\n',
 );
 

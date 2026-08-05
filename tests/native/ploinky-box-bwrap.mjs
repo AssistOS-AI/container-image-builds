@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 const EXPECTED_BWRAP_NEVRA = 'bubblewrap-0:0.11.0-4.fc44';
 const HELPER = '/usr/local/libexec/ploinky-bwrap-launch';
 const SOURCE_SHA = process.env.PLOINKY_SOURCE_SHA || '';
+const SANDBOX_HOME_GENERATION = 'native-gate';
+const HELPER_HOME_KEY = 'native-helper.sandbox-v2';
+const READINESS_HOME_KEY = 'native-readiness.sandbox-v2';
 const NATIVE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const fixtureSource = path.join(NATIVE_DIR, 'fixtures', 'real-provider.mjs');
 const PRODUCTION_READ_ONLY_DATA_PATHS = Object.freeze([
@@ -23,6 +26,7 @@ const evidence = {
     bwrap: null,
     helper: null,
     helperFailures: null,
+    helperHomeRevalidation: null,
     helperProvider: null,
     helperReadiness: null,
     node: process.version,
@@ -193,7 +197,7 @@ function encodeRecord(type, payload) {
 
 function encodeDescriptor(records) {
     const header = Buffer.alloc(16);
-    header.write('PLBWLP01', 0, 'ascii');
+    header.write('PLBWLP02', 0, 'ascii');
     header.writeUInt32BE(records.length, 8);
     return Buffer.concat([header, ...records]);
 }
@@ -210,8 +214,27 @@ function workdir(relativePath) {
     return encodeRecord(3, relativePath);
 }
 
-function home(relativePath) {
-    return encodeRecord(4, relativePath);
+function sandboxHome(homeKey) {
+    assert.match(homeKey, /^[A-Za-z0-9._-]+\.sandbox-v2$/);
+    return encodeRecord(4, Buffer.concat([Buffer.from([1]), Buffer.from(homeKey)]));
+}
+
+function canonicalHomeMarker(homeKey) {
+    return `${JSON.stringify({
+        abi: 'ploinky-home-v2',
+        createdByGeneration: SANDBOX_HOME_GENERATION,
+        homeKey,
+        schemaVersion: 2,
+    })}\n`;
+}
+
+function createSandboxHome(homePath, homeKey) {
+    fs.mkdirSync(homePath, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+        path.join(homePath, '.ploinky-home-abi.json'),
+        canonicalHomeMarker(homeKey),
+        { mode: 0o600 },
+    );
 }
 
 function readOnlyDirectory(source, target) {
@@ -306,7 +329,7 @@ function helperLaunchDescriptor({ signalMode = false } = {}) {
         tmpfs('/workspace/.data'),
         workdir('project'),
         directory('/home'),
-        home('.data/native-helper'),
+        sandboxHome(HELPER_HOME_KEY),
         preexecBarrier(5, 6),
         arg('--setenv'), arg('HOME'), arg('/home/agent'),
         arg('--setenv'), arg('PATH'), arg('/usr/local/bin:/usr/bin'),
@@ -488,7 +511,7 @@ function helperEmptyReadinessDescriptor() {
         tmpfs('/workspace'),
         directory('/workspace/readiness'),
         directory('/home'),
-        home('.data/native-readiness'),
+        sandboxHome(READINESS_HOME_KEY),
         arg('--setenv'), arg('HOME'), arg('/home/agent'),
         arg('--setenv'), arg('PATH'), arg('/usr/local/bin:/usr/bin'),
         arg('--chdir'), arg('/workspace/readiness'),
@@ -652,7 +675,7 @@ async function runHelperFailure(descriptor, expectedStatus, expectedCode) {
 async function runHelperEmptyReadinessGate() {
     const canaryPath = '/workspace/phase2-real-workspace-canary';
     const dataRoot = '/workspace/.data';
-    const readinessHome = `${dataRoot}/native-readiness`;
+    const readinessHome = `${dataRoot}/${READINESS_HOME_KEY}`;
     const dataRootExisted = fs.existsSync(dataRoot);
     const pinnedDataPathSources = [];
     for (const mapping of PRODUCTION_READ_ONLY_DATA_PATHS) {
@@ -661,7 +684,7 @@ async function runHelperEmptyReadinessGate() {
     }
     assert.equal(fs.existsSync(canaryPath), false, `readiness canary already exists: ${canaryPath}`);
     assert.equal(fs.existsSync(readinessHome), false, `readiness HOME already exists: ${readinessHome}`);
-    fs.mkdirSync(readinessHome, { recursive: true, mode: 0o700 });
+    createSandboxHome(readinessHome, READINESS_HOME_KEY);
     fs.writeFileSync(canaryPath, 'must remain outside readiness\n', { mode: 0o600 });
     fs.writeFileSync(`${readinessHome}/readiness-home-marker`, 'private readiness home\n', {
         mode: 0o600,
@@ -759,13 +782,79 @@ async function runHelperEmptyReadinessGate() {
     }
 }
 
+async function runHelperHomeMarkerReplacementGate() {
+    const selected = '/workspace/project';
+    const sibling = '/workspace/sibling';
+    const protectedState = '/workspace/.ploinky';
+    const dataRoot = '/workspace/.data';
+    const helperHome = `${dataRoot}/${HELPER_HOME_KEY}`;
+    const markerPath = `${helperHome}/.ploinky-home-abi.json`;
+    const retainedMarkerPath = `${helperHome}/.ploinky-home-abi.retained`;
+    const created = [selected, sibling, protectedState, dataRoot];
+
+    for (const target of created) {
+        assert.equal(fs.existsSync(target), false, `HOME revalidation target already exists: ${target}`);
+    }
+    fs.mkdirSync(selected, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(sibling, { mode: 0o700 });
+    fs.mkdirSync(protectedState, { mode: 0o700 });
+    createSandboxHome(helperHome, HELPER_HOME_KEY);
+    fs.writeFileSync(`${selected}/identity.txt`, 'retained\n', { mode: 0o600 });
+    fs.copyFileSync(fixtureSource, `${selected}/real-provider.mjs`);
+    fs.chmodSync(`${selected}/real-provider.mjs`, 0o500);
+
+    try {
+        const child = spawn(HELPER, [], {
+            env: { PLOINKY_SECRET_CANARY: 'must-not-cross-helper' },
+            stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'],
+        });
+        const transportErrors = [];
+        child.stdio.forEach((stream, index) => {
+            stream?.on('error', (error) => transportErrors.push({ index, code: error.code }));
+        });
+        const output = collectOutput(child);
+        child.stdio[3].end(helperLaunchDescriptor());
+        await waitForPreexecBarrier(child);
+        fs.renameSync(markerPath, retainedMarkerPath);
+        fs.writeFileSync(
+            markerPath,
+            canonicalHomeMarker('wrong-home.sandbox-v2'),
+            { mode: 0o600 },
+        );
+        child.stdio[4].end('{"generation":"native-gate"}\n');
+        child.stdio[6].end('G');
+
+        const result = await waitForExit(child);
+        const captured = output.read();
+        assert.ok(
+            transportErrors.every(({ index, code }) => (
+                (index === 4 || index === 6) && ['ECONNRESET', 'EPIPE'].includes(code)
+            )),
+            `unexpected rejected-launch transport errors: ${JSON.stringify(transportErrors)}`,
+        );
+        assert.equal(result.code, 76, `replaced HOME marker returned ${result.code}: ${captured.stderr}`);
+        assert.match(captured.stderr, /^PLOINKY_HOME_STATE_INCOMPATIBLE:/);
+        assert.equal(fs.existsSync(`${selected}/provider-write.txt`), false);
+        return {
+            code: 'PLOINKY_HOME_STATE_INCOMPATIBLE',
+            exitStatus: result.code,
+            replacement: 'wrong-home-key-new-inode-after-R',
+        };
+    } finally {
+        fs.rmSync(selected, { recursive: true, force: true });
+        fs.rmSync(sibling, { recursive: true, force: true });
+        fs.rmSync(protectedState, { recursive: true, force: true });
+        fs.rmSync(dataRoot, { recursive: true, force: true });
+    }
+}
+
 async function runHelperRetainedInodeGate() {
     const selected = '/workspace/project';
     const retained = '/workspace/retained-after-helper-open';
     const sibling = '/workspace/sibling';
     const protectedState = '/workspace/.ploinky';
     const dataRoot = '/workspace/.data';
-    const helperHome = `${dataRoot}/native-helper`;
+    const helperHome = `${dataRoot}/${HELPER_HOME_KEY}`;
     const canaryPath = '/tmp/ploinky-native-fd-canary';
     const created = [selected, retained, sibling, protectedState, dataRoot];
 
@@ -775,7 +864,7 @@ async function runHelperRetainedInodeGate() {
     fs.mkdirSync(selected, { recursive: true, mode: 0o700 });
     fs.mkdirSync(sibling, { mode: 0o700 });
     fs.mkdirSync(protectedState, { mode: 0o700 });
-    fs.mkdirSync(helperHome, { recursive: true, mode: 0o700 });
+    createSandboxHome(helperHome, HELPER_HOME_KEY);
     fs.writeFileSync(`${selected}/identity.txt`, 'retained\n', { mode: 0o600 });
     fs.writeFileSync(`${protectedState}/control-secret`, 'hidden\n', { mode: 0o600 });
     fs.writeFileSync(`${dataRoot}/other-home-secret`, 'hidden\n', { mode: 0o600 });
@@ -829,7 +918,7 @@ async function runHelperSignalGate() {
     const sibling = '/workspace/sibling';
     const protectedState = '/workspace/.ploinky';
     const dataRoot = '/workspace/.data';
-    const helperHome = `${dataRoot}/native-helper`;
+    const helperHome = `${dataRoot}/${HELPER_HOME_KEY}`;
     const created = [selected, sibling, protectedState, dataRoot];
 
     for (const target of created) {
@@ -838,7 +927,7 @@ async function runHelperSignalGate() {
     fs.mkdirSync(selected, { recursive: true, mode: 0o700 });
     fs.mkdirSync(sibling, { mode: 0o700 });
     fs.mkdirSync(protectedState, { mode: 0o700 });
-    fs.mkdirSync(helperHome, { recursive: true, mode: 0o700 });
+    createSandboxHome(helperHome, HELPER_HOME_KEY);
     fs.writeFileSync(`${selected}/identity.txt`, 'retained\n', { mode: 0o600 });
     fs.writeFileSync(`${protectedState}/control-secret`, 'hidden\n', { mode: 0o600 });
     fs.writeFileSync(`${dataRoot}/other-home-secret`, 'hidden\n', { mode: 0o600 });
@@ -895,11 +984,11 @@ assert.equal(run('stat', ['-c', '%a:%u:%g', '/usr/bin/bwrap']), '755:0:0');
 assert.equal(run('getcap', ['/usr/bin/bwrap']), '');
 
 evidence.helper = run(HELPER, ['--version']);
-assert.equal(evidence.helper, `ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA}`);
+assert.equal(evidence.helper, `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA}`);
 const helperCapabilities = run(HELPER, ['--capabilities']);
 assert.equal(
     helperCapabilities,
-    `ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096`,
+    `ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA} protocol=2 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data home-sources=sandbox-workspace-v2,container-native home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G preexec-barrier=R/G credential-bound=4096`,
 );
 assert.equal(run('stat', ['-c', '%a:%u:%g', HELPER]), '755:0:0');
 assert.equal(run('getcap', [HELPER]), '');
@@ -936,6 +1025,17 @@ helperFailures.push(await runHelperFailure(
     72,
     'PLOINKY_WORKDIR_INVALID',
 ));
+for (const invalidHomePayload of [
+    Buffer.from('.data/legacy-home'),
+    Buffer.from([0xff]),
+    Buffer.from([2, 0]),
+]) {
+    helperFailures.push(await runHelperFailure(
+        encodeDescriptor([encodeRecord(4, invalidHomePayload), arg('--'), arg('/usr/bin/true')]),
+        76,
+        'PLOINKY_HOME_STATE_INCOMPATIBLE',
+    ));
+}
 const symlinkTarget = '/workspace/helper-symlink-target';
 const symlinkPath = '/workspace/helper-symlink';
 fs.mkdirSync(symlinkTarget, { mode: 0o700 });
@@ -959,6 +1059,7 @@ for (const name of ['user', 'mnt', 'pid', 'ipc', 'uts']) {
         `empty-readiness helper inherited the outer ${name} namespace`,
     );
 }
+evidence.helperHomeRevalidation = await runHelperHomeMarkerReplacementGate();
 evidence.helperProvider = await runHelperRetainedInodeGate();
 for (const name of ['user', 'mnt', 'pid', 'ipc', 'uts']) {
     assert.notEqual(

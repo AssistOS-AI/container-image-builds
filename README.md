@@ -127,9 +127,14 @@ The workflow supplies one clean, exact full-SHA Ploinky checkout as an immutable
 BuildKit named context. A builder stage compiles and strips only
 `ploinky-box/native/ploinky-bwrap-launch.c`; no compiler or headers enter the
 runtime image. The helper's version and complete capability line must name the
-same source SHA recorded by the final image label and must advertise protocol 1,
+same source SHA recorded by the final image label and must advertise protocol 2,
 fd-pinned `openat2` resolution, typed filesystem records, the pre-exec barrier,
 the bounded credential transport, and the type-12 `ro-data-path-file` record.
+Protocol 2 exposes only typed `sandbox-workspace-v2` and `container-native`
+HOME sources. Sandbox HOME state requires the canonical schema-2
+`ploinky-home-v2` marker and is revalidated after the pre-exec release byte;
+container HOME is derived from the pinned `/root` directory without accepting
+a caller-supplied path.
 For each record, the helper pins and opens the fixed system file, copies at most
 4 MiB into a sealed memfd, verifies the write/grow/shrink/seal locks, and exposes
 the immutable copy through Bubblewrap `--ro-bind-data` with mode `0444`.
@@ -236,7 +241,8 @@ Do not store Docker Hub token values in repository files.
 ```sh
 gh workflow run publish-ploinky-node-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f image_tag=24-bookworm-tools
+  --ref ploinky-bwrap \
+  -f source_ref="$(git -C ../Ploinky rev-parse HEAD)"
 
 gh workflow run publish-webtty-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -282,7 +288,8 @@ gh workflow run publish-soul-gateway-image.yml \
 
 gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref="$(git -C ../ploinky rev-parse HEAD)"
+  --ref ploinky-bwrap \
+  -f source_ref="$(git -C ../Ploinky rev-parse HEAD)"
 ```
 
 WebTTY publication is a two-step hard cut. The workflow accepts only the

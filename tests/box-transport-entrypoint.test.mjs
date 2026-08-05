@@ -23,6 +23,9 @@ test('ploinky-box image consumes only the canonical Box entrypoint source', () =
     assert.match(workflow, /path:\s*sources\/ploinky/);
     assert.match(dockerfile, /typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file/);
     assert.match(dockerfile, /ro-data-path-hardening=sealed-memfd-ro-bind-data/);
+    assert.match(dockerfile, /home-sources=sandbox-workspace-v2,container-native/);
+    assert.match(dockerfile, /home-marker=ploinky-home-v2-schema-2/);
+    assert.match(dockerfile, /home-revalidation=post-barrier-G/);
     assert.match(dockerfile, /preexec-barrier=R\/G/);
     assert.match(dockerfile, /credential-bound=4096/);
 });
@@ -61,9 +64,20 @@ test('native Bubblewrap gate covers helper HOME ordering, empty readiness, and o
 
     assert.ok(providerDescriptor);
     assert.ok(readinessDescriptor);
-    assert.ok(providerDescriptor.indexOf("directory('/home')") < providerDescriptor.indexOf("home('.data/native-helper')"));
+    assert.match(nativeGate, /const HELPER_HOME_KEY = 'native-helper\.sandbox-v2'/);
+    assert.match(nativeGate, /const READINESS_HOME_KEY = 'native-readiness\.sandbox-v2'/);
+    assert.ok(providerDescriptor.indexOf("directory('/home')") < providerDescriptor.indexOf('sandboxHome(HELPER_HOME_KEY)'));
     assert.ok(readinessDescriptor.indexOf("tmpfs('/workspace')") < readinessDescriptor.indexOf("directory('/workspace/readiness')"));
-    assert.ok(readinessDescriptor.indexOf("directory('/home')") < readinessDescriptor.indexOf("home('.data/native-readiness')"));
+    assert.ok(readinessDescriptor.indexOf("directory('/home')") < readinessDescriptor.indexOf('sandboxHome(READINESS_HOME_KEY)'));
+    assert.match(nativeGate, /header\.write\('PLBWLP02'/);
+    assert.match(nativeGate, /function sandboxHome\(homeKey\)/);
+    assert.match(nativeGate, /\.ploinky-home-abi\.json/);
+    assert.match(nativeGate, /runHelperHomeMarkerReplacementGate/);
+    assert.match(nativeGate, /wrong-home-key-new-inode-after-R/);
+    assert.match(nativeGate, /PLOINKY_HOME_STATE_INCOMPATIBLE/);
+    assert.match(nativeGate, /Buffer\.from\('\.data\/legacy-home'\)/);
+    assert.match(nativeGate, /Buffer\.from\(\[0xff\]\)/);
+    assert.match(nativeGate, /Buffer\.from\(\[2, 0\]\)/);
     assert.match(nativeGate, /function readOnlyDataPath\(source, target\)/);
     assert.match(nativeGate, /return encodeRecord\(12, payload\)/);
     assert.match(providerDescriptor, /\.\.\.productionReadOnlyDataPathRecords\(\)/);

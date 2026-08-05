@@ -131,9 +131,9 @@ jobs:
           test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "$candidate")" = '${{ matrix.platform }}'
           test "$(podman image inspect --format '{{ index .Config.Labels "io.assistos.ploinky.source-sha" }}' "$candidate")" = "$SOURCE_SHA"
           helper_version="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --version)"
-          test "$helper_version" = "ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA}"
+          test "$helper_version" = "ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA}"
           helper_capabilities="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --capabilities)"
-          test "$helper_capabilities" = "ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096"
+          test "$helper_capabilities" = "ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA} protocol=2 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data home-sources=sandbox-workspace-v2,container-native home-marker=ploinky-home-v2-schema-2 home-revalidation=post-barrier-G preexec-barrier=R/G credential-bound=4096"
 
       - name: Run native coding-image Bubblewrap behavior gate
         env:
