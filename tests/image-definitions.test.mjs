@@ -39,20 +39,99 @@ function dockerfileInstructions(dockerfile) {
     return instructions;
 }
 
-test('ploinky-node workflow builds the local image definition', () => {
+test('ploinky-node carries the canonical fd-safe provider launcher from immutable Ploinky source', () => {
     const workflow = read('.github/workflows/publish-ploinky-node-image.yml');
     const dockerfile = read('images/ploinky-node/Dockerfile');
+    const nativeGate = read('tests/native/ploinky-node-bwrap.mjs');
 
-    assert.match(workflow, /images\/ploinky-node/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(
+        dockerfile,
+        /^ARG NODE_BASE=docker\.io\/library\/node:24-bookworm-slim@sha256:[0-9a-f]{64}$/m,
+    );
+    assert.match(dockerfile, /^ARG BUBBLEWRAP_VERSION=0\.8\.0-2\+deb12u1$/m);
+    assert.match(dockerfile, /^ARG PLOINKY_SOURCE_SHA$/m);
+    assert.match(dockerfile, /^FROM \$NODE_BASE AS bwrap-launch-builder$/m);
+    assert.match(
+        dockerfile,
+        /^COPY --from=ploinky-src \/ploinky-box\/native\/ploinky-bwrap-launch\.c \/build\/ploinky-bwrap-launch\.c$/m,
+    );
+    assert.match(dockerfile, /PLOINKY_SOURCE_SHA must be exactly 40 lowercase hexadecimal characters/);
+    assert.match(dockerfile, /-std=c17 -O2 -Wall -Wextra -Werror/);
+    assert.match(dockerfile, /strip --strip-all \/build\/ploinky-bwrap-launch/);
+    assert.match(dockerfile, /"bubblewrap=\$\{BUBBLEWRAP_VERSION\}"/);
+    assert.match(dockerfile, /dpkg-query -W -f='\$\{Package\}=\$\{Version\}' bubblewrap/);
+    for (const requiredOption of [
+        '--bind-fd FD DEST',
+        '--ro-bind-fd FD DEST',
+        '--ro-bind-data FD DEST',
+        '--perms OCTAL',
+    ]) {
+        assert.ok(
+            dockerfile.includes(`grep -F -- '${requiredOption}'`),
+            `missing exact ploinky-node Bubblewrap feature probe ${requiredOption}`,
+        );
+    }
+    assert.match(
+        dockerfile,
+        /^COPY --from=bwrap-launch-builder \/build\/ploinky-bwrap-launch \/usr\/local\/libexec\/ploinky-bwrap-launch$/m,
+    );
+    assert.match(dockerfile, /test ! -u \/usr\/local\/libexec\/ploinky-bwrap-launch/);
+    assert.match(dockerfile, /test -z "\$\(getcap \/usr\/local\/libexec\/ploinky-bwrap-launch\)"/);
+    assert.match(dockerfile, /ploinky-bwrap-launch-v1 source-sha=\$\{PLOINKY_SOURCE_SHA\}/);
+    assert.match(dockerfile, /path-resolution=openat2-beneath-no-magiclinks-no-symlinks/);
+    assert.match(dockerfile, /bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms/);
+    assert.match(dockerfile, /^LABEL io\.assistos\.ploinky\.source-sha=\$PLOINKY_SOURCE_SHA$/m);
+    assert.doesNotMatch(dockerfile, /\n\s+bubblewrap \\/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim$/m);
-    assert.match(dockerfile, /\bbubblewrap\b/);
+    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/ploinky/);
+    assert.match(workflow, /ref:\s*\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(workflow, /path:\s*sources\/ploinky/);
+    assert.match(workflow, /test "\$GITHUB_REF" = refs\/heads\/ploinky-bwrap/);
+    assert.match(workflow, /git -C sources\/ploinky rev-parse HEAD/);
+    assert.match(workflow, /git -C sources\/ploinky fetch --no-tags origin/);
+    assert.match(workflow, /refs\/heads\/ploinky-bwrap:refs\/remotes\/origin\/ploinky-bwrap/);
+    assert.match(workflow, /git -C sources\/ploinky merge-base --is-ancestor/);
+    assert.match(workflow, /build-contexts:\s*\|[\s\S]*?ploinky-src=\.\/sources\/ploinky/);
+    assert.match(workflow, /PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(workflow, /platform:\s*linux\/amd64/);
+    assert.match(workflow, /platform:\s*linux\/arm64/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /push-by-digest=true/);
+    assert.match(workflow, /name-canonical=true/);
+    assert.match(workflow, /io\.assistos\.ploinky\.source-sha/);
+    assert.match(workflow, /ploinky-bwrap-launch/);
+    assert.match(workflow, /ploinky-node-bwrap\.mjs/);
+    assert.match(workflow, /--cap-drop=all/);
+    assert.match(workflow, /--security-opt=no-new-privileges/);
+    assert.match(workflow, /pattern:\s*ploinky-node-digest-\*/);
+    assert.match(workflow, /test "\$\{#digest_files\[@\]\}" -eq 2/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /sha256sum "\$RUNNER_TEMP\/ploinky-node-candidate-index\.json"/);
+    assert.match(workflow, /imagetools inspect --raw\s*\\?\s*"docker\.io\/\$\{IMAGE_NAME\}@\$\{candidate_digest\}"/);
+    assert.match(workflow, /cmp "\$RUNNER_TEMP\/ploinky-node-candidate-index\.json"[\s\\]*"\$RUNNER_TEMP\/ploinky-node-confirmed-index\.json"/);
+    assert.match(workflow, /Published gated run-scoped candidate:[^\n]*candidate_digest/);
+    assert.doesNotMatch(workflow, /setup-qemu-action|--privileged|seccomp=unconfined/);
+    assert.doesNotMatch(workflow, /:\$\{\{ steps\.image\.outputs\.image_tag \}\}|:\$\{\{ env\.DEFAULT_IMAGE_TAG \}\}/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/, 'workflow action is not SHA-pinned: ' + use[0]);
+    }
     assert.match(dockerfile, /\bffmpeg\b/);
     assert.match(dockerfile, /\bpython3\b/);
+    assert.match(dockerfile, /install -d -m 0700 -o 1000 -g 1000 \/workspace/);
     assert.match(dockerfile, /^USER 1000:1000$/m);
+    assert.doesNotMatch(workflow, /--tmpfs \/workspace:[^\n]*(?:uid|gid)=/);
+    assert.match(nativeGate, /--wait-for-signal/);
+    assert.match(nativeGate, /signal-stopped/);
+    assert.match(nativeGate, /startTime/);
+    assert.match(nativeGate, /openSync\(fdCanaryPath/);
+    assert.match(nativeGate, /stdio:\s*\[[^\]]*fdCanaryFd/s);
+    assert.match(nativeGate, /CapBnd/);
+    assert.match(nativeGate, /NoNewPrivs/);
+    assert.match(nativeGate, /postOpenSymlinkSwap/);
+    assert.match(nativeGate, /npm:/);
 });
 
 test('onlyoffice-agent workflow layers Node onto the standard Document Server image', () => {
@@ -551,6 +630,10 @@ test('ploinky-box workflow publishes only a gated run-scoped candidate index', (
     assert.ok(podmanMachineJob);
     assert.ok(mergeJob);
     assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
+    assert.match(workflow, /test "\$GITHUB_REF" = refs\/heads\/ploinky-bwrap/);
+    assert.match(buildJob, /git -C sources\/ploinky fetch --no-tags origin/);
+    assert.match(buildJob, /refs\/heads\/ploinky-bwrap:refs\/remotes\/origin\/ploinky-bwrap/);
+    assert.match(buildJob, /git -C sources\/ploinky merge-base --is-ancestor/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
     assert.doesNotMatch(

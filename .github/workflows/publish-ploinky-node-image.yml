@@ -1,24 +1,15 @@
-name: Publish Ploinky Node Image
+name: Publish Ploinky Node Image Candidate
 
 on:
   workflow_dispatch:
     inputs:
-      node_base:
-        description: 'Node base image to build from'
-        required: false
-        default: 'node:24-bookworm-slim'
+      source_ref:
+        description: Exact 40-character AssistOS-AI/ploinky ploinky-bwrap commit SHA
+        required: true
         type: string
-      image_tag:
-        description: 'Docker Hub tag to publish'
-        required: false
-        default: '24-bookworm-tools'
-        type: string
-  push:
-    branches:
-      - ploinky-proxy
-    paths:
-      - 'images/ploinky-node/**'
-      - '.github/workflows/publish-ploinky-node-image.yml'
+
+permissions:
+  contents: read
 
 concurrency:
   group: publish-ploinky-node-image
@@ -26,65 +17,271 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/ploinky-node
-  DEFAULT_NODE_BASE: node:24-bookworm-slim
-  DEFAULT_IMAGE_TAG: 24-bookworm-tools
 
 jobs:
-  publish:
-    name: Build and Push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
+  resolve-source:
+    name: Resolve immutable input
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.input.outputs.source_sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Resolve image inputs
-        id: image
+      - name: Require the feature branch and an immutable Ploinky source SHA
+        id: input
+        env:
+          SOURCE_SHA: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
-          node_base="${{ github.event.inputs.node_base }}"
-          image_tag="${{ github.event.inputs.image_tag }}"
-          if [ -z "$node_base" ]; then
-            node_base="$DEFAULT_NODE_BASE"
-          fi
-          if [ -z "$image_tag" ]; then
-            image_tag="$DEFAULT_IMAGE_TAG"
-          fi
-          echo "node_base=$node_base" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          test "$GITHUB_REF" = refs/heads/ploinky-bwrap
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke build local architecture
+  build:
+    name: Build and gate ${{ matrix.platform }}
+    needs: resolve-source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Checkout immutable Ploinky source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/ploinky
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          path: sources/ploinky
+          fetch-depth: 0
+          submodules: true
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Verify exact clean build inputs
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           set -euo pipefail
-          docker build \
-            --build-arg NODE_BASE='${{ steps.image.outputs.node_base }}' \
-            -t "$IMAGE_NAME:smoke" \
-            images/ploinky-node
-          docker run --rm "$IMAGE_NAME:smoke" sh -lc 'node --version && npm --version && git --version && python3 --version && make --version && g++ --version && bwrap --version && ffmpeg -version | head -1'
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+          test "$GITHUB_REF" = refs/heads/ploinky-bwrap
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(git -C sources/ploinky rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C sources/ploinky fetch --no-tags origin \
+            +refs/heads/ploinky-bwrap:refs/remotes/origin/ploinky-bwrap
+          git -C sources/ploinky merge-base --is-ancestor \
+            "$SOURCE_SHA" refs/remotes/origin/ploinky-bwrap
+          test -z "$(git -C sources/ploinky status --porcelain=v1)"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
+      - name: Build and push architecture image by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: images/ploinky-node
-          platforms: linux/amd64,linux/arm64
-          push: true
+          context: .
+          file: ./images/ploinky-node/Dockerfile
+          build-contexts: |
+            ploinky-src=./sources/ploinky
           build-args: |
-            NODE_BASE=${{ steps.image.outputs.node_base }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.image_tag }}
-            ${{ env.IMAGE_NAME }}:${{ env.DEFAULT_IMAGE_TAG }}
+            PLOINKY_SOURCE_SHA=${{ needs.resolve-source.outputs.source_sha }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+
+      - name: Record architecture digest evidence
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/${{ matrix.arch }}.txt"
+
+      - name: Require native rootless Podman
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap
+          test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          podman unshare true
+
+      - name: Pull and verify candidate provenance
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$DOCKERHUB_TOKEN" | podman login --username assistos --password-stdin docker.io
+          candidate="docker.io/${IMAGE_NAME}@${DIGEST}"
+          podman pull "$candidate"
+          test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "$candidate")" = '${{ matrix.platform }}'
+          test "$(podman image inspect --format '{{ index .Config.Labels "io.assistos.ploinky.source-sha" }}' "$candidate")" = "$SOURCE_SHA"
+          helper_version="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --version)"
+          test "$helper_version" = "ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA}"
+          helper_capabilities="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --capabilities)"
+          test "$helper_capabilities" = "ploinky-bwrap-launch-v1 source-sha=${SOURCE_SHA} protocol=1 descriptor-fd=3 path-resolution=openat2-beneath-no-magiclinks-no-symlinks bwrap-fd-options=bind-fd,ro-bind-fd,ro-bind-data,perms typed-fs=dir,tmpfs,proc,dev,system-symlink,ro-data-path-file ro-data-path-hardening=sealed-memfd-ro-bind-data preexec-barrier=R/G credential-bound=4096"
+
+      - name: Run native coding-image Bubblewrap behavior gate
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          candidate="docker.io/${IMAGE_NAME}@${DIGEST}"
+          podman run --rm \
+            --cap-drop=all \
+            --security-opt unmask=ALL \
+            --security-opt label=disable \
+            --security-opt=no-new-privileges \
+            --env "PLOINKY_SOURCE_SHA=${SOURCE_SHA}" \
+            --volume "$PWD/tests/native:/opt/ploinky-native-tests:ro" \
+            --entrypoint /usr/local/bin/node \
+            "$candidate" \
+            /opt/ploinky-native-tests/ploinky-node-bwrap.mjs \
+            | tee "$RUNNER_TEMP/ploinky-node-bwrap-${{ matrix.arch }}.log"
+
+      - name: Record native provenance evidence
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' > "$RUNNER_TEMP/ploinky-node-provenance-${{ matrix.arch }}.json"
+          const evidence = {
+            architecture: process.env.ARCH,
+            image: process.env.IMAGE_NAME,
+            digest: process.env.DIGEST,
+            sourceSha: process.env.SOURCE_SHA,
+            workflowRun: process.env.GITHUB_RUN_ID,
+            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+          };
+          process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+
+      - name: Upload native gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-node-native-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/ploinky-node-bwrap-${{ matrix.arch }}.log
+            ${{ runner.temp }}/ploinky-node-provenance-${{ matrix.arch }}.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload architecture digest evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-node-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  merge:
+    name: Assemble gated candidate index
+    needs:
+      - resolve-source
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download gated architecture digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ploinky-node-digest-*
+          path: /tmp/ploinky-node-digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Assemble and inspect the exact two-member manifest
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t digest_files < <(find /tmp/ploinky-node-digests -type f -name '*.txt' | sort)
+          test "${#digest_files[@]}" -eq 2
+          amd64_digest="$(cat /tmp/ploinky-node-digests/ploinky-node-digest-amd64/amd64.txt)"
+          arm64_digest="$(cat /tmp/ploinky-node-digests/ploinky-node-digest-arm64/arm64.txt)"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$amd64_digest" != "$arm64_digest"
+
+          staging_tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          staging_ref="docker.io/${IMAGE_NAME}:${staging_tag}"
+          if docker buildx imagetools inspect "$staging_ref" >/dev/null 2>&1; then
+            echo "run-scoped candidate tag already exists: $staging_ref" >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            --tag "$staging_ref" \
+            --annotation "index:io.assistos.ploinky.source-sha=${SOURCE_SHA}" \
+            --annotation "index:io.assistos.ploinky.workflow-run=${GITHUB_RUN_ID}" \
+            "docker.io/${IMAGE_NAME}@${amd64_digest}" \
+            "docker.io/${IMAGE_NAME}@${arm64_digest}"
+          docker buildx imagetools inspect --raw "$staging_ref" > "$RUNNER_TEMP/ploinky-node-candidate-index.json"
+          STAGING_REF="$staging_ref" AMD64_DIGEST="$amd64_digest" ARM64_DIGEST="$arm64_digest" \
+            node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const index = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/ploinky-node-candidate-index.json'));
+          assert.equal(index.manifests.length, 2);
+          const members = new Map(index.manifests.map((manifest) => [
+            `${manifest.platform.os}/${manifest.platform.architecture}`,
+            manifest.digest,
+          ]));
+          assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
+          assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
+          process.stdout.write(`Published gated run-scoped candidate: ${process.env.STAGING_REF}\n`);
+          process.stdout.write('No stable or production tag was changed.\n');
+          NODE
+          candidate_digest="sha256:$(
+            sha256sum "$RUNNER_TEMP/ploinky-node-candidate-index.json" | cut -d ' ' -f1
+          )"
+          [[ "$candidate_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw \
+            "docker.io/${IMAGE_NAME}@${candidate_digest}" \
+            > "$RUNNER_TEMP/ploinky-node-confirmed-index.json"
+          cmp "$RUNNER_TEMP/ploinky-node-candidate-index.json" \
+            "$RUNNER_TEMP/ploinky-node-confirmed-index.json"
+          printf '%s\n' "$candidate_digest" > "$RUNNER_TEMP/ploinky-node-candidate-digest.txt"
+          {
+            echo '### Ploinky Node candidate'
+            echo
+            echo "Published gated run-scoped candidate: \`$staging_ref\` (\`docker.io/${IMAGE_NAME}@${candidate_digest}\`)"
+            echo
+            echo 'No stable tag was changed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ploinky-node-candidate-index.json
+            ${{ runner.temp }}/ploinky-node-candidate-digest.txt
+          if-no-files-found: error
+          retention-days: 30

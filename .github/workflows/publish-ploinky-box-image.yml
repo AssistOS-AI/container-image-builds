@@ -31,6 +31,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/ploinky-bwrap
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
@@ -68,9 +69,14 @@ jobs:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/ploinky-bwrap
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1)"
           test "$(git -C sources/ploinky rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C sources/ploinky fetch --no-tags origin \
+            +refs/heads/ploinky-bwrap:refs/remotes/origin/ploinky-bwrap
+          git -C sources/ploinky merge-base --is-ancestor \
+            "$SOURCE_SHA" refs/remotes/origin/ploinky-bwrap
           test -z "$(git -C sources/ploinky status --porcelain=v1)"
 
       - name: Set up Docker Buildx
