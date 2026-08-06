@@ -5,6 +5,7 @@ ARG NODE_RUNTIME_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:235600a810
 ARG CLOUDFLARED_IMAGE=docker.io/cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
 ARG BUBBLEWRAP_NEVRA=bubblewrap-0:0.11.0-4.fc44
 ARG PLOINKY_SOURCE_SHA
+ARG PLOINKY_AGENTLIB_SHA
 
 FROM $CLOUDFLARED_IMAGE AS cloudflared
 
@@ -33,6 +34,12 @@ RUN case "$PLOINKY_SOURCE_SHA" in \
 FROM $PODMAN_BASE AS prepared-rootfs
 
 ARG BUBBLEWRAP_NEVRA
+ARG PLOINKY_AGENTLIB_SHA
+RUN case "$PLOINKY_AGENTLIB_SHA" in \
+        ''|*[!0-9a-f]*) echo 'PLOINKY_AGENTLIB_SHA must be exactly 40 lowercase hexadecimal characters' >&2; exit 1 ;; \
+    esac \
+    && test "${#PLOINKY_AGENTLIB_SHA}" -eq 40 \
+    && test "$PLOINKY_AGENTLIB_SHA" = dd94929443033c0a43bf7569068ec1d2926dba35
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
@@ -130,9 +137,11 @@ RUN chmod 0755 /usr/local/bin/ploinky-box-entrypoint
 FROM scratch AS runtime
 
 ARG PLOINKY_SOURCE_SHA
+ARG PLOINKY_AGENTLIB_SHA
 COPY --from=prepared-rootfs / /
 
 LABEL io.assistos.ploinky.source-sha=$PLOINKY_SOURCE_SHA
+LABEL io.assistos.ploinky.agentlib-sha=$PLOINKY_AGENTLIB_SHA
 
 # Reapply Fedora's shadow-utils file capabilities after the filesystem copy.
 # The native publication gates also verify the setuid-root fallback so either

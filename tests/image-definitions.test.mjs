@@ -885,3 +885,33 @@ test('ploinky-node does not install a container engine or client', () => {
         .join('\n');
     assert.match(continuationProbe, forbiddenContainerEngine);
 });
+
+test('Box and Node candidates attest the one exact AgentLib release identity', () => {
+    const expectedAgentlibSha = 'dd94929443033c0a43bf7569068ec1d2926dba35';
+    for (const image of ['ploinky-box', 'ploinky-node']) {
+        const dockerfile = read(`images/${image}/Dockerfile`);
+        const workflow = read(`.github/workflows/publish-${image}-image.yml`);
+
+        assert.match(dockerfile, /^ARG PLOINKY_AGENTLIB_SHA$/m);
+        assert.match(
+            dockerfile,
+            /^LABEL io\.assistos\.ploinky\.agentlib-sha=\$PLOINKY_AGENTLIB_SHA$/m,
+        );
+        assert.match(workflow, /git -C sources\/ploinky ls-tree HEAD node_modules\/achillesAgentLib/);
+        assert.match(workflow, new RegExp(`test "\\$agentlib_sha" = ${expectedAgentlibSha}`));
+        assert.match(workflow, /globalDeps\/package\.json/);
+        assert.match(workflow, /ploinky-box\/dependencies\.lock\.json/);
+        assert.match(workflow, /PLOINKY_AGENTLIB_SHA=\$\{\{ steps\.source-provenance\.outputs\.agentlib_sha \}\}/);
+        assert.match(workflow, /io\.assistos\.ploinky\.agentlib-sha/);
+        assert.match(workflow, /agentlibSha: process\.env\.AGENTLIB_SHA/);
+        assert.match(workflow, /index:io\.assistos\.ploinky\.agentlib-sha=\$\{AGENTLIB_SHA\}/);
+        const evidenceStep = workflow.match(
+            /- name: Record native provenance evidence[\s\S]*?(?=\n\s+- name:)/,
+        )?.[0] || '';
+        assert.match(
+            evidenceStep,
+            /AGENTLIB_SHA:\s*\$\{\{ needs\.resolve-source\.outputs\.agentlib_sha \}\}/,
+        );
+        assert.match(evidenceStep, /agentlibSha: process\.env\.AGENTLIB_SHA/);
+    }
+});

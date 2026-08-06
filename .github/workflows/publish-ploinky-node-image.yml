@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       source_sha: ${{ steps.input.outputs.source_sha }}
+      agentlib_sha: ${{ steps.input.outputs.agentlib_sha }}
     steps:
       - name: Require the feature branch and an immutable Ploinky source SHA
         id: input
@@ -33,7 +34,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/ploinky-bwrap
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          agentlib_sha=dd94929443033c0a43bf7569068ec1d2926dba35
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "agentlib_sha=$agentlib_sha" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and gate ${{ matrix.platform }}
@@ -65,8 +68,10 @@ jobs:
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
       - name: Verify exact clean build inputs
+        id: source-provenance
         env:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          EXPECTED_AGENTLIB_SHA: ${{ needs.resolve-source.outputs.agentlib_sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/ploinky-bwrap
@@ -78,6 +83,31 @@ jobs:
           git -C sources/ploinky merge-base --is-ancestor \
             "$SOURCE_SHA" refs/remotes/origin/ploinky-bwrap
           test -z "$(git -C sources/ploinky status --porcelain=v1)"
+          agentlib_sha="$(
+            git -C sources/ploinky ls-tree HEAD node_modules/achillesAgentLib \
+              | awk '$1 == "160000" && $2 == "commit" { print $3 }'
+          )"
+          test "$agentlib_sha" = dd94929443033c0a43bf7569068ec1d2926dba35
+          test "$agentlib_sha" = "$EXPECTED_AGENTLIB_SHA"
+          PACKAGE_JSON=sources/ploinky/globalDeps/package.json \
+            LOCK_JSON=sources/ploinky/ploinky-box/dependencies.lock.json \
+            AGENTLIB_SHA="$agentlib_sha" \
+            node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const packageJson = JSON.parse(fs.readFileSync(process.env.PACKAGE_JSON));
+          const lock = JSON.parse(fs.readFileSync(process.env.LOCK_JSON));
+          const expected = process.env.AGENTLIB_SHA;
+          assert.equal(
+            packageJson.dependencies.achillesAgentLib,
+            `git+https://github.com/AssistOS-AI/achillesAgentLib.git#${expected}`,
+          );
+          assert.deepEqual(lock.repositories.achillesAgentLib, {
+            url: 'https://github.com/AssistOS-AI/AchillesAgentLib.git',
+            commit: expected,
+          });
+          NODE
+          echo "agentlib_sha=$agentlib_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -98,6 +128,7 @@ jobs:
             ploinky-src=./sources/ploinky
           build-args: |
             PLOINKY_SOURCE_SHA=${{ needs.resolve-source.outputs.source_sha }}
+            PLOINKY_AGENTLIB_SHA=${{ steps.source-provenance.outputs.agentlib_sha }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
@@ -122,6 +153,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          AGENTLIB_SHA: ${{ needs.resolve-source.outputs.agentlib_sha }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -130,6 +162,7 @@ jobs:
           podman pull "$candidate"
           test "$(podman image inspect --format '{{.Os}}/{{.Architecture}}' "$candidate")" = '${{ matrix.platform }}'
           test "$(podman image inspect --format '{{ index .Config.Labels "io.assistos.ploinky.source-sha" }}' "$candidate")" = "$SOURCE_SHA"
+          test "$(podman image inspect --format '{{ index .Config.Labels "io.assistos.ploinky.agentlib-sha" }}' "$candidate")" = "$AGENTLIB_SHA"
           helper_version="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --version)"
           test "$helper_version" = "ploinky-bwrap-launch-v2 source-sha=${SOURCE_SHA}"
           helper_capabilities="$(podman run --rm --entrypoint /usr/local/libexec/ploinky-bwrap-launch "$candidate" --capabilities)"
@@ -159,6 +192,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
           DIGEST: ${{ steps.build.outputs.digest }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          AGENTLIB_SHA: ${{ needs.resolve-source.outputs.agentlib_sha }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE' > "$RUNNER_TEMP/ploinky-node-provenance-${{ matrix.arch }}.json"
@@ -167,6 +201,7 @@ jobs:
             image: process.env.IMAGE_NAME,
             digest: process.env.DIGEST,
             sourceSha: process.env.SOURCE_SHA,
+            agentlibSha: process.env.AGENTLIB_SHA,
             workflowRun: process.env.GITHUB_RUN_ID,
             workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
           };
@@ -220,6 +255,7 @@ jobs:
       - name: Assemble and inspect the exact two-member manifest
         env:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          AGENTLIB_SHA: ${{ needs.resolve-source.outputs.agentlib_sha }}
         run: |
           set -euo pipefail
           mapfile -t digest_files < <(find /tmp/ploinky-node-digests -type f -name '*.txt' | sort)
@@ -239,6 +275,7 @@ jobs:
           docker buildx imagetools create \
             --tag "$staging_ref" \
             --annotation "index:io.assistos.ploinky.source-sha=${SOURCE_SHA}" \
+            --annotation "index:io.assistos.ploinky.agentlib-sha=${AGENTLIB_SHA}" \
             --annotation "index:io.assistos.ploinky.workflow-run=${GITHUB_RUN_ID}" \
             "docker.io/${IMAGE_NAME}@${amd64_digest}" \
             "docker.io/${IMAGE_NAME}@${arm64_digest}"

@@ -1,6 +1,7 @@
 ARG NODE_BASE=docker.io/library/node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7
 ARG BUBBLEWRAP_VERSION=0.8.0-2+deb12u1
 ARG PLOINKY_SOURCE_SHA
+ARG PLOINKY_AGENTLIB_SHA
 
 FROM $NODE_BASE AS bwrap-launch-builder
 
@@ -33,9 +34,15 @@ FROM $NODE_BASE
 
 ARG BUBBLEWRAP_VERSION
 ARG PLOINKY_SOURCE_SHA
+ARG PLOINKY_AGENTLIB_SHA
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+RUN case "$PLOINKY_AGENTLIB_SHA" in \
+        ''|*[!0-9a-f]*) echo 'PLOINKY_AGENTLIB_SHA must be exactly 40 lowercase hexadecimal characters' >&2; exit 1 ;; \
+    esac \
+    && test "${#PLOINKY_AGENTLIB_SHA}" -eq 40 \
+    && test "$PLOINKY_AGENTLIB_SHA" = dd94929443033c0a43bf7569068ec1d2926dba35 \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         "bubblewrap=${BUBBLEWRAP_VERSION}" \
@@ -76,5 +83,6 @@ RUN test -x /usr/local/libexec/ploinky-bwrap-launch \
     && install -d -m 0700 -o 1000 -g 1000 /workspace /root
 
 LABEL io.assistos.ploinky.source-sha=$PLOINKY_SOURCE_SHA
+LABEL io.assistos.ploinky.agentlib-sha=$PLOINKY_AGENTLIB_SHA
 
 USER 1000:1000
