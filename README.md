@@ -114,7 +114,14 @@ the outer appliance. It supports native rootless Podman only;
 it requires `/dev/fuse`, `/dev/net/tun`, the explicit unmask security option,
 and no engine socket, privilege, added capabilities, or unconfined seccomp
 profile. The image contains Podman, fuse-overlayfs, Node 24, npm/npx, Bash, Git,
-cloudflared, and the rootless Netavark/pasta helpers. Ploinky source is mounted
+SSH, curl, ffmpeg, Python 3, process/namespace tools, cloudflared, and the
+rootless Netavark/pasta helpers. Its explicit interactive-shell baseline also
+includes deterministic GNU text and file tools (`find`, `grep`, `sed`, `awk`,
+`diff`, `patch`), JSON and transfer tools (`jq`, `wget`, `rsync`), common
+archive utilities, `less`, `file`, `which`, `tree`, `nano`/`vi`, and network
+diagnostics (`ss`, `ping`, `dig`, `host`, `nslookup`, `nc`, `netstat`, `lsof`).
+The Dockerfile requires every advertised command during both native builds.
+Ploinky source is mounted
 read-only at `/opt/ploinky`; the Dockerfile copies its single canonical
 `ploinky-box/entrypoint/ploinky-box-entrypoint` into the image and does not
 retain a separate image-repository entrypoint implementation.

@@ -16,8 +16,60 @@ COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 ARG TARGETARCH
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && dnf install -y git iproute libcap fuse-overlayfs netavark aardvark-dns passt slirp4netns util-linux-core \
+    && dnf install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        bash \
+        bind-utils \
+        bzip2 \
+        ca-certificates \
+        coreutils \
+        curl \
+        diffutils \
+        ffmpeg-free \
+        file \
+        findutils \
+        fuse-overlayfs \
+        gawk \
+        git \
+        grep \
+        gzip \
+        iproute \
+        iputils \
+        jq \
+        less \
+        libcap \
+        lsof \
+        nano \
+        net-tools \
+        netavark \
+        nmap-ncat \
+        openssh-clients \
+        patch \
+        procps-ng \
+        python3 \
+        rsync \
+        sed \
+        aardvark-dns \
+        passt \
+        slirp4netns \
+        tar \
+        tree \
+        unzip \
+        util-linux-core \
+        util-linux-script \
+        vim-minimal \
+        wget \
+        which \
+        xz \
+        zip \
     && dnf clean all \
+    && for required_command in \
+        awk bash bzip2 curl diff dig ffmpeg file find git grep gzip host jq less \
+        lsof nano nc netstat node npm npx nslookup patch ping podman ps python3 \
+        rsync script sed setsid ssh ss tar timeout tree unshare unzip vi wget \
+        which xargs xz zip; do \
+        command -v "$required_command" >/dev/null \
+            || { echo "missing required interactive command: $required_command" >&2; exit 1; }; \
+    done \
     && rpm --setcaps shadow-utils \
     && case "$TARGETARCH" in \
         amd64) cloudflared_sha256='a76297bc59df96887b94d8cdb2aabe2401fc7b2bf3527b05d9a311b7341d190a' ;; \

@@ -435,10 +435,31 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     );
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
-    assert.match(
-        dockerfile,
-        /dnf install -y git iproute libcap fuse-overlayfs netavark aardvark-dns passt slirp4netns util-linux-core/,
-    );
+    for (const requiredPackage of [
+        'bash', 'bind-utils', 'bzip2', 'ca-certificates', 'coreutils', 'curl',
+        'diffutils', 'ffmpeg-free', 'file', 'findutils', 'fuse-overlayfs', 'gawk',
+        'git', 'grep', 'gzip', 'iproute', 'iputils', 'jq', 'less', 'libcap',
+        'lsof', 'nano', 'net-tools', 'netavark', 'nmap-ncat', 'openssh-clients',
+        'patch', 'procps-ng', 'python3', 'rsync', 'sed', 'aardvark-dns', 'passt',
+        'slirp4netns', 'tar', 'tree', 'unzip', 'util-linux-core',
+        'util-linux-script', 'vim-minimal', 'wget', 'which', 'xz', 'zip',
+    ]) {
+        assert.match(dockerfile, new RegExp(`\\n\\s+${requiredPackage.replace('-', '\\-')} \\\\`));
+    }
+    const commandProbe = dockerfile.match(
+        /for required_command in \\\n[\s\S]*?command -v "\$required_command" >\/dev\/null \\\n[\s\S]*?exit 1; \}; \\\n\s+done/,
+    )?.[0] || '';
+    assert.match(commandProbe, /missing required interactive command: \$required_command/);
+    for (const requiredCommand of [
+        'awk', 'bash', 'bzip2', 'curl', 'diff', 'dig', 'ffmpeg', 'file', 'find',
+        'git', 'grep', 'gzip', 'host', 'jq', 'less', 'lsof', 'nano', 'nc',
+        'netstat', 'node', 'npm', 'npx', 'nslookup', 'patch', 'ping', 'podman',
+        'ps', 'python3', 'rsync', 'script', 'sed', 'setsid', 'ssh', 'ss', 'tar',
+        'timeout', 'tree', 'unshare', 'unzip', 'vi', 'wget', 'which', 'xargs',
+        'xz', 'zip',
+    ]) {
+        assert.match(commandProbe, new RegExp(`\\b${requiredCommand}\\b`));
+    }
     assert.match(dockerfile, /rpm --setcaps shadow-utils/);
     assert.match(dockerfile, /sha256sum --check --strict/);
     assert.match(dockerfile, /cloudflared tunnel run --help/);
