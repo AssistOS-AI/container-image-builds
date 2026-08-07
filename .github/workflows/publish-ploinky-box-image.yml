@@ -17,7 +17,8 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/ploinky-box
-  IMAGE_TAG: runtime
+  IMAGE_TAG: latest
+  COMPATIBILITY_IMAGE_TAG: runtime
 
 jobs:
   resolve-source:
@@ -110,7 +111,7 @@ jobs:
           retention-days: 30
 
   merge:
-    name: Publish exact multiarchitecture runtime
+    name: Publish exact multiarchitecture image
     needs:
       - resolve-source
       - build
@@ -192,11 +193,12 @@ jobs:
           [[ "$staging_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "STAGING_DIGEST=$staging_digest" >> "$GITHUB_ENV"
 
-      - name: Move runtime by the exact inspected staging digest
+      - name: Move latest and runtime compatibility alias by the exact inspected staging digest
         run: |
           set -euo pipefail
           docker buildx imagetools create \
             --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            --tag "docker.io/${IMAGE_NAME}:${COMPATIBILITY_IMAGE_TAG}" \
             "docker.io/${IMAGE_NAME}@${STAGING_DIGEST}"
 
       - name: Read-only post-promotion digest confirmation
@@ -204,13 +206,17 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/confirmed-staging-index.json"
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/confirmed-runtime-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/confirmed-latest-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${COMPATIBILITY_IMAGE_TAG}" > "$RUNNER_TEMP/confirmed-runtime-index.json"
           staging_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-staging-index.json" | cut -d ' ' -f1)"
+          latest_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-latest-index.json" | cut -d ' ' -f1)"
           runtime_digest="sha256:$(sha256sum "$RUNNER_TEMP/confirmed-runtime-index.json" | cut -d ' ' -f1)"
           [[ "$staging_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$latest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$staging_digest" = "$STAGING_DIGEST"
+          test "$latest_digest" = "$STAGING_DIGEST"
           test "$runtime_digest" = "$STAGING_DIGEST"
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${runtime_digest}" > /dev/null
-          echo "digest=$runtime_digest" >> "$GITHUB_OUTPUT"
-          printf 'Published immutable image: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$runtime_digest" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${latest_digest}" > /dev/null
+          echo "digest=$latest_digest" >> "$GITHUB_OUTPUT"
+          printf 'Published latest and runtime: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$latest_digest" >> "$GITHUB_STEP_SUMMARY"

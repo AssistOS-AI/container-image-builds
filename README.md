@@ -17,7 +17,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:runtime` | this repo plus one immutable `AssistOS-AI/ploinky` source commit | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus one immutable `AssistOS-AI/ploinky` source commit | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
 The `bwrap-runner` workflow checks out exact full-SHA `basic`, `copilot-agents`,
 and `AchillesCLI` inputs under `sources/`; the latter two supply the Open
@@ -109,8 +109,10 @@ multiarchitecture digest.
 
 ## Ploinky Box runtime
 
-`docker.io/assistos/ploinky-box:runtime` is the mutable release channel for
-the outer appliance. It supports native rootless Podman only;
+`docker.io/assistos/ploinky-box:latest` is the primary mutable release channel
+for the outer appliance. Every publication also moves `runtime` to the same
+manifest digest for compatibility with older Ploinky installations. The image
+supports native rootless Podman only;
 it requires `/dev/fuse`, `/dev/net/tun`, the explicit unmask security option,
 and no engine socket, privilege, added capabilities, or unconfined seccomp
 profile. The image contains Podman, fuse-overlayfs, Node 24, npm/npx, Bash, Git,
@@ -194,10 +196,11 @@ proves the run-scoped
 `runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused, and creates
 a staging manifest from those two exact digests. It annotates and inspects
 that manifest, requires exactly the supplied amd64 and arm64 members, records its
-immutable digest, and moves `runtime` by that exact staging digest. Only
-read-only digest confirmation follows promotion. The staging tag is retained as
-provenance, workflow concurrency prevents competing promotion, and functional
-validation remains separate from this publication-only workflow.
+immutable digest, and moves both `latest` and the `runtime` compatibility alias
+to that exact staging digest. Read-only confirmation proves both tags resolve to
+the staged digest after promotion. The staging tag is retained as provenance,
+workflow concurrency prevents competing promotion, and functional validation
+remains separate from this publication-only workflow.
 
 ## Secrets
 
@@ -277,9 +280,10 @@ the consumer manifest to that exact index digest. Until then, the consumer's
 required `/usr/local/bin/webtty-start` entrypoint makes the previous pinned
 image fail before opening its listener; no mutable-tag fallback is permitted.
 
-`runtime` is intentionally mutable, but an already-created Ploinky Box stays on
-its inspected image ID. The supervisor consults the channel only when creating
-a missing Box or performing a validated replacement. Image or configuration
+`latest` and its `runtime` compatibility alias are intentionally mutable, but an
+already-created Ploinky Box stays on its inspected image ID. The supervisor
+consults the selected channel only when creating a missing Box or performing a
+validated replacement. An incompatible image or unrecognized configuration
 drift is rejected before mutation and requires an explicit destroy followed by
 recreate. Moving the release channel to a different verified manifest digest is
 a separately authorized registry release action, never a supervisor

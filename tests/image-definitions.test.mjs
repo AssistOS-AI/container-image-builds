@@ -523,6 +523,8 @@ test('ploinky-box workflow publishes two native immutable digests without behavi
     assert.ok(mergeJob);
     assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
+    assert.match(workflow, /IMAGE_TAG:\s*latest/);
+    assert.match(workflow, /COMPATIBILITY_IMAGE_TAG:\s*runtime/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
     assert.doesNotMatch(
         workflow,
@@ -570,14 +572,18 @@ test('ploinky-box workflow publishes two native immutable digests without behavi
     assert.match(mergeJob, /imagetools inspect --raw "\$STAGING_REF"/);
     assert.match(mergeJob, /sha256sum "\$RUNNER_TEMP\/staging-index\.json"/);
     assert.doesNotMatch(mergeJob, /sed -n 's\/\^Digest:/);
-    assert.match(mergeJob, /Move runtime by the exact inspected staging digest/);
+    assert.match(mergeJob, /Move latest and runtime compatibility alias by the exact inspected staging digest/);
+    assert.match(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}"/);
+    assert.match(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{COMPATIBILITY_IMAGE_TAG\}"/);
     assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
     assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
-    const promote = mergeJob.indexOf('Move runtime by the exact inspected staging digest');
+    assert.match(mergeJob, /test "\$latest_digest" = "\$STAGING_DIGEST"/);
+    assert.match(mergeJob, /test "\$runtime_digest" = "\$STAGING_DIGEST"/);
+    const promote = mergeJob.indexOf('Move latest and runtime compatibility alias by the exact inspected staging digest');
     const readOnly = mergeJob.indexOf('Read-only post-promotion digest confirmation');
     assert.ok(promote > 0 && promote < readOnly);
     assert.doesNotMatch(mergeJob.slice(promote), /node --test|podman run|docker run/);
-    assert.match(mergeJob, /Published immutable image:/);
+    assert.match(mergeJob, /Published latest and runtime:/);
     assert.match(mergeJob, /GITHUB_STEP_SUMMARY/);
 
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
@@ -585,11 +591,13 @@ test('ploinky-box workflow publishes two native immutable digests without behavi
     }
 });
 
-test('runtime channel documentation separates creation from hard-cut recovery', () => {
+test('latest channel documentation separates creation from hard-cut recovery', () => {
     const readme = read('README.md');
 
-    assert.match(readme, /consults the channel only when creating[\s\S]*?validated replacement/);
-    assert.match(readme, /Image or configuration\s+drift is rejected before mutation/);
+    assert.match(readme, /latest[^\n]*primary mutable release channel/);
+    assert.match(readme, /runtime[^\n]*compatibility/);
+    assert.match(readme, /consults the selected channel only when creating[\s\S]*?validated replacement/);
+    assert.match(readme, /incompatible image or unrecognized configuration\s+drift is rejected before mutation/i);
     assert.match(readme, /explicit[\s\S]*?destroy followed by\s+recreate/);
     assert.match(readme, /release channel[\s\S]*?separately authorized registry release[\s\S]*?action/);
     assert.match(readme, /never a supervisor\s+transaction/);
