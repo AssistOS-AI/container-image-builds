@@ -421,6 +421,7 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
 
 test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
+    const readme = read('README.md');
     const instructions = dockerfileInstructions(dockerfile);
     const fromInstructions = instructions.filter(({ keyword }) => keyword === 'FROM');
 
@@ -473,18 +474,31 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         '/run/ploinky',
         '/home/podman/.config/containers',
         '/home/podman/.local/share/containers/storage',
+        '/home/podman/.local/share/ploinky-images',
     ]) {
         assert.ok(dockerfile.includes(ownedTarget), 'missing owned mount target ' + ownedTarget);
     }
     assert.match(
         dockerfile,
-        /chown -R podman:podman[\s\S]*?\/opt\/ploinky[\s\S]*?\/workspace[\s\S]*?\/run\/ploinky[\s\S]*?\/home\/podman\/\.config[\s\S]*?\/home\/podman\/\.local\/share\/containers/,
+        /chown -R podman:podman[\s\S]*?\/opt\/ploinky[\s\S]*?\/workspace[\s\S]*?\/run\/ploinky[\s\S]*?\/home\/podman\/\.config[\s\S]*?\/home\/podman\/\.local\/share\/containers[\s\S]*?\/home\/podman\/\.local\/share\/ploinky-images/,
     );
     assert.match(dockerfile, /chmod 0700 \/run\/ploinky/);
     assert.match(
         dockerfile,
         /rm -f \/home\/podman\/\.config\/containers\/containers\.conf/,
     );
+    // The entrypoint renders the user storage.conf that separates the durable
+    // image cache from the disposable graphroot; an inherited copy would
+    // silently win and repersist nested container state.
+    assert.match(
+        dockerfile,
+        /rm -f[\s\S]{0,120}?\/home\/podman\/\.config\/containers\/storage\.conf/,
+    );
+    // Only the image cache is a durable mount; the graphroot must stay on the
+    // Box writable layer so nested state dies with the outer Box.
+    assert.doesNotMatch(dockerfile, /^VOLUME\s/m);
+    assert.doesNotMatch(readme, /retained workspace-volume/i);
+    assert.doesNotMatch(readme, /three (?:managed |explicitly )?named volumes/i);
     assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
     for (const requiredEnv of [
         'USER=podman',

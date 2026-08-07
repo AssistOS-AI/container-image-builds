@@ -149,22 +149,42 @@ clean `FROM scratch` stage. Its metadata is exact:
 | Default command | Absent |
 | Declared image volumes | Absent |
 
-The outer supervisor mounts retained, identity-scoped named volumes at
-`/workspace`, `/opt/ploinky/node_modules`, and
-`/home/podman/.local/share/containers`. The first mutating call from a
-markerless workspace creates only an empty host `.ploinky` identity anchor so
-descendants converge on the same Box. Status is read-only. Stop uses a dedicated
-in-box helper and remains available when dependency state is missing or corrupt.
-Outer candidate and replacement cleanup includes anonymous volumes while these
-three named volumes survive stop, destroy, replacement, and recreation.
+Only reusable image content outlives one outer Box. The supervisor mounts the
+host workspace at `/workspace`, an identity-scoped dependency volume at
+`/opt/ploinky/node_modules`, and an identity-scoped image cache at
+`/home/podman/.local/share/ploinky-images`. The host bind and both caches survive
+stop, destroy, replacement, and recreation.
+
+Everything else in the inner Podman store is disposable and is discarded with
+the outer Box:
+
+| Path | Lifetime |
+| --- | --- |
+| `/home/podman/.local/share/ploinky-images` | Durable named volume; downloaded image content only |
+| `/opt/ploinky/node_modules` | Durable named volume; pinned dependency cache |
+| `/workspace` | Durable host bind; user and agent data |
+| `/home/podman/.local/share/containers/storage` | Box writable layer; nested container records, writable layers, and inner named volumes |
+| `/tmp/storage-run-1000` | Box tmpfs; reset on every startup |
+
+The entrypoint renders `/home/podman/.config/containers/storage.conf` before the
+first inner Podman call, pointing `imagestore` at the durable cache while
+`graphroot` stays on the disposable writable layer with `transient_store`
+enabled. Persistent agent data therefore belongs in `/workspace` binds, never in
+inner Podman named volumes.
+
+The first mutating call from a markerless workspace creates only an empty host
+`.ploinky` identity anchor so descendants converge on the same Box. Status is
+read-only. Stop uses a dedicated in-box helper and remains available when
+dependency state is missing or corrupt. Outer candidate and replacement cleanup
+includes anonymous volumes only.
 
 First boot generates a mode-restricted workspace master key and installs the
 two dependency repositories at the exact commits in Ploinky's additive lock.
 The key never crosses from the host, is not printed, and is excluded from nested
-agents. It remains stable for the retained workspace-volume lifetime. Manual
-key edits and in-place rotation are unsupported; a new key requires a distinct
-workspace identity with an empty workspace volume and migration of non-secret
-data only.
+agents. It remains stable with the host workspace because it is stored under
+`/workspace/.ploinky`. Manual key edits and in-place rotation are unsupported;
+a new key requires a distinct host workspace identity and migration of
+non-secret data only.
 
 The Box publishes exactly loopback TCP on the selected host port to Router
 `8080` and UDP `7882` to in-box `7882`. The private core listener stays on

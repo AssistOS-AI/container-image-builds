@@ -84,20 +84,30 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # The pinned Podman base currently ships a user containers.conf. The Box
 # entrypoint creates that file together with box-transport.json after
 # discovering the outer gateway, so the immutable image must not contain
-# either half of that runtime-owned pair.
+# either half of that runtime-owned pair. The entrypoint likewise renders the
+# user storage.conf that splits the durable image cache from the disposable
+# graphroot, so no inherited copy may pre-empt it.
+#
+# /home/podman/.local/share/ploinky-images is the one durable storage mount and
+# is backed by a named volume. /home/podman/.local/share/containers/storage is
+# deliberately left on the container writable layer so every nested container
+# record, writable layer, and inner named volume dies with the outer Box.
 RUN rm -f /home/podman/.config/containers/containers.conf \
+        /home/podman/.config/containers/storage.conf \
     && mkdir -p \
         /opt/ploinky/node_modules \
         /workspace \
         /run/ploinky \
         /home/podman/.config/containers \
         /home/podman/.local/share/containers/storage \
+        /home/podman/.local/share/ploinky-images \
     && chown -R podman:podman \
         /opt/ploinky \
         /workspace \
         /run/ploinky \
         /home/podman/.config \
         /home/podman/.local/share/containers \
+        /home/podman/.local/share/ploinky-images \
     && chmod 0700 /run/ploinky /home/podman/.config /home/podman/.config/containers \
     && printf 'assistos/ploinky-box\n' > /etc/ploinky-box
 
