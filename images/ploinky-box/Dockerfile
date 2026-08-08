@@ -88,10 +88,12 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # user storage.conf that splits the durable image cache from the disposable
 # graphroot, so no inherited copy may pre-empt it.
 #
-# /home/podman/.local/share/ploinky-images is the one durable storage mount and
-# is backed by a named volume. /home/podman/.local/share/containers/storage is
-# deliberately left on the container writable layer so every nested container
-# record, writable layer, and inner named volume dies with the outer Box.
+# /home/podman/.local/share/ploinky-images is the reusable image storage mount
+# and is backed by the workspace's .ploinky/box/images host bind. The dependency
+# cache at /opt/ploinky/node_modules is likewise backed by
+# .ploinky/box/dependencies. /home/podman/.local/share/containers/storage is left
+# on the container writable layer so every nested container record, writable
+# layer, and inner named volume dies with the outer Box.
 RUN rm -f /home/podman/.config/containers/containers.conf \
         /home/podman/.config/containers/storage.conf \
     && mkdir -p \

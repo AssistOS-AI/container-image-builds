@@ -499,6 +499,15 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.doesNotMatch(dockerfile, /^VOLUME\s/m);
     assert.doesNotMatch(readme, /retained workspace-volume/i);
     assert.doesNotMatch(readme, /three (?:managed |explicitly )?named volumes/i);
+    assert.doesNotMatch(readme, /durable named volume/i);
+    assert.match(
+        readme,
+        /workspace-backed cache directories:[\s\S]*?\.ploinky\/box\/dependencies[\s\S]*?\/opt\/ploinky\/node_modules[\s\S]*?\.ploinky\/box\/images[\s\S]*?\/home\/podman\/\.local\/share\/ploinky-images/,
+    );
+    assert.match(
+        dockerfile,
+        /\.ploinky\/box\/images host bind[\s\S]*?\.ploinky\/box\/dependencies/,
+    );
     assert.match(dockerfile, /^ENV PATH=\/opt\/ploinky\/bin:\/usr\/local\/bin:\/usr\/bin \\$/m);
     for (const requiredEnv of [
         'USER=podman',

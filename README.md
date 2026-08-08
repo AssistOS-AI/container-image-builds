@@ -149,19 +149,20 @@ clean `FROM scratch` stage. Its metadata is exact:
 | Default command | Absent |
 | Declared image volumes | Absent |
 
-Only reusable image content outlives one outer Box. The supervisor mounts the
-host workspace at `/workspace`, an identity-scoped dependency volume at
-`/opt/ploinky/node_modules`, and an identity-scoped image cache at
-`/home/podman/.local/share/ploinky-images`. The host bind and both caches survive
-stop, destroy, replacement, and recreation.
+The host workspace, reusable image content, and pinned dependencies outlive one
+outer Box. The supervisor mounts the host workspace at `/workspace` and
+bind-mounts two workspace-backed cache directories: `.ploinky/box/dependencies` at
+`/opt/ploinky/node_modules` and `.ploinky/box/images` at
+`/home/podman/.local/share/ploinky-images`. The workspace and both cache binds
+survive stop, destroy, replacement, and recreation.
 
 Everything else in the inner Podman store is disposable and is discarded with
 the outer Box:
 
 | Path | Lifetime |
 | --- | --- |
-| `/home/podman/.local/share/ploinky-images` | Durable named volume; downloaded image content only |
-| `/opt/ploinky/node_modules` | Durable named volume; pinned dependency cache |
+| `/home/podman/.local/share/ploinky-images` | Workspace-backed host bind from `.ploinky/box/images`; downloaded image content only |
+| `/opt/ploinky/node_modules` | Workspace-backed host bind from `.ploinky/box/dependencies`; pinned dependency cache |
 | `/workspace` | Durable host bind; user and agent data |
 | `/home/podman/.local/share/containers/storage` | Box writable layer; nested container records, writable layers, and inner named volumes |
 | `/tmp/storage-run-1000` | Box tmpfs; reset on every startup |
