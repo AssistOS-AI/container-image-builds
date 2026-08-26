@@ -14,6 +14,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
 | `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
+| `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
@@ -67,6 +68,15 @@ publishes an amd64/arm64 index with provenance and an SBOM, verifies that both
 platform manifests exist, and reports the resulting immutable image digest.
 Publishing does not update the consumer manifest; pinning that new output is a
 separate reviewed operation.
+
+## SearchAgent runtime
+
+`docker.io/assistos/search-agent:searxng-browser` layers Chromium, a pinned
+SearXNG source revision, its Python environment, and the pinned Puppeteer
+runtime onto the standard Ploinky Node image. System packages and `/opt`
+content are created only while building the immutable image as root. The
+published runtime restores UID/GID `1000:1000`, so enabling SearchAgent never
+requires package-manager or system-directory privileges.
 
 ## Bubblewrap runner publication
 

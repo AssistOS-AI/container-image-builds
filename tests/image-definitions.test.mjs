@@ -198,6 +198,39 @@ test('default-local-llm workflow publishes the Qwen2.5 Coder image as multi-arch
     assert.match(workflow, /bwrap --version/);
 });
 
+test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivileged runtime', () => {
+    const workflow = read('.github/workflows/publish-search-agent-image.yml');
+    const dockerfile = read('images/search-agent/Dockerfile');
+    const packageJson = JSON.parse(read('images/search-agent/package.json'));
+
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/search-agent/);
+    assert.match(workflow, /default:\s*searxng-browser/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /push-by-digest=true/);
+    assert.match(workflow, /--cap-drop=ALL --security-opt=no-new-privileges/);
+    assert.match(workflow, /docker buildx imagetools create/);
+    assert.match(workflow, /grep -q 'linux\/amd64'/);
+    assert.match(workflow, /grep -q 'linux\/arm64'/);
+
+    assert.match(dockerfile, /^FROM docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64} AS searxng-builder$/m);
+    assert.equal(
+        dockerfile.match(/^FROM docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}(?: AS searxng-builder)?$/gm)?.length,
+        2,
+    );
+    assert.match(dockerfile, /9fea41204fdfa7a5cfa15b0ebd12904c520478ce/);
+    assert.match(dockerfile, /msgspec==0\.21\.1/);
+    assert.match(dockerfile, /--no-build-isolation -e \/opt\/search-agent\/searxng-src/);
+    assert.match(dockerfile, /COPY --from=searxng-builder \/opt\/search-agent\/searx-pyenv/);
+    assert.match(dockerfile, /\bchromium\b/);
+    assert.match(dockerfile, /python3 -m venv \/opt\/search-agent\/searx-pyenv/);
+    assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
+    assert.match(dockerfile, /^ENV NODE_PATH=\/opt\/search-agent\/node_modules/m);
+    assert.match(dockerfile, /^USER root$/m);
+    assert.match(dockerfile, /^USER 1000:1000$/m);
+    assert.equal(packageJson.dependencies['puppeteer-core'], '25.9.0');
+});
+
 test('umami-agent workflow builds the all-in-one Umami stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
