@@ -69,16 +69,36 @@ jobs:
             images/webtty-agent
           docker run --rm "$IMAGE_NAME:smoke" node -e "require('node-pty'); console.log('node-pty ok')"
           docker run --rm "$IMAGE_NAME:smoke" sh -eu -c '
-            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm.js
-            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm.css
-            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm-addon-fit.js
-            test -s /opt/webtty-agent/public/assets/vendor/xterm/xterm-addon-web-links.js
+            test -s /opt/webtty-agent/public/vendor/xterm/xterm.js
+            test -s /opt/webtty-agent/public/vendor/xterm/xterm.css
+            test -s /opt/webtty-agent/public/vendor/xterm/xterm-addon-fit.js
+            test -s /opt/webtty-agent/public/vendor/xterm/xterm-addon-web-links.js
             ! grep -R -E "https?://(unpkg|cdn\\.jsdelivr|cdnjs)" /opt/webtty-agent/public
             test "$(stat -c "%u:%g:%a" /usr/local/share/ploinky/webtty.contract)" = 0:0:444
             test "$(sed -n "1p" /usr/local/share/ploinky/webtty.contract)" = contract_version=5
             test "$(wc -l < /usr/local/share/ploinky/webtty.contract)" -eq 5
             test -x /usr/local/bin/webtty-start
           '
+          container_id="$(docker run -d --rm -e PORT=8080 -p 127.0.0.1::7681 "$IMAGE_NAME:smoke")"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          host_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "7681/tcp") 0).HostPort}}' "$container_id")"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error "http://127.0.0.1:${host_port}/" >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs "$container_id"
+              exit 1
+            fi
+            sleep 1
+          done
+          for asset in \
+            /assets/vendor/xterm/xterm.js \
+            /assets/vendor/xterm/xterm.css \
+            /assets/vendor/xterm/xterm-addon-fit.js \
+            /assets/vendor/xterm/xterm-addon-web-links.js; do
+            curl --fail --silent --show-error "http://127.0.0.1:${host_port}${asset}" >/dev/null
+          done
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

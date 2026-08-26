@@ -11,7 +11,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const HOST = '0.0.0.0';
-const PORT = Number.parseInt(process.env.PORT || '7681', 10) || 7681;
+// PORT belongs to the surrounding Ploinky runtime. Keep WebTTY's listener
+// independently namespaced so an outer runtime port cannot redirect it away
+// from the router's fixed /webtty/7681 endpoint.
+const PORT = Number.parseInt(process.env.WEBTTY_PORT || '7681', 10) || 7681;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const WORKSPACE_ROOT = path.resolve(process.env.WEBTTY_WORKSPACE_ROOT || '/workspace');
 const SESSION_COOKIE = 'webtty_agent_sid';

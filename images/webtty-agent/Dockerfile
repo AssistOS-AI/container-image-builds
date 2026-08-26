@@ -13,11 +13,11 @@ RUN npm ci --omit=dev \
 COPY app/ ./
 COPY --chmod=0555 webtty-start.sh /usr/local/bin/webtty-start
 
-RUN install -d public/assets/vendor/xterm \
-    && install -m 0644 node_modules/xterm/css/xterm.css public/assets/vendor/xterm/xterm.css \
-    && install -m 0644 node_modules/xterm/lib/xterm.js public/assets/vendor/xterm/xterm.js \
-    && install -m 0644 node_modules/xterm-addon-fit/lib/xterm-addon-fit.js public/assets/vendor/xterm/xterm-addon-fit.js \
-    && install -m 0644 node_modules/xterm-addon-web-links/lib/xterm-addon-web-links.js public/assets/vendor/xterm/xterm-addon-web-links.js \
+RUN install -d public/vendor/xterm \
+    && install -m 0644 node_modules/xterm/css/xterm.css public/vendor/xterm/xterm.css \
+    && install -m 0644 node_modules/xterm/lib/xterm.js public/vendor/xterm/xterm.js \
+    && install -m 0644 node_modules/xterm-addon-fit/lib/xterm-addon-fit.js public/vendor/xterm/xterm-addon-fit.js \
+    && install -m 0644 node_modules/xterm-addon-web-links/lib/xterm-addon-web-links.js public/vendor/xterm/xterm-addon-web-links.js \
     && ! grep -R -E 'https?://(unpkg|cdn\.jsdelivr|cdnjs)' public \
     && tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
         -C public -cf public.tar . \

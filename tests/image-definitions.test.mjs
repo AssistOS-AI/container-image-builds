@@ -109,6 +109,7 @@ test('webtty-agent workflow builds and publishes the node-pty terminal image', (
     const dockerfile = read('images/webtty-agent/Dockerfile');
     const packageJson = JSON.parse(read('images/webtty-agent/app/package.json'));
     const html = read('images/webtty-agent/app/public/webtty.html');
+    const server = read('images/webtty-agent/app/server.mjs');
     const startScript = read('images/webtty-agent/webtty-start.sh');
 
     assert.match(workflow, /images\/webtty-agent/);
@@ -123,7 +124,8 @@ test('webtty-agent workflow builds and publishes the node-pty terminal image', (
 
     assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}$/m);
     assert.match(dockerfile, /\bnode-pty\b/);
-    assert.match(dockerfile, /public\/assets\/vendor\/xterm\/xterm\.js/);
+    assert.match(dockerfile, /public\/vendor\/xterm\/xterm\.js/);
+    assert.doesNotMatch(dockerfile, /public\/assets\/vendor\/xterm/);
     assert.match(dockerfile, /webtty\.contract/);
     assert.match(dockerfile, /public\.tar/);
     assert.match(dockerfile, /chmod 0444/);
@@ -133,11 +135,16 @@ test('webtty-agent workflow builds and publishes the node-pty terminal image', (
     assert.match(startScript, /server_sha256/);
     assert.match(startScript, /public_archive_sha256/);
     assert.match(startScript, /exec node/);
+    assert.match(server, /process\.env\.WEBTTY_PORT \|\| '7681'/);
+    assert.doesNotMatch(server, /process\.env\.PORT \|\| '7681'/);
     assert.equal(packageJson.dependencies.xterm, '5.3.0');
     assert.equal(packageJson.dependencies['xterm-addon-fit'], '0.8.0');
     assert.equal(packageJson.dependencies['xterm-addon-web-links'], '0.9.0');
     assert.match(html, /assets\/vendor\/xterm\/xterm\.js/);
     assert.match(html, /assets\/vendor\/xterm\/xterm\.css/);
+    assert.match(workflow, /for asset in[\s\S]*\/assets\/vendor\/xterm\/xterm-addon-fit\.js/);
+    assert.match(workflow, /docker run -d --rm -e PORT=8080 -p 127\.0\.0\.1::7681/);
+    assert.match(workflow, /curl --fail --silent --show-error "http:\/\/127\.0\.0\.1:\$\{host_port\}\$\{asset\}"/);
     assert.doesNotMatch(html, /https?:\/\//);
     assert.doesNotMatch(html, /\bunpkg\b|jsdelivr|cdnjs/i);
 });
