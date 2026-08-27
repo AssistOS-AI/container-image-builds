@@ -91,6 +91,8 @@ jobs:
           context: .
           file: ./images/ploinky-box/Dockerfile
           platforms: ${{ matrix.platform }}
+          build-args: |
+            PLOINKY_SOURCE_SHA=${{ needs.resolve-source.outputs.source_sha }}
           outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
 
