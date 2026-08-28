@@ -104,49 +104,15 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(bindInterposer, /docservice-port-8000/);
 });
 
-test('webtty-agent workflow builds and publishes the node-pty terminal image', () => {
-    const workflow = read('.github/workflows/publish-webtty-agent-image.yml');
-    const dockerfile = read('images/webtty-agent/Dockerfile');
-    const packageJson = JSON.parse(read('images/webtty-agent/app/package.json'));
-    const html = read('images/webtty-agent/app/public/webtty.html');
-    const server = read('images/webtty-agent/app/server.mjs');
-    const startScript = read('images/webtty-agent/webtty-start.sh');
+test('independent WebTTY image and publication workflow are retired', () => {
+    const readme = read('README.md');
 
-    assert.match(workflow, /images\/webtty-agent/);
-    assert.match(workflow, /IMAGE_NAME:\s*assistos\/webtty-agent/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
-    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(workflow, /DEFAULT_BASE_IMAGE:\s*docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}/);
-    assert.match(workflow, /base_image must equal the reviewed immutable ploinky-node index/);
-    assert.match(workflow, /webtty\.contract/);
-
-    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}$/m);
-    assert.match(dockerfile, /\bnode-pty\b/);
-    assert.match(dockerfile, /public\/vendor\/xterm\/xterm\.js/);
-    assert.doesNotMatch(dockerfile, /public\/assets\/vendor\/xterm/);
-    assert.match(dockerfile, /webtty\.contract/);
-    assert.match(dockerfile, /public\.tar/);
-    assert.match(dockerfile, /chmod 0444/);
-    assert.match(dockerfile, /CMD \["\/usr\/local\/bin\/webtty-start"\]/);
-    assert.match(startScript, /contract_version=5/);
-    assert.match(startScript, /package_lock_sha256/);
-    assert.match(startScript, /server_sha256/);
-    assert.match(startScript, /public_archive_sha256/);
-    assert.match(startScript, /exec node/);
-    assert.match(server, /process\.env\.WEBTTY_PORT \|\| '7681'/);
-    assert.doesNotMatch(server, /process\.env\.PORT \|\| '7681'/);
-    assert.equal(packageJson.dependencies.xterm, '5.3.0');
-    assert.equal(packageJson.dependencies['xterm-addon-fit'], '0.8.0');
-    assert.equal(packageJson.dependencies['xterm-addon-web-links'], '0.9.0');
-    assert.match(html, /assets\/vendor\/xterm\/xterm\.js/);
-    assert.match(html, /assets\/vendor\/xterm\/xterm\.css/);
-    assert.match(workflow, /for asset in[\s\S]*\/assets\/vendor\/xterm\/xterm-addon-fit\.js/);
-    assert.match(workflow, /docker run -d --rm -e PORT=8080 -p 127\.0\.0\.1::7681/);
-    assert.match(workflow, /curl --fail --silent --show-error "http:\/\/127\.0\.0\.1:\$\{host_port\}\$\{asset\}"/);
-    assert.doesNotMatch(html, /https?:\/\//);
-    assert.doesNotMatch(html, /\bunpkg\b|jsdelivr|cdnjs/i);
+    assert.equal(fs.existsSync(path.join(repoRoot, 'images/webtty-agent')), false);
+    assert.equal(
+        fs.existsSync(path.join(repoRoot, '.github/workflows/publish-webtty-agent-image.yml')),
+        false,
+    );
+    assert.doesNotMatch(readme, /assistos\/webtty-agent|publish-webtty-agent-image|images\/webtty-agent/);
 });
 
 test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
@@ -469,12 +435,18 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         dockerfile,
         /^ARG PODMAN_BASE=quay\.io\/podman\/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964$/m,
     );
-    assert.match(dockerfile, /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim$/m);
+    assert.match(
+        dockerfile,
+        /^ARG NODE_RUNTIME_IMAGE=docker\.io\/library\/node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df$/m,
+    );
     assert.match(
         dockerfile,
         /^ARG CLOUDFLARED_IMAGE=docker\.io\/cloudflare\/cloudflared:2026\.7\.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe$/m,
     );
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
+    assert.match(dockerfile, /^FROM \$PODMAN_BASE AS prepared-rootfs-base$/m);
+    assert.match(dockerfile, /^FROM prepared-rootfs-base AS webtty-builder$/m);
+    assert.match(dockerfile, /^FROM prepared-rootfs-base AS prepared-rootfs$/m);
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
     for (const requiredPackage of [
         'bash', 'bind-utils', 'bzip2', 'ca-certificates', 'coreutils', 'curl',
@@ -506,6 +478,7 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.match(dockerfile, /cloudflared tunnel run --help/);
     assert.match(dockerfile, /--token-file/);
     assert.doesNotMatch(dockerfile, /^LABEL\s/m);
+    assert.doesNotMatch(dockerfile, /^EXPOSE\s/m);
     assert.doesNotMatch(dockerfile, /io\.assistos\.ploinky\.runtime-contract/);
     assert.match(dockerfile, /printf 'assistos\/ploinky-box\\n' > \/etc\/ploinky-box/);
     for (const ownedTarget of [
@@ -564,6 +537,26 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         dockerfile,
         /^COPY sources\/ploinky\/ploinky-box\/entrypoint\/ploinky-box-entrypoint \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
     );
+    assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/package\.json \/tmp\/webtty-build\/package\.json$/m);
+    assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/package-lock\.json \/tmp\/webtty-build\/package-lock\.json$/m);
+    assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/native-probe\.mjs \/usr\/local\/share\/ploinky\/webtty\/native-probe\.mjs$/m);
+    assert.match(dockerfile, /ARG PLOINKY_SOURCE_SHA/);
+    assert.match(dockerfile, /grep -Eq '\^\[0-9a-f\]\{40\}\$'/);
+    assert.match(dockerfile, /npm ci --omit=dev --no-audit --no-fund/);
+    assert.match(dockerfile, /--build-contract[\s\S]*?--package-lock[\s\S]*?--source-sha/);
+    assert.match(dockerfile, /node \/usr\/local\/share\/ploinky\/webtty\/native-probe\.mjs --verify/);
+    assert.match(dockerfile, /COPY --from=webtty-builder \/usr\/local\/lib\/ploinky\/webtty\/node_modules/);
+    assert.match(dockerfile, /COPY --from=webtty-builder \/usr\/local\/share\/ploinky\/webtty\/native-probe\.mjs/);
+    assert.match(dockerfile, /COPY --from=webtty-builder \/usr\/local\/share\/ploinky\/webtty\/runtime-contract\.json/);
+    assert.match(dockerfile, /chown -R 0:0 \/usr\/local\/lib\/ploinky\/webtty \/usr\/local\/share\/ploinky\/webtty/);
+    assert.match(dockerfile, /USER podman[\s\S]*?RUN node \/usr\/local\/share\/ploinky\/webtty\/native-probe\.mjs --verify[\s\S]*?USER root/);
+    assert.match(dockerfile, /! command -v gcc/);
+    assert.match(dockerfile, /! command -v g\+\+/);
+    assert.match(dockerfile, /! command -v make/);
+    assert.match(dockerfile, /-name \.npm -o -name \.cache -o -name node-gyp/);
+    assert.match(dockerfile, /test ! -e \/tmp\/webtty-build/);
+    assert.doesNotMatch(dockerfile, /spawn-helper/);
+    assert.doesNotMatch(dockerfile, /NODE_PATH|WEBTTY_PORT|\b7681\b/);
     assert.match(dockerfile, /^RUN chmod 0755 \/usr\/local\/bin\/ploinky-box-entrypoint$/m);
     assert.equal(fs.existsSync(path.join(repoRoot, 'images/ploinky-box/entrypoint.sh')), false);
     assert.doesNotMatch(dockerfile, /COPY images\/ploinky-box\/entrypoint\.sh/);
@@ -571,6 +564,8 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.match(dockerfile, /^WORKDIR \/workspace$/m);
     assert.match(dockerfile, /^ENTRYPOINT \["\/usr\/local\/bin\/ploinky-box-entrypoint"\]$/m);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'VOLUME').length, 0);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'EXPOSE').length, 0);
+    assert.equal(instructions.filter(({ keyword }) => keyword === 'LABEL').length, 0);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 });
 
@@ -606,6 +601,10 @@ test('ploinky-box workflow publishes two native immutable digests without behavi
     assert.match(read('.gitignore'), /^sources\/$/m);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
     assert.match(buildJob, /Build and push architecture image by digest/);
+    assert.match(
+        buildJob,
+        /build-args:\s*\|[\s\S]*?PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/,
+    );
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
     assert.match(buildJob, /Record architecture digest evidence/);
@@ -665,7 +664,12 @@ test('latest channel documentation separates creation from hard-cut recovery', (
     assert.match(readme, /release channel[\s\S]*?separately authorized registry release[\s\S]*?action/);
     assert.match(readme, /never a supervisor\s+transaction/);
     assert.match(readme, /Reuse,\s+status, stop, and destroy do not pull the channel/);
-    assert.doesNotMatch(readme, /runtime contract|runtime-contract|contract-[0-9]+/i);
+    assert.match(readme, /private WebTTY native contract/);
+    assert.match(readme, /source SHA is provenance\s+only; runtime compatibility never compares it/);
+    assert.doesNotMatch(
+        readme,
+        /(?:image name|tags?|labels?|marker|release channel)[^\n]*(?:runtime-contract|contract-[0-9]+)/i,
+    );
 });
 
 test('ploinky-node does not install a container engine or client', () => {

@@ -9,7 +9,6 @@ shared runtime images to the `assistos` Docker Hub organization.
 | Image | Source repo | Build context | Dockerfile | Workflow |
 | --- | --- | --- | --- | --- |
 | `assistos/ploinky-node:24-bookworm-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
-| `assistos/webtty-agent:node24` | this repo | `images/webtty-agent` | `images/webtty-agent/Dockerfile` | `publish-webtty-agent-image.yml` |
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
@@ -29,9 +28,10 @@ references. The workflow neither requires nor creates the later digest-pin and
 privilege-removal commits, so publication remains the input to those consumer
 changes rather than depending on them. The `livekit-server-agent`
 workflow also checks out its source repository under `sources/`. The
-`ploinky-box` workflow checks
-out Ploinky at an exact commit, copies only its canonical Box entrypoint
-into the image, and publishes native architecture images by immutable digest.
+`ploinky-box` workflow checks out Ploinky at an exact commit. The image consumes
+only its canonical Box entrypoint and the exact WebTTY native package, lockfile,
+and self-contained probe; Router and application source remain on the read-only
+runtime mount. Native architecture images are published by immutable digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
 current tip of `webmeetInfra/ploinky-proxy`. It builds and smoke-tests the local
@@ -133,16 +133,37 @@ includes deterministic GNU text and file tools (`find`, `grep`, `sed`, `awk`,
 archive utilities, `less`, `file`, `which`, `tree`, `nano`/`vi`, and network
 diagnostics (`ss`, `ping`, `dig`, `host`, `nslookup`, `nc`, `netstat`, `lsof`).
 The Dockerfile requires every advertised command during both native builds.
-Ploinky source is mounted
-read-only at `/opt/ploinky`; the Dockerfile copies its single canonical
-`ploinky-box/entrypoint/ploinky-box-entrypoint` into the image and does not
-retain a separate image-repository entrypoint implementation.
+Ploinky source is mounted read-only at `/opt/ploinky`; the Dockerfile copies its
+canonical `ploinky-box/entrypoint/ploinky-box-entrypoint` and the three exact
+native-package inputs described below. It does not retain Router or application
+source, or a separate image-repository entrypoint implementation.
 
 The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
-The cloudflared source is likewise pinned, and the Dockerfile verifies the exact
-architecture-specific binary digest, version 2026.7.1, and `--token-file`
-support. Both amd64 and arm64 are built on native runners.
+Node is pinned to the official Node 24 Bookworm slim multiarchitecture index
+`docker.io/library/node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df`.
+The cloudflared source is likewise pinned, and the Dockerfile verifies the
+exact architecture-specific binary digest, version 2026.7.1, and
+`--token-file` support. Both amd64 and arm64 are built on native runners.
+
+WebTTY has no independent image or listener. Its exact `node-pty` 1.0.0
+dependency is compiled in a compiler-only stage based on the pristine Box
+rootfs. The distributable rootfs receives only the pruned production dependency
+tree at `/usr/local/lib/ploinky/webtty/node_modules`, the self-contained probe,
+and `/usr/local/share/ploinky/webtty/runtime-contract.json`. A real unprivileged
+PTY probe proves absolute import, input, output, resize, exit, process identity,
+and reaping during every native image build. The final stage also rejects
+compiler, header, build-workspace, and npm-cache residue.
+
+The private WebTTY native contract records schema
+`ploinky.webtty.native/v1`, Node major 24/module ABI 137, architecture,
+`node-pty` version, package-lock hash
+`3eec51e517db1ba30c6ef523be83640cd0484b910adfa54a11692e020ea06a6a`,
+the native-artifact hash, and the build source SHA. The source SHA is provenance
+only; runtime compatibility never compares it.
+This private capability evidence does not alter the unversioned Box marker,
+image name, tags, labels, environment, volumes, entrypoint, user, workdir, or
+network publication contract.
 
 The final image is reconstructed from a prepared Podman filesystem through a
 clean `FROM scratch` stage. Its metadata is exact:
@@ -257,10 +278,6 @@ gh workflow run publish-ploinky-node-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f image_tag=24-bookworm-tools
 
-gh workflow run publish-webtty-agent-image.yml \
-  --repo AssistOS-AI/container-image-builds \
-  -f image_tag=node24
-
 gh workflow run publish-onlyoffice-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f onlyoffice_version=9.3.1 \
@@ -304,13 +321,6 @@ gh workflow run publish-ploinky-box-image.yml \
   -f source_ref="$(git -C ../ploinky rev-parse HEAD)"
 ```
 
-WebTTY publication is a two-step hard cut. The workflow accepts only the
-reviewed immutable `ploinky-node` base and emits a root-owned byte-contract
-marker. After the multi-architecture index is published and inspected, update
-the consumer manifest to that exact index digest. Until then, the consumer's
-required `/usr/local/bin/webtty-start` entrypoint makes the previous pinned
-image fail before opening its listener; no mutable-tag fallback is permitted.
-
 `latest` and its `runtime` compatibility alias are intentionally mutable, but an
 already-created Ploinky Box stays on its inspected image ID. The supervisor
 consults the selected channel only when creating a missing Box or performing a
@@ -321,7 +331,7 @@ a separately authorized registry release action, never a supervisor
 transaction; the channel must not point to an incompatible image. Reuse,
 status, stop, and destroy do not pull the channel.
 
-`publish-ploinky-node-image.yml`, `publish-webtty-agent-image.yml`, and
-`publish-onlyoffice-agent-image.yml` also run on pushes to their image
+`publish-ploinky-node-image.yml` and `publish-onlyoffice-agent-image.yml` also
+run on pushes to their image
 definitions or workflow files. The other publish workflows stay manual because
 their build contexts live in separate source repositories.

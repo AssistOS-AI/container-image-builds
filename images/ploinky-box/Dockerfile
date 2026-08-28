@@ -1,14 +1,15 @@
 # quay.io's immutable OCI index for Podman 5.8.2, verified to include native
 # linux/amd64 and linux/arm64 manifests. Candidate CI re-proves the full stack.
 ARG PODMAN_BASE=quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964
-ARG NODE_RUNTIME_IMAGE=docker.io/library/node:24-bookworm-slim
+ARG NODE_RUNTIME_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
 ARG CLOUDFLARED_IMAGE=docker.io/cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
+ARG PLOINKY_SOURCE_SHA
 
 FROM $CLOUDFLARED_IMAGE AS cloudflared
 
 FROM $NODE_RUNTIME_IMAGE AS node-runtime
 
-FROM $PODMAN_BASE AS prepared-rootfs
+FROM $PODMAN_BASE AS prepared-rootfs-base
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -121,6 +122,91 @@ RUN test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /et
 
 COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint
 RUN chmod 0755 /usr/local/bin/ploinky-box-entrypoint
+
+# node-pty is compiled in the exact Fedora/Node runtime it will execute in.
+# Compiler state and the npm build workspace remain confined to this stage.
+FROM prepared-rootfs-base AS webtty-builder
+
+ARG PLOINKY_SOURCE_SHA
+WORKDIR /tmp/webtty-build
+
+COPY sources/ploinky/core-services/webtty/package.json /tmp/webtty-build/package.json
+COPY sources/ploinky/core-services/webtty/package-lock.json /tmp/webtty-build/package-lock.json
+COPY sources/ploinky/core-services/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs
+
+RUN printf '%s\n' "$PLOINKY_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+    && dnf install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        gcc-c++ \
+        make \
+    && chown -R podman:podman /tmp/webtty-build
+
+USER podman
+RUN npm_config_cache=/tmp/webtty-npm-cache npm ci --omit=dev --no-audit --no-fund \
+    && rm -rf \
+        /tmp/webtty-build/node_modules/nan \
+        /tmp/webtty-build/node_modules/node-pty/deps \
+        /tmp/webtty-build/node_modules/node-pty/scripts \
+        /tmp/webtty-build/node_modules/node-pty/src \
+    && find /tmp/webtty-build/node_modules/node-pty/build \
+        -mindepth 1 -maxdepth 1 ! -name Release -exec rm -rf {} + \
+    && find /tmp/webtty-build/node_modules/node-pty/build/Release \
+        -mindepth 1 -maxdepth 1 ! -name pty.node -exec rm -rf {} + \
+    && rm -f /tmp/webtty-build/node_modules/node-pty/binding.gyp \
+    && node /usr/local/share/ploinky/webtty/native-probe.mjs \
+        --build-contract \
+        --package-lock /tmp/webtty-build/package-lock.json \
+        --source-sha "$PLOINKY_SOURCE_SHA" \
+        --module-root /tmp/webtty-build/node_modules \
+        > /tmp/webtty-runtime-contract.json \
+    && rm -rf /tmp/webtty-npm-cache
+
+USER root
+RUN mkdir -p /usr/local/lib/ploinky/webtty /usr/local/share/ploinky/webtty \
+    && cp -a /tmp/webtty-build/node_modules /usr/local/lib/ploinky/webtty/node_modules \
+    && cp /tmp/webtty-runtime-contract.json \
+        /usr/local/share/ploinky/webtty/runtime-contract.json \
+    && chown -R 0:0 /usr/local/lib/ploinky/webtty /usr/local/share/ploinky/webtty
+
+USER podman
+RUN node /usr/local/share/ploinky/webtty/native-probe.mjs --verify
+
+USER root
+
+# Reconstruct the distributable rootfs from the pristine runtime base. Only the
+# immutable production dependency tree and its self-verifying private contract
+# cross the compiler boundary.
+FROM prepared-rootfs-base AS prepared-rootfs
+
+COPY --from=webtty-builder /usr/local/lib/ploinky/webtty/node_modules /usr/local/lib/ploinky/webtty/node_modules
+COPY --from=webtty-builder /usr/local/share/ploinky/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs
+COPY --from=webtty-builder /usr/local/share/ploinky/webtty/runtime-contract.json /usr/local/share/ploinky/webtty/runtime-contract.json
+
+RUN chown -R 0:0 /usr/local/lib/ploinky/webtty /usr/local/share/ploinky/webtty \
+    && find /usr/local/lib/ploinky/webtty -type d -exec chmod 0555 {} + \
+    && find /usr/local/lib/ploinky/webtty -type f -exec chmod 0444 {} + \
+    && chmod 0555 /usr/local/share/ploinky/webtty \
+        /usr/local/share/ploinky/webtty/native-probe.mjs \
+    && chmod 0444 /usr/local/share/ploinky/webtty/runtime-contract.json \
+    && ! command -v cc \
+    && ! command -v c++ \
+    && ! command -v gcc \
+    && ! command -v g++ \
+    && ! command -v make \
+    && ! find /root /home/podman -xdev -type d \
+        \( -name .npm -o -name .cache -o -name node-gyp \) -print -quit | grep -q . \
+    && ! find /usr/local/lib/ploinky/webtty -type f \
+        \( -name '*.c' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \
+        -o -name '*.o' -o -name '*.a' -o -name binding.gyp \) \
+        -print -quit | grep -q . \
+    && test ! -e /tmp/webtty-build \
+    && test "$(find /usr/local/lib/ploinky/webtty -type f -name '*.node' | wc -l)" -eq 1
+
+USER podman
+WORKDIR /workspace
+RUN node /usr/local/share/ploinky/webtty/native-probe.mjs --verify
+
+USER root
+WORKDIR /
 
 FROM scratch AS runtime
 
