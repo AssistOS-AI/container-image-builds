@@ -10,13 +10,15 @@ function read(relativePath) {
     return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('ploinky-box image consumes only the canonical entrypoint and native WebTTY inputs', () => {
+test('ploinky-box image consumes only the canonical entrypoint and sealed runtime inputs', () => {
     const dockerfile = read('images/ploinky-box/Dockerfile');
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
 
     const sourceCopies = dockerfile.match(/^COPY sources\/ploinky\/.*$/gm) || [];
     assert.deepEqual(sourceCopies, [
         'COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint',
+        'COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json',
+        'COPY sources/ploinky/ploinky-box/mcp-sdk-bundle.mjs /tmp/mcp-sdk-bundle.mjs',
         'COPY sources/ploinky/core-services/webtty/package.json /tmp/webtty-build/package.json',
         'COPY sources/ploinky/core-services/webtty/package-lock.json /tmp/webtty-build/package-lock.json',
         'COPY sources/ploinky/core-services/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs',
@@ -25,6 +27,9 @@ test('ploinky-box image consumes only the canonical entrypoint and native WebTTY
     assert.equal(fs.existsSync(path.join(ROOT, 'images/ploinky-box/entrypoint.sh')), false);
     assert.match(workflow, /Checkout immutable Ploinky source/);
     assert.match(workflow, /path:\s*sources\/ploinky/);
+    assert.match(workflow, /Resolve immutable MCP SDK input from the Ploinky lock/);
+    assert.match(workflow, /path:\s*sources\/mcp-sdk/);
+    assert.match(workflow, /persist-credentials:\s*false/);
     assert.match(workflow, /PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
 });
 
