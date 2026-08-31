@@ -17,7 +17,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus one immutable `AssistOS-AI/ploinky` source commit | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus immutable `AssistOS-AI/ploinky` and lock-selected `AssistOS-AI/MCPSDK` commits | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
 The `bwrap-runner` workflow checks out exact full-SHA `basic`, `copilot-agents`,
 and `AchillesCLI` inputs under `sources/`; the latter two supply the Open
@@ -28,10 +28,13 @@ references. The workflow neither requires nor creates the later digest-pin and
 privilege-removal commits, so publication remains the input to those consumer
 changes rather than depending on them. The `livekit-server-agent`
 workflow also checks out its source repository under `sources/`. The
-`ploinky-box` workflow checks out Ploinky at an exact commit. The image consumes
-only its canonical Box entrypoint and the exact WebTTY native package, lockfile,
-and self-contained probe; Router and application source remain on the read-only
-runtime mount. Native architecture images are published by immutable digest.
+`ploinky-box` workflow checks out Ploinky at an exact commit, resolves the MCP
+SDK commit from Ploinky's dependency lock, and checks out that exact source
+without persisted credentials. The image consumes the canonical Box
+entrypoint, sealed MCP SDK bundle contract, and exact WebTTY native package,
+lockfile, and self-contained probe; Router and application source remain on the
+read-only runtime mount. Native architecture images are published by immutable
+digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
 current tip of `webmeetInfra/ploinky-proxy`. It builds and smoke-tests the local
@@ -134,9 +137,18 @@ archive utilities, `less`, `file`, `which`, `tree`, `nano`/`vi`, and network
 diagnostics (`ss`, `ping`, `dig`, `host`, `nslookup`, `nc`, `netstat`, `lsof`).
 The Dockerfile requires every advertised command during both native builds.
 Ploinky source is mounted read-only at `/opt/ploinky`; the Dockerfile copies its
-canonical `ploinky-box/entrypoint/ploinky-box-entrypoint` and the three exact
-native-package inputs described below. It does not retain Router or application
-source, or a separate image-repository entrypoint implementation.
+canonical `ploinky-box/entrypoint/ploinky-box-entrypoint`, MCP SDK bundle
+contract and dependency lock, and the three exact native-package inputs
+described below. It does not retain Router or application source, or a separate
+image-repository entrypoint implementation.
+
+The MCP SDK is packaged at `/usr/local/lib/ploinky/mcp-sdk`. Its builder input
+must be the exact commit selected by Ploinky's lock, clean, dependency-free, and
+free of symlinks. The builder strips `.git`, records a content fingerprint, and
+the final image re-verifies the sealed tree as the unprivileged runtime user.
+Box startup performs no MCP SDK Git or npm operation: it transactionally copies
+the verified image bundle into the workspace-backed dependency cache and
+repairs a missing, stale, or modified cache copy from those local bytes.
 
 The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
@@ -210,13 +222,13 @@ read-only. Stop uses a dedicated in-box helper and remains available when
 dependency state is missing or corrupt. Outer candidate and replacement cleanup
 includes anonymous volumes only.
 
-First boot generates a mode-restricted workspace master key and installs the
-two dependency repositories at the exact commits in Ploinky's additive lock.
-The key never crosses from the host, is not printed, and is excluded from nested
-agents. It remains stable with the host workspace because it is stored under
-`/workspace/.ploinky`. Manual key edits and in-place rotation are unsupported;
-a new key requires a distinct host workspace identity and migration of
-non-secret data only.
+First boot generates a mode-restricted workspace master key, validates the
+direct AgentLib mount selected by the host, and materializes the lock-pinned MCP
+SDK from the image bundle without network access. The key never crosses from
+the host, is not printed, and is excluded from nested agents. It remains stable
+with the host workspace because it is stored under `/workspace/.ploinky`.
+Manual key edits and in-place rotation are unsupported; a new key requires a
+distinct host workspace identity and migration of non-secret data only.
 
 The Box publishes exactly loopback TCP on the selected host port to Router
 `8080` and UDP `7882` to in-box `7882`. The private core listener stays on

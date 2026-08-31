@@ -445,6 +445,7 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     );
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
     assert.match(dockerfile, /^FROM \$PODMAN_BASE AS prepared-rootfs-base$/m);
+    assert.match(dockerfile, /^FROM prepared-rootfs-base AS mcp-sdk-builder$/m);
     assert.match(dockerfile, /^FROM prepared-rootfs-base AS webtty-builder$/m);
     assert.match(dockerfile, /^FROM prepared-rootfs-base AS prepared-rootfs$/m);
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
@@ -537,6 +538,14 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
         dockerfile,
         /^COPY sources\/ploinky\/ploinky-box\/entrypoint\/ploinky-box-entrypoint \/usr\/local\/bin\/ploinky-box-entrypoint$/m,
     );
+    assert.match(dockerfile, /^COPY sources\/ploinky\/ploinky-box\/dependencies\.lock\.json \/tmp\/ploinky-box-dependencies\.lock\.json$/m);
+    assert.match(dockerfile, /^COPY sources\/ploinky\/ploinky-box\/mcp-sdk-bundle\.mjs \/tmp\/mcp-sdk-bundle\.mjs$/m);
+    assert.match(dockerfile, /^COPY sources\/mcp-sdk \/tmp\/mcp-sdk$/m);
+    assert.match(dockerfile, /mcp-sdk-bundle\.mjs prepare[\s\S]*?--lock \/tmp\/ploinky-box-dependencies\.lock\.json/);
+    assert.match(dockerfile, /COPY --from=mcp-sdk-builder \/tmp\/mcp-sdk \/usr\/local\/lib\/ploinky\/mcp-sdk/);
+    assert.match(dockerfile, /COPY --from=mcp-sdk-builder \/tmp\/mcp-sdk-bundle\.mjs \/usr\/local\/share\/ploinky\/mcp-sdk\/bundle-contract\.mjs/);
+    assert.match(dockerfile, /test ! -e \/usr\/local\/lib\/ploinky\/mcp-sdk\/\.git/);
+    assert.match(dockerfile, /mcp-sdk\/bundle-contract\.mjs verify[\s\S]*?--source \/usr\/local\/lib\/ploinky\/mcp-sdk/);
     assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/package\.json \/tmp\/webtty-build\/package\.json$/m);
     assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/package-lock\.json \/tmp\/webtty-build\/package-lock\.json$/m);
     assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/native-probe\.mjs \/usr\/local\/share\/ploinky\/webtty\/native-probe\.mjs$/m);
@@ -580,6 +589,12 @@ test('ploinky-box workflow publishes two native immutable digests without behavi
     assert.ok(buildJob);
     assert.ok(mergeJob);
     assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
+    assert.match(buildJob, /Resolve immutable MCP SDK input from the Ploinky lock/);
+    assert.match(buildJob, /repository:\s*\$\{\{ steps\.mcp_sdk\.outputs\.repository \}\}/);
+    assert.match(buildJob, /ref:\s*\$\{\{ steps\.mcp_sdk\.outputs\.commit \}\}/);
+    assert.match(buildJob, /path:\s*sources\/mcp-sdk/);
+    assert.match(buildJob, /persist-credentials:\s*false/);
+    assert.match(buildJob, /git -C sources\/mcp-sdk rev-parse HEAD/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
     assert.match(workflow, /IMAGE_TAG:\s*latest/);
     assert.match(workflow, /COMPATIBILITY_IMAGE_TAG:\s*runtime/);

@@ -123,6 +123,40 @@ RUN test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /et
 COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint
 RUN chmod 0755 /usr/local/bin/ploinky-box-entrypoint
 
+# The exact MCP SDK lock pin is resolved by the publication workflow. Its Git
+# checkout exists only in this builder stage; the sealed bundle copied into the
+# runtime image contains no repository metadata or persisted credentials.
+FROM prepared-rootfs-base AS mcp-sdk-builder
+
+COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json
+COPY sources/ploinky/ploinky-box/mcp-sdk-bundle.mjs /tmp/mcp-sdk-bundle.mjs
+COPY sources/mcp-sdk /tmp/mcp-sdk
+
+RUN mkdir -p /tmp/ploinky-mcp-sdk-build-home \
+    && chown -R podman:podman \
+        /tmp/mcp-sdk \
+        /tmp/mcp-sdk-bundle.mjs \
+        /tmp/ploinky-box-dependencies.lock.json \
+        /tmp/ploinky-mcp-sdk-build-home
+
+USER podman
+RUN node /tmp/mcp-sdk-bundle.mjs prepare \
+        --source /tmp/mcp-sdk \
+        --lock /tmp/ploinky-box-dependencies.lock.json
+
+USER root
+RUN chown -R 0:0 /tmp/mcp-sdk /tmp/mcp-sdk-bundle.mjs \
+    && chmod 0555 /tmp/mcp-sdk-bundle.mjs \
+    && find /tmp/mcp-sdk -type d -exec chmod 0555 {} + \
+    && find /tmp/mcp-sdk -type f -exec chmod 0444 {} + \
+    && test ! -e /tmp/mcp-sdk/.git \
+    && ! find /tmp/mcp-sdk -type l -print -quit | grep -q .
+
+USER podman
+RUN node /tmp/mcp-sdk-bundle.mjs verify --source /tmp/mcp-sdk
+
+USER root
+
 # node-pty is compiled in the exact Fedora/Node runtime it will execute in.
 # Compiler state and the npm build workspace remain confined to this stage.
 FROM prepared-rootfs-base AS webtty-builder
@@ -177,11 +211,22 @@ USER root
 # cross the compiler boundary.
 FROM prepared-rootfs-base AS prepared-rootfs
 
+COPY --from=mcp-sdk-builder /tmp/mcp-sdk /usr/local/lib/ploinky/mcp-sdk
+COPY --from=mcp-sdk-builder /tmp/mcp-sdk-bundle.mjs /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs
 COPY --from=webtty-builder /usr/local/lib/ploinky/webtty/node_modules /usr/local/lib/ploinky/webtty/node_modules
 COPY --from=webtty-builder /usr/local/share/ploinky/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs
 COPY --from=webtty-builder /usr/local/share/ploinky/webtty/runtime-contract.json /usr/local/share/ploinky/webtty/runtime-contract.json
 
-RUN chown -R 0:0 /usr/local/lib/ploinky/webtty /usr/local/share/ploinky/webtty \
+RUN chown -R 0:0 \
+        /usr/local/lib/ploinky/mcp-sdk \
+        /usr/local/share/ploinky/mcp-sdk \
+        /usr/local/lib/ploinky/webtty \
+        /usr/local/share/ploinky/webtty \
+    && find /usr/local/lib/ploinky/mcp-sdk -type d -exec chmod 0555 {} + \
+    && find /usr/local/lib/ploinky/mcp-sdk -type f -exec chmod 0444 {} + \
+    && chmod 0555 \
+        /usr/local/share/ploinky/mcp-sdk \
+        /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs \
     && find /usr/local/lib/ploinky/webtty -type d -exec chmod 0555 {} + \
     && find /usr/local/lib/ploinky/webtty -type f -exec chmod 0444 {} + \
     && chmod 0555 /usr/local/share/ploinky/webtty \
@@ -199,11 +244,15 @@ RUN chown -R 0:0 /usr/local/lib/ploinky/webtty /usr/local/share/ploinky/webtty \
         -o -name '*.o' -o -name '*.a' -o -name binding.gyp \) \
         -print -quit | grep -q . \
     && test ! -e /tmp/webtty-build \
+    && test ! -e /usr/local/lib/ploinky/mcp-sdk/.git \
+    && ! find /usr/local/lib/ploinky/mcp-sdk -type l -print -quit | grep -q . \
     && test "$(find /usr/local/lib/ploinky/webtty -type f -name '*.node' | wc -l)" -eq 1
 
 USER podman
 WORKDIR /workspace
-RUN node /usr/local/share/ploinky/webtty/native-probe.mjs --verify
+RUN node /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs verify \
+        --source /usr/local/lib/ploinky/mcp-sdk \
+    && node /usr/local/share/ploinky/webtty/native-probe.mjs --verify
 
 USER root
 WORKDIR /

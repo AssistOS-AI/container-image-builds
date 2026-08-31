@@ -65,15 +65,45 @@ jobs:
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
+      - name: Resolve immutable MCP SDK input from the Ploinky lock
+        id: mcp_sdk
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const lock = JSON.parse(fs.readFileSync('sources/ploinky/ploinky-box/dependencies.lock.json'));
+          const repository = lock?.repositories?.['mcp-sdk'];
+          if (!repository
+              || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(repository.url)
+              || !/^[0-9a-f]{40}$/.test(repository.commit)) {
+            throw new Error('Ploinky dependency lock has no valid immutable MCP SDK input');
+          }
+          const slug = repository.url.slice('https://github.com/'.length, -'.git'.length);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `repository=${slug}\ncommit=${repository.commit}\n`);
+          NODE
+
+      - name: Checkout immutable MCP SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ steps.mcp_sdk.outputs.repository }}
+          ref: ${{ steps.mcp_sdk.outputs.commit }}
+          path: sources/mcp-sdk
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
       - name: Verify exact clean build inputs
         env:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          MCP_SDK_SHA: ${{ steps.mcp_sdk.outputs.commit }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1)"
           test "$(git -C sources/ploinky rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git -C sources/ploinky status --porcelain=v1)"
+          test "$(git -C sources/mcp-sdk rev-parse HEAD)" = "$MCP_SDK_SHA"
+          test -z "$(git -C sources/mcp-sdk status --porcelain=v1)"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
