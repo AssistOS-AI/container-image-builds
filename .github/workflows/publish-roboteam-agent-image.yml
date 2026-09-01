@@ -1,6 +1,14 @@
 name: Publish RoboTeam Agent image
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - images/roboteam-agent/**
+      - scripts/smoke-roboteam-agent.sh
+      - tests/roboteam-agent-supply-chain.test.mjs
+      - .github/workflows/publish-roboteam-agent-image.yml
   workflow_dispatch:
 
 permissions:

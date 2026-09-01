@@ -52,7 +52,17 @@ test('runtime contract and smoke describe bounded nested Podman v3', () => {
 });
 
 test('publication remains native, candidate-first, and digest assembled', () => {
-    assert.doesNotMatch(workflow, /^\s*push:/m);
+    assert.match(workflow, /^\s{2}push:\s*$/m);
+    assert.match(workflow, /^\s{4}branches:\s*\n\s{6}- main$/m);
+    for (const triggerPath of [
+        'images/roboteam-agent/**',
+        'scripts/smoke-roboteam-agent.sh',
+        'tests/roboteam-agent-supply-chain.test.mjs',
+        '.github/workflows/publish-roboteam-agent-image.yml',
+    ]) {
+        const escapedPath = triggerPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        assert.match(workflow, new RegExp(`^\\s{6}- ${escapedPath}$`, 'm'));
+    }
     assert.doesNotMatch(workflow, /promote_stable/);
     assert.match(workflow, /IMAGE_TAG:\s*latest/);
     assert.match(workflow, /name:\s*Promote proven candidate to latest/);
