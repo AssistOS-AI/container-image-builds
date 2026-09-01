@@ -4,13 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update roboteam image">
+    <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update roboteam image, missing npm">
       <change beforePath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/scripts/smoke-roboteam-agent.sh" beforeDir="false" afterPath="$PROJECT_DIR$/scripts/smoke-roboteam-agent.sh" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -85,7 +81,7 @@
       <updated>1783587123814</updated>
       <workItem from="1783587125038" duration="359000" />
       <workItem from="1788253644028" duration="3134000" />
-      <workItem from="1788261964242" duration="776000" />
+      <workItem from="1788261964242" duration="3814000" />
     </task>
     <task id="LOCAL-00002" summary="update roboteam image">
       <option name="closed" value="true" />
@@ -95,7 +91,55 @@
       <option name="project" value="LOCAL" />
       <updated>1788259525989</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="update roboteam image">
+      <option name="closed" value="true" />
+      <created>1788263106683</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1788263106683</updated>
+    </task>
+    <task id="LOCAL-00004" summary="update roboteam image">
+      <option name="closed" value="true" />
+      <created>1788263416170</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1788263416170</updated>
+    </task>
+    <task id="LOCAL-00005" summary="update roboteam action">
+      <option name="closed" value="true" />
+      <created>1788264090037</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1788264090037</updated>
+    </task>
+    <task id="LOCAL-00006" summary="update roboteam image">
+      <option name="closed" value="true" />
+      <created>1788264327775</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1788264327775</updated>
+    </task>
+    <task id="LOCAL-00007" summary="update roboteam image">
+      <option name="closed" value="true" />
+      <created>1788265215642</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1788265215642</updated>
+    </task>
+    <task id="LOCAL-00008" summary="update roboteam image, missing npm">
+      <option name="closed" value="true" />
+      <created>1788265667910</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1788265667910</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -103,7 +147,9 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="update .gitignore" />
+    <MESSAGE value="update roboteam action" />
     <MESSAGE value="update roboteam image" />
-    <option name="LAST_COMMIT_MESSAGE" value="update roboteam image" />
+    <MESSAGE value="update roboteam image, missing npm" />
+    <option name="LAST_COMMIT_MESSAGE" value="update roboteam image, missing npm" />
   </component>
 </project>

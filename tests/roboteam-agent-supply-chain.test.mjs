@@ -57,7 +57,7 @@ test('runtime contract and smoke describe bounded nested Podman v3', () => {
     }
 });
 
-test('publication pushes a verified multi-architecture latest image directly', () => {
+test('publication pushes a verified multi-architecture runtime image directly', () => {
     assert.match(workflow, /^\s{2}push:\s*$/m);
     assert.match(workflow, /^\s{4}branches:\s*\n\s{6}- main$/m);
     for (const triggerPath of [
@@ -69,8 +69,8 @@ test('publication pushes a verified multi-architecture latest image directly', (
         const escapedPath = triggerPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         assert.match(workflow, new RegExp(`^\\s{6}- ${escapedPath}$`, 'm'));
     }
-    assert.match(workflow, /IMAGE_TAG:\s*latest/);
-    assert.match(workflow, /name:\s*Build and push latest/);
+    assert.match(workflow, /IMAGE_TAG:\s*runtime/);
+    assert.match(workflow, /name:\s*Build and push runtime/);
     assert.match(workflow, /docker\/setup-qemu-action@/);
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
     assert.match(workflow, /^\s{10}push:\s*true$/m);

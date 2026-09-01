@@ -20,12 +20,12 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/roboteam-agent
-  IMAGE_TAG: latest
+  IMAGE_TAG: runtime
   BASE_IMAGE: quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
 
 jobs:
   publish:
-    name: Build and push latest
+    name: Build and push runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -83,7 +83,7 @@ jobs:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push multi-architecture latest
+      - name: Build and push multi-architecture runtime
         id: publish
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -98,7 +98,7 @@ jobs:
             io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
           provenance: false
 
-      - name: Verify and report published latest
+      - name: Verify and report published runtime
         env:
           DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
