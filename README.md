@@ -14,6 +14,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
 | `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
+| `assistos/roboteam-agent:runtime-v1` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
@@ -80,6 +81,40 @@ runtime onto the standard Ploinky Node image. System packages and `/opt`
 content are created only while building the immutable image as root. The
 published runtime restores UID/GID `1000:1000`, so enabling SearchAgent never
 requires package-manager or system-directory privileges.
+
+## RoboTeam desktop runtime
+
+`docker.io/assistos/roboteam-agent` bakes Chromium, Xvfb, Openbox, xterm,
+x11vnc, websockify, noVNC, desktop fonts, CA certificates, D-Bus X11 support,
+and profile-user provisioning into the immutable image. It is based on the
+exact Ploinky Node multiarchitecture index recorded in
+`images/roboteam-agent/sources.lock.json`; Debian package resolution uses the
+recorded timestamped Debian and Debian Security snapshots, and every direct
+package version is pinned. noVNC's architecture-independent Debian archive is
+fetched from that same snapshot by exact path and SHA-256, then only its static
+client and license files are extracted; this avoids installing noVNC's unused
+daemon-side OpenStack and Node dependency graph.
+
+The image contract is the root-owned, read-only file
+`/opt/roboteam-runtime/contract-v1`, containing exactly
+`roboteam-runtime-v1` followed by one newline. The controller intentionally
+runs as root because it must create profile users, chown their persistent
+directories, and launch desktop children under the selected profile UID/GID.
+It does not need a privileged container: the publication proof provisions a
+representative profile with only `CHOWN`, `SETUID`, and `SETGID`, with no
+network, no new privileges, and a bounded PID limit. A second native proof
+starts Xvfb without TCP display listening, Openbox, xterm, Chromium, x11vnc on
+loopback, and websockify on loopback, waits for every socket/process boundary,
+and tears the stack down with the additional `KILL` capability needed for the
+controller to signal its profile-UID children.
+
+Publication builds amd64 and arm64 on native GitHub runners, tests each pushed
+architecture by its immutable digest, and assembles only those two proven
+digests under a run-scoped candidate tag. The workflow reports and preserves
+the exact candidate index digest and native evidence. It moves the
+`runtime-v1` convenience tag only when an explicit dispatch sets
+`promote_stable=true`; consumers must pin the reported
+`docker.io/assistos/roboteam-agent@sha256:...` candidate instead of that tag.
 
 ## Bubblewrap runner publication
 
