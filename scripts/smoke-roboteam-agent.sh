@@ -9,9 +9,12 @@ require_contract() {
     test -x /usr/bin/fuse-overlayfs
     test -x /usr/bin/pasta
     test -x /usr/local/bin/node
+    test -x /usr/local/bin/npm
+    test -x /usr/local/bin/npx
     test ! -e /usr/bin/newuidmap
     test ! -e /usr/bin/newgidmap
     node --version
+    npm --version
     podman --version | grep -E '^podman version 6\.'
 }
 

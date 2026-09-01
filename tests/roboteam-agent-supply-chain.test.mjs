@@ -27,16 +27,20 @@ test('outer image combines Node with the nested Podman controller', () => {
     assert.match(dockerfile, new RegExp(`^FROM ${sources.nodeBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} AS node-runtime$`, 'm'));
     assert.match(dockerfile, new RegExp(`^FROM ${sources.podmanBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
     assert.match(dockerfile, /COPY --from=node-runtime --chmod=0755 \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
-    assert.doesNotMatch(dockerfile, /COPY --from=node-runtime \/usr\/local\//);
+    assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules\/npm\/ \/usr\/local\/lib\/node_modules\/npm\//);
+    assert.doesNotMatch(dockerfile, /COPY --from=node-runtime \/usr\/local\/ \/usr\/local\//);
     for (const executable of [
         '/usr/bin/podman',
         '/usr/bin/fuse-overlayfs',
         '/usr/bin/pasta',
         '/usr/local/bin/node',
+        '/usr/local/bin/npm',
+        '/usr/local/bin/npx',
     ]) {
         assert.ok(dockerfile.includes(executable));
     }
     assert.match(dockerfile, /rm -f \/usr\/bin\/newuidmap \/usr\/bin\/newgidmap/);
+    assert.match(smoke, /npm --version/);
     assert.match(storage, /graphroot = "\/data\/podman\/storage"/);
     assert.match(storage, /ignore_chown_errors = "true"/);
     assert.match(storage, /mount_program = "\/usr\/bin\/fuse-overlayfs"/);

@@ -5,6 +5,7 @@ FROM quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc
 USER root
 
 COPY --from=node-runtime --chmod=0755 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules/npm/ /usr/local/lib/node_modules/npm/
 COPY --chmod=0444 storage.conf /opt/roboteam-runtime/storage.conf
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
 
@@ -15,13 +16,17 @@ RUN set -eux; \
     truncate -s 0 /etc/subuid; \
     truncate -s 0 /etc/subgid; \
     rm -f /usr/bin/newuidmap /usr/bin/newgidmap; \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
     for executable in \
         /usr/bin/podman \
         /usr/bin/fuse-overlayfs \
         /usr/bin/pasta \
         /usr/bin/curl \
         /usr/bin/git \
-        /usr/local/bin/node; do \
+        /usr/local/bin/node \
+        /usr/local/bin/npm \
+        /usr/local/bin/npx; do \
         test -x "$executable"; \
     done; \
     podman --version | grep -E '^podman version 6\.'; \
