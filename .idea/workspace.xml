@@ -4,14 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update .gitignore">
+    <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update roboteam image">
       <change beforePath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/scripts/smoke-roboteam-agent.sh" beforeDir="false" afterPath="$PROJECT_DIR$/scripts/smoke-roboteam-agent.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/scripts/smoke-roboteam-desktop.mjs" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -45,23 +44,23 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "git-widget-placeholder": "main",
-    "javascript.preferred.runtime.type.id": "node",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "preferences.lookFeel",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;javascript.preferred.runtime.type.id&quot;: &quot;node&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.lookFeel&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -85,9 +84,18 @@
       <option name="presentableId" value="Default" />
       <updated>1783587123814</updated>
       <workItem from="1783587125038" duration="359000" />
-      <workItem from="1788253644028" duration="1909000" />
+      <workItem from="1788253644028" duration="3134000" />
+      <workItem from="1788261964242" duration="776000" />
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="update roboteam image">
+      <option name="closed" value="true" />
+      <created>1788259525989</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1788259525989</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -95,6 +103,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="update .gitignore" />
-    <option name="LAST_COMMIT_MESSAGE" value="update .gitignore" />
+    <MESSAGE value="update roboteam image" />
+    <option name="LAST_COMMIT_MESSAGE" value="update roboteam image" />
   </component>
 </project>

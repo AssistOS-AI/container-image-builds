@@ -9,16 +9,16 @@
     }
   },
   "podmanBase": {
-    "image": "quay.io/podman/stable@sha256:eb8fbd5345bba2010078e9e1612b267a4709bb4ad0775bf030fba69be87cfadc",
-    "indexDigest": "sha256:eb8fbd5345bba2010078e9e1612b267a4709bb4ad0775bf030fba69be87cfadc",
+    "image": "quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099",
+    "indexDigest": "sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099",
     "platformManifests": {
-      "linux/amd64": "sha256:9132e0ee0e8d87dee7899bc47b78c9aa5f34a6b84a7924cfa272137501f2be7c",
-      "linux/arm64": "sha256:d36afc9c21e0ef8a9429fabbc9400d2b1dde025d7921e0c77df3787d54f68b7d"
+      "linux/amd64": "sha256:db56205ac0ac2637d879d5db8bcce47ebae7e06d57c92b7a5bd5c027d3f23e8a",
+      "linux/arm64": "sha256:7082e7bfa8a371a5c84a170e0fba9e7f641373be69d9ae6f38aa16924b09215c"
     }
   },
   "runtimeContract": {
-    "path": "/opt/roboteam-runtime/contract-v2",
-    "content": "roboteam-runtime-v2\n",
+    "path": "/opt/roboteam-runtime/contract-v3",
+    "content": "roboteam-runtime-v3\n",
     "owner": "0:0",
     "mode": "0444",
     "controllerUser": "root"

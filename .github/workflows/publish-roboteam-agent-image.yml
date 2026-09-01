@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       promote_stable:
-        description: Move the runtime-v2 convenience tag after the exact candidate passes every gate
+        description: Move the runtime-v3 convenience tag after the exact candidate passes every gate
         required: true
         default: false
         type: boolean
@@ -18,8 +18,8 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/roboteam-agent
-  IMAGE_TAG: runtime-v2
-  BASE_IMAGE: quay.io/podman/stable@sha256:eb8fbd5345bba2010078e9e1612b267a4709bb4ad0775bf030fba69be87cfadc
+  IMAGE_TAG: runtime-v3
+  BASE_IMAGE: quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
 
 jobs:
   build:
@@ -84,8 +84,8 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.base.digest=sha256:eb8fbd5345bba2010078e9e1612b267a4709bb4ad0775bf030fba69be87cfadc
-            io.assistos.roboteam.runtime-contract=roboteam-runtime-v2
+            org.opencontainers.image.base.digest=sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
+            io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
           provenance: false
 
       - name: Pull and identify the exact pushed digest
@@ -118,14 +118,18 @@ jobs:
             bash /smoke-roboteam-agent.sh contract \
             | tee "$evidence/contract-smoke.txt"
 
-      - name: Prove Podman-in-Podman in the privileged outer runtime
+      - name: Prove Podman-in-Podman with the bounded runtime contract
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/roboteam-agent-proof-${{ matrix.arch }}"
           docker run --rm \
-            --privileged \
+            --cap-add SYS_ADMIN \
+            --cap-add NET_ADMIN \
+            --device /dev/fuse \
+            --device /dev/net/tun \
+            --security-opt label=disable \
             --pids-limit=256 \
             --tmpfs /tmp:rw,nosuid,nodev,size=256m \
             --tmpfs /data:rw,nosuid,nodev,size=2g \

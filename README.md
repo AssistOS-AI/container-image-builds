@@ -14,7 +14,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
 | `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
-| `assistos/roboteam-agent:runtime-v2` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
+| `assistos/roboteam-agent:runtime-v3` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
@@ -85,25 +85,26 @@ requires package-manager or system-directory privileges.
 ## RoboTeam nested Podman runtime
 
 `docker.io/assistos/roboteam-agent` is the outer runtime for RoboTeam. It uses
-the exact Podman stable and Ploinky Node multiarchitecture bases recorded in
+the exact Podman 6 upstream and Ploinky Node multiarchitecture bases recorded in
 `images/roboteam-agent/sources.lock.json`, copies the Node runtime into the
 Podman base, and provides Podman, fuse-overlayfs, pasta, curl, Git, and Bash.
 Chromium and Webtop are not baked into this image: RoboTeam starts them as
 replaceable inner OCI containers.
 
 The root-owned read-only contract is
-`/opt/roboteam-runtime/contract-v2`, containing `roboteam-runtime-v2` followed
+`/opt/roboteam-runtime/contract-v3`, containing `roboteam-runtime-v3` followed
 by one newline. Inner storage is configured under
 `/data/podman/storage` with fuse-overlayfs and `ignore_chown_errors`, matching
 the nested user-namespace constraints. SUID namespace helpers are removed.
 
-The nested proof starts the outer image with `--privileged`, then runs a real
-inner Alpine container with private IPC and 1 GiB shared memory. This mirrors the first
-experiment's intentionally broad outer authority. The workflow does not mount
-a host engine socket.
+The nested proof grants the outer image only `/dev/fuse` and disables SELinux
+relabeling for that container, then runs a real inner Alpine container through
+`pasta` with private IPC and 1 GiB shared memory. The bounded outer runtime
+passes `SYS_ADMIN`, `NET_ADMIN`, `/dev/fuse`, and `/dev/net/tun`; the workflow does not use
+privileged mode or mount a host engine socket.
 
 Publication builds and proves amd64 and arm64 independently, assembles only
-the proven digests, and moves the `runtime-v2` convenience tag only after an
+the proven digests, and moves the `runtime-v3` convenience tag only after an
 explicit promotion. Consumers pin the reported immutable multiarchitecture
 digest.
 
