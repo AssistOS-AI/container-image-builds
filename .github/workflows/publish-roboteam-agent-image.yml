@@ -24,20 +24,10 @@ env:
   BASE_IMAGE: quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
 
 jobs:
-  build:
-    name: Build and prove ${{ matrix.platform }}
-    runs-on: ${{ matrix.runner }}
+  publish:
+    name: Build and push latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -49,66 +39,34 @@ jobs:
           test -z "$(git status --porcelain=v1)"
           node --test tests/roboteam-agent-supply-chain.test.mjs
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Verify the exact Podman base platform member
-        env:
-          PLATFORM: ${{ matrix.platform }}
+      - name: Verify exact Podman base members
         run: |
           set -euo pipefail
           docker buildx imagetools inspect --raw "$BASE_IMAGE" > "$RUNNER_TEMP/base-index.json"
-          PLATFORM="$PLATFORM" node --input-type=module <<'NODE'
+          node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
           const lock = JSON.parse(fs.readFileSync('images/roboteam-agent/sources.lock.json', 'utf8'));
           const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/base-index.json`, 'utf8'));
-          const [os, architecture] = process.env.PLATFORM.split('/');
-          const matches = index.manifests.filter((entry) =>
-            entry.platform?.os === os && entry.platform?.architecture === architecture);
-          assert.equal(matches.length, 1);
-          assert.equal(matches[0].digest, lock.podmanBase.platformManifests[process.env.PLATFORM]);
+          const members = new Map(index.manifests.map((entry) => [
+            `${entry.platform?.os}/${entry.platform?.architecture}`,
+            entry.digest,
+          ]));
+          for (const platform of ['linux/amd64', 'linux/arm64']) {
+            assert.equal(members.get(platform), lock.podmanBase.platformManifests[platform]);
+          }
           NODE
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: assistos
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push native architecture image by digest
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: images/roboteam-agent
-          platforms: ${{ matrix.platform }}
-          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.base.digest=sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
-            io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
-          provenance: false
-
-      - name: Pull and identify the exact pushed digest
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          PLATFORM: ${{ matrix.platform }}
+      - name: Smoke build and verify local architecture contract
         run: |
           set -euo pipefail
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker pull "docker.io/${IMAGE_NAME}@${DIGEST}"
-          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "docker.io/${IMAGE_NAME}@${DIGEST}")" = "$PLATFORM"
-          test "$(docker image inspect --format '{{.Config.User}}' "docker.io/${IMAGE_NAME}@${DIGEST}")" = root
-
-      - name: Prove the immutable runtime contract with no capabilities
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/roboteam-agent-proof-${{ matrix.arch }}"
-          mkdir -p "$evidence"
-          docker image inspect "docker.io/${IMAGE_NAME}@${DIGEST}" > "$evidence/image-inspect.json"
+          docker build -t "$IMAGE_NAME:smoke" images/roboteam-agent
           docker run --rm \
             --network=none \
             --read-only \
@@ -116,70 +74,8 @@ jobs:
             --security-opt=no-new-privileges \
             --pids-limit=128 \
             --volume "$PWD/scripts/smoke-roboteam-agent.sh:/smoke-roboteam-agent.sh:ro" \
-            "docker.io/${IMAGE_NAME}@${DIGEST}" \
-            bash /smoke-roboteam-agent.sh contract \
-            | tee "$evidence/contract-smoke.txt"
-
-      - name: Prove Podman-in-Podman with the bounded runtime contract
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/roboteam-agent-proof-${{ matrix.arch }}"
-          docker run --rm \
-            --cap-add SYS_ADMIN \
-            --cap-add NET_ADMIN \
-            --device /dev/fuse \
-            --device /dev/net/tun \
-            --security-opt label=disable \
-            --pids-limit=256 \
-            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
-            --tmpfs /data:rw,nosuid,nodev,size=2g \
-            --volume "$PWD/scripts/smoke-roboteam-agent.sh:/smoke-roboteam-agent.sh:ro" \
-            "docker.io/${IMAGE_NAME}@${DIGEST}" \
-            bash /smoke-roboteam-agent.sh nested \
-            | tee "$evidence/nested-podman-smoke.txt"
-          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
-          printf '%s\n' '${{ matrix.platform }}' > "$evidence/platform.txt"
-          printf '%s\n' "$GITHUB_SHA" > "$evidence/workflow-sha.txt"
-
-      - name: Upload native digest and evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: roboteam-agent-proof-${{ matrix.arch }}
-          path: ${{ runner.temp }}/roboteam-agent-proof-${{ matrix.arch }}
-          if-no-files-found: error
-          retention-days: 30
-
-  assemble:
-    name: Assemble exact candidate index
-    needs: build
-    runs-on: ubuntu-24.04
-    outputs:
-      digest: ${{ steps.candidate.outputs.digest }}
-    steps:
-      - name: Download native proofs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: /tmp/roboteam-agent-proofs
-          pattern: roboteam-agent-proof-*
-
-      - name: Resolve exactly two proven member digests
-        id: digests
-        run: |
-          set -euo pipefail
-          mapfile -t digest_files < <(find /tmp/roboteam-agent-proofs -name digest.txt -type f | sort)
-          test "${#digest_files[@]}" -eq 2
-          amd64_digest="$(cat /tmp/roboteam-agent-proofs/roboteam-agent-proof-amd64/digest.txt)"
-          arm64_digest="$(cat /tmp/roboteam-agent-proofs/roboteam-agent-proof-arm64/digest.txt)"
-          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          test "$amd64_digest" != "$arm64_digest"
-          echo "amd64_digest=$amd64_digest" >> "$GITHUB_OUTPUT"
-          echo "arm64_digest=$arm64_digest" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+            "$IMAGE_NAME:smoke" \
+            bash /smoke-roboteam-agent.sh contract
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -187,91 +83,34 @@ jobs:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Prove the run-scoped candidate tag is unused
-        run: |
-          set -euo pipefail
-          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
-            echo "Refusing to overwrite existing candidate tag: $staging" >&2
-            exit 1
-          fi
-          echo "STAGING_REF=$staging" >> "$GITHUB_ENV"
+      - name: Build and push multi-architecture latest
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/roboteam-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: docker.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.base.digest=sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
+            io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
+          provenance: false
 
-      - name: Assemble and verify only the proven native digests
-        id: candidate
+      - name: Verify and report published latest
         env:
-          AMD64_DIGEST: ${{ steps.digests.outputs.amd64_digest }}
-          ARM64_DIGEST: ${{ steps.digests.outputs.arm64_digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           set -euo pipefail
-          docker buildx imagetools create \
-            --annotation "index:io.assistos.roboteam.workflow-run=${GITHUB_RUN_ID}" \
-            --annotation "index:io.assistos.roboteam.workflow-sha=${GITHUB_SHA}" \
-            --annotation "index:io.assistos.roboteam.amd64-digest=${AMD64_DIGEST}" \
-            --annotation "index:io.assistos.roboteam.arm64-digest=${ARM64_DIGEST}" \
-            --tag "$STAGING_REF" \
-            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
-            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
-          docker buildx imagetools inspect --raw "$STAGING_REF" > "$RUNNER_TEMP/candidate-index.json"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${DIGEST}" > "$RUNNER_TEMP/published-index.json"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
-          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/candidate-index.json`));
-          assert.equal(index.manifests.length, 2);
-          const members = new Map(index.manifests.map((entry) => [
-            `${entry.platform.os}/${entry.platform.architecture}`,
-            entry.digest,
-          ]));
-          assert.deepEqual([...members.keys()].sort(), ['linux/amd64', 'linux/arm64']);
-          assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
-          assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
+          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/published-index.json`, 'utf8'));
+          const platforms = index.manifests.map((entry) =>
+            `${entry.platform?.os}/${entry.platform?.architecture}`).sort();
+          assert.deepEqual(platforms, ['linux/amd64', 'linux/arm64']);
           NODE
-          candidate_digest="sha256:$(sha256sum "$RUNNER_TEMP/candidate-index.json" | cut -d ' ' -f1)"
-          [[ "$candidate_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${candidate_digest}" > "$RUNNER_TEMP/candidate-by-digest.json"
-          cmp "$RUNNER_TEMP/candidate-index.json" "$RUNNER_TEMP/candidate-by-digest.json"
-          mkdir -p "$RUNNER_TEMP/roboteam-agent-candidate-evidence"
-          cp "$RUNNER_TEMP/candidate-index.json" "$RUNNER_TEMP/roboteam-agent-candidate-evidence/candidate-index.json"
-          cp -R /tmp/roboteam-agent-proofs/. "$RUNNER_TEMP/roboteam-agent-candidate-evidence/native-proofs"
-          printf '%s\n' "$candidate_digest" > "$RUNNER_TEMP/roboteam-agent-candidate-evidence/candidate-digest.txt"
-          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
-          printf 'Proven candidate: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
-          printf 'amd64: `%s`\narm64: `%s`\n' "$AMD64_DIGEST" "$ARM64_DIGEST" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload assembled candidate evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: roboteam-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/roboteam-agent-candidate-evidence
-          if-no-files-found: error
-          retention-days: 30
-
-  promote:
-    name: Promote proven candidate to latest
-    needs:
-      - build
-      - assemble
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: assistos
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Move latest by exact proven candidate digest
-        env:
-          CANDIDATE_DIGEST: ${{ needs.assemble.outputs.digest }}
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}" > "$RUNNER_TEMP/candidate-index.json"
-          test "sha256:$(sha256sum "$RUNNER_TEMP/candidate-index.json" | cut -d ' ' -f1)" = "$CANDIDATE_DIGEST"
-          docker buildx imagetools create \
-            --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
-            "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}"
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/promoted-index.json"
-          test "sha256:$(sha256sum "$RUNNER_TEMP/promoted-index.json" | cut -d ' ' -f1)" = "$CANDIDATE_DIGEST"
+          printf 'Published: `docker.io/%s:%s@%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

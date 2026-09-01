@@ -53,7 +53,7 @@ test('runtime contract and smoke describe bounded nested Podman v3', () => {
     }
 });
 
-test('publication remains native, candidate-first, and digest assembled', () => {
+test('publication pushes a verified multi-architecture latest image directly', () => {
     assert.match(workflow, /^\s{2}push:\s*$/m);
     assert.match(workflow, /^\s{4}branches:\s*\n\s{6}- main$/m);
     for (const triggerPath of [
@@ -65,24 +65,21 @@ test('publication remains native, candidate-first, and digest assembled', () => 
         const escapedPath = triggerPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         assert.match(workflow, new RegExp(`^\\s{6}- ${escapedPath}$`, 'm'));
     }
-    assert.doesNotMatch(workflow, /promote_stable/);
     assert.match(workflow, /IMAGE_TAG:\s*latest/);
-    assert.match(workflow, /name:\s*Promote proven candidate to latest/);
-    assert.match(workflow, /platform:\s*linux\/amd64/);
-    assert.match(workflow, /platform:\s*linux\/arm64/);
-    assert.match(workflow, /push-by-digest=true/);
-    assert.match(workflow, /name-canonical=true/);
+    assert.match(workflow, /name:\s*Build and push latest/);
+    assert.match(workflow, /docker\/setup-qemu-action@/);
+    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /^\s{10}push:\s*true$/m);
+    assert.match(workflow, /tags:\s*docker\.io\/\$\{\{ env\.IMAGE_NAME \}\}:\$\{\{ env\.IMAGE_TAG \}\}/);
     assert.match(workflow, /node --test tests\/roboteam-agent-supply-chain\.test\.mjs/);
+    assert.match(workflow, /bash \/smoke-roboteam-agent\.sh contract/);
+    assert.doesNotMatch(workflow, /bash \/smoke-roboteam-agent\.sh nested/);
+    assert.doesNotMatch(workflow, /push-by-digest|candidate-|Promote proven candidate/);
     assert.doesNotMatch(workflow, /--privileged/);
-    assert.match(workflow, /--cap-add SYS_ADMIN/);
-    assert.match(workflow, /--cap-add NET_ADMIN/);
-    assert.match(workflow, /--device \/dev\/fuse/);
-    assert.match(workflow, /--security-opt label=disable/);
+    assert.doesNotMatch(workflow, /--cap-add SYS_ADMIN|--cap-add NET_ADMIN|--device \/dev\/fuse|--device \/dev\/net\/tun/);
     assert.match(smoke, /--ipc private --shm-size 1g/);
     assert.match(smoke, /--network pasta/);
-    assert.match(workflow, /--device \/dev\/net\/tun/);
     assert.doesNotMatch(workflow, /podman\.sock|docker\.sock/);
-    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }

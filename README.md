@@ -97,16 +97,15 @@ by one newline. Inner storage is configured under
 `/data/podman/storage` with fuse-overlayfs and `ignore_chown_errors`, matching
 the nested user-namespace constraints. SUID namespace helpers are removed.
 
-The nested proof grants the outer image only `/dev/fuse` and disables SELinux
-relabeling for that container, then runs a real inner Alpine container through
-`pasta` with private IPC and 1 GiB shared memory. The bounded outer runtime
-passes `SYS_ADMIN`, `NET_ADMIN`, `/dev/fuse`, and `/dev/net/tun`; the workflow does not use
-privileged mode or mount a host engine socket.
+The `nested` smoke mode runs a real inner Alpine container through `pasta` with
+private IPC and 1 GiB shared memory. It is intended for a Ploinky Box or another
+runtime that supplies `SYS_ADMIN`, `NET_ADMIN`, `/dev/fuse`, and `/dev/net/tun`;
+GitHub-hosted Docker does not provide the required nested mount behavior.
 
-Publication builds and proves amd64 and arm64 independently, assembles only
-the proven digests, and automatically moves the operator-managed `latest` tag
-after all gates pass. The immutable candidate digest remains available as
-publication evidence.
+Publication runs the source checks and a capability-free contract smoke on the
+runner architecture, then uses Buildx and QEMU to publish amd64 and arm64
+directly as the operator-managed `latest` tag. The workflow does not attempt the
+nested smoke, use privileged mode, or mount a host engine socket.
 
 ## Bubblewrap runner publication
 
