@@ -2,12 +2,6 @@ name: Publish RoboTeam Agent image
 
 on:
   workflow_dispatch:
-    inputs:
-      promote_stable:
-        description: Move the runtime-v3 convenience tag after the exact candidate passes every gate
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -18,7 +12,7 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/roboteam-agent
-  IMAGE_TAG: runtime-v3
+  IMAGE_TAG: latest
   BASE_IMAGE: quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
 
 jobs:
@@ -245,8 +239,7 @@ jobs:
           retention-days: 30
 
   promote:
-    name: Promote proven candidate convenience tag
-    if: ${{ inputs.promote_stable == true }}
+    name: Promote proven candidate to latest
     needs:
       - build
       - assemble
@@ -261,7 +254,7 @@ jobs:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Move the stable tag by exact proven candidate digest
+      - name: Move latest by exact proven candidate digest
         env:
           CANDIDATE_DIGEST: ${{ needs.assemble.outputs.digest }}
         run: |

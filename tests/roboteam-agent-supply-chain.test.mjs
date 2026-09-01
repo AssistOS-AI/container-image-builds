@@ -53,7 +53,9 @@ test('runtime contract and smoke describe bounded nested Podman v3', () => {
 
 test('publication remains native, candidate-first, and digest assembled', () => {
     assert.doesNotMatch(workflow, /^\s*push:/m);
-    assert.match(workflow, /promote_stable:[\s\S]*default:\s*false/);
+    assert.doesNotMatch(workflow, /promote_stable/);
+    assert.match(workflow, /IMAGE_TAG:\s*latest/);
+    assert.match(workflow, /name:\s*Promote proven candidate to latest/);
     assert.match(workflow, /platform:\s*linux\/amd64/);
     assert.match(workflow, /platform:\s*linux\/arm64/);
     assert.match(workflow, /push-by-digest=true/);
