@@ -26,6 +26,8 @@ test('RoboTeam locks exact multi-architecture Node and Podman bases', () => {
 test('outer image combines Node with the nested Podman controller', () => {
     assert.match(dockerfile, new RegExp(`^FROM ${sources.nodeBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} AS node-runtime$`, 'm'));
     assert.match(dockerfile, new RegExp(`^FROM ${sources.podmanBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+    assert.match(dockerfile, /COPY --from=node-runtime --chmod=0755 \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
+    assert.doesNotMatch(dockerfile, /COPY --from=node-runtime \/usr\/local\//);
     for (const executable of [
         '/usr/bin/podman',
         '/usr/bin/fuse-overlayfs',

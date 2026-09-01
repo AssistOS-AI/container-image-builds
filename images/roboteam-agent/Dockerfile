@@ -4,7 +4,7 @@ FROM quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc
 
 USER root
 
-COPY --from=node-runtime /usr/local/ /usr/local/
+COPY --from=node-runtime --chmod=0755 /usr/local/bin/node /usr/local/bin/node
 COPY --chmod=0444 storage.conf /opt/roboteam-runtime/storage.conf
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
 
