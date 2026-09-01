@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "base": {
+  "schemaVersion": 2,
+  "nodeBase": {
     "image": "docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
     "indexDigest": "sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
     "platformManifests": {
@@ -8,34 +8,17 @@
       "linux/arm64": "sha256:d7b9594f73c8f9eead6c5b1717e504bf6c65458e27daf77bb6022085c82faf03"
     }
   },
-  "debianSnapshot": {
-    "timestamp": "20260831T000000Z",
-    "archives": {
-      "debian": "https://snapshot.debian.org/archive/debian/20260831T000000Z/",
-      "debianSecurity": "https://snapshot.debian.org/archive/debian-security/20260831T000000Z/"
+  "podmanBase": {
+    "image": "quay.io/podman/stable@sha256:eb8fbd5345bba2010078e9e1612b267a4709bb4ad0775bf030fba69be87cfadc",
+    "indexDigest": "sha256:eb8fbd5345bba2010078e9e1612b267a4709bb4ad0775bf030fba69be87cfadc",
+    "platformManifests": {
+      "linux/amd64": "sha256:9132e0ee0e8d87dee7899bc47b78c9aa5f34a6b84a7924cfa272137501f2be7c",
+      "linux/arm64": "sha256:d36afc9c21e0ef8a9429fabbc9400d2b1dde025d7921e0c77df3787d54f68b7d"
     }
   },
-  "packages": {
-    "ca-certificates": "20250419~deb12u1",
-    "chromium": "151.0.7922.173-1~deb12u1",
-    "dbus-x11": "1.14.10-1~deb12u1",
-    "fonts-liberation": "1:1.07.4-11",
-    "openbox": "3.6.1-10",
-    "passwd": "1:4.13+dfsg1-1+deb12u2",
-    "websockify": "0.10.0+dfsg1-4+b1",
-    "x11vnc": "0.9.16-9",
-    "xfonts-base": "1:1.0.5+nmu1",
-    "xterm": "379-1",
-    "xvfb": "2:21.1.7-3+deb12u13"
-  },
-  "novncArtifact": {
-    "version": "1:1.3.0-1",
-    "url": "https://snapshot.debian.org/archive/debian/20260831T000000Z/pool/main/n/novnc/novnc_1.3.0-1_all.deb",
-    "sha256": "5ff8b8c93c1c6cc911e01bfa77d12d4098e1904f738a996040c8095e02492ebb"
-  },
   "runtimeContract": {
-    "path": "/opt/roboteam-runtime/contract-v1",
-    "content": "roboteam-runtime-v1\n",
+    "path": "/opt/roboteam-runtime/contract-v2",
+    "content": "roboteam-runtime-v2\n",
     "owner": "0:0",
     "mode": "0444",
     "controllerUser": "root"

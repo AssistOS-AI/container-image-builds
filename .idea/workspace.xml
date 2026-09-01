@@ -1,15 +1,100 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update .gitignore">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/scripts/smoke-roboteam-agent.sh" beforeDir="false" afterPath="$PROJECT_DIR$/scripts/smoke-roboteam-agent.sh" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/scripts/smoke-roboteam-desktop.mjs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;alupoaiemircea&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/AssistOS-AI/container-image-builds.git&quot;,
+    &quot;accountId&quot;: &quot;8243fb94-1ae5-4059-bfb4-4669457cdb62&quot;
+  }
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3GG9dDJiRqh82GxdRmQKiVxEAVC" />
   <component name="ProjectViewState">
     <option name="autoscrollFromSource" value="true" />
     <option name="autoscrollToSource" value="true" />
     <option name="hideEmptyMiddlePackages" value="true" />
-    <option name="showExcludedFiles" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.lookFeel&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "main",
+    "javascript.preferred.runtime.type.id": "node",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "preferences.lookFeel",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-4abd2a77f808-JavaScript-WS-262.9437.145" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task id="LOCAL-00001" summary="update .gitignore">
+      <option name="closed" value="true" />
+      <created>1783577720559</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1783577720560</updated>
+    </task>
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update .gitignore" />
+      <created>1783587123814</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1783587123814</updated>
+      <workItem from="1783587125038" duration="359000" />
+      <workItem from="1788253644028" duration="1909000" />
+    </task>
+    <option name="localTasksCounter" value="2" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="update .gitignore" />
+    <option name="LAST_COMMIT_MESSAGE" value="update .gitignore" />
+  </component>
 </project>
