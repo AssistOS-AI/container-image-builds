@@ -55,24 +55,43 @@ manifests remain separate authorized operations.
 
 ## Umami agent supply chain
 
-The Umami Agent build has no source-image, Bun-version, or MCP-revision input.
-`images/umami-agent/sources.lock.json` records the reviewed inputs, and focused
-tests require the Dockerfile, embedded image metadata, and publication workflow
-to agree with that lock.
+Umami 3.2.0 is compiled from its exact upstream source with
+`BASE_PATH=/base-agent-additional-server/umamiAgent/3000`. This matches the
+existing Router publication. The UmamiAgent ingress restores that prefix after
+Router forwarding, while Next listens only on `127.0.0.1:3001` behind the agent's
+port 3000 ingress. A runtime environment change cannot substitute for this
+build-time Next configuration.
 
-| Input | Immutable selection | Architecture contract |
+`images/umami-agent/sources.lock.json` records every selected image, source
+archive, source lockfile, and package-manager artifact. No workflow input can
+override those selections.
+
+| Input | Immutable selection | Contract |
 | --- | --- | --- |
-| Umami | `docker.umami.is/umami-software/umami:3.2.0@sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec` | The index resolves to `sha256:afbd42695964762c2accf8ed0d863211d764c3937dbba0bf808ba5e33afae763` for `linux/amd64` and `sha256:41c5df65ee777b762411c105f9b040e33708ef8640a19a2d2b9abf3284ee3f37` for `linux/arm64`. |
-| Bun | Release `1.3.14` | The build selects the exact x64-musl or aarch64-musl archive and verifies its recorded SHA-256 before extraction. |
-| `MadsNyl/umami-mcp` | Commit `3ab73beda2db0ebffb0b07439b218ef562107520` | The build fetches that object directly, checks out detached `FETCH_HEAD`, verifies the resulting commit, and verifies the committed `bun.lock` digest before frozen installation. |
+| Runtime and build tools | `docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6` | Both native manifests and image configs are pinned in the lock. This retains Node 22.23.1, Bun 1.3.14, PostgreSQL 18.4, and the existing MCP installation. |
+| Umami source | `umami-software/umami` commit `2f6e2b5ff256862a081d9e74bed18a42ebf795e3` (3.2.0) | The archive SHA-256 and relevant source file hashes are verified before the upstream `build-docker` script runs. |
+| Dependencies | pnpm 10.15.1 and upstream `pnpm-lock.yaml` SHA-256 `b5ba02abd9e346194926658cbfecd95fe4c0a5c765d653a745cf3deb06ec8171` | The package manager archive is checksum-pinned; installation is frozen. Production dependencies and Prisma are retained for the normal database migration command. |
+| `MadsNyl/umami-mcp` | Commit `3ab73beda2db0ebffb0b07439b218ef562107520` | The immutable runtime retains its frozen Bun installation; publication verifies its inherited revision and lock labels. |
+| GeoIP | Existing `/app/geo/GeoLite2-City.mmdb` from each pinned runtime manifest | Upstream `SKIP_BUILD_GEO=1` avoids a mutable download. The seal verifies the copied database matches the original bytes. |
 
-The direct Alpine packages are version-pinned. The built image carries OCI
-labels for the base index, Bun version, MCP commit, and MCP lock digest, plus a
-read-only copy of the full source lock. The workflow smoke-checks those values,
-publishes an amd64/arm64 index with provenance and an SBOM, verifies that both
-platform manifests exist, and reports the resulting immutable image digest.
-Publishing does not update the consumer manifest; pinning that new output is a
-separate reviewed operation.
+The final stage removes the old `/app` completely and installs the source-built
+standalone server, static assets, public files, scripts, Prisma artifacts, and
+production dependencies. `/app/ploinky-umami-build.json` binds the compiled
+base path, source revision, lockfile, server, tracker, and GeoIP hashes. The
+image also carries the source lock at
+`/usr/local/share/ploinky/umami-agent-sources.json`. The retained runtime base
+and rebuilt application ancestry are recorded separately.
+
+Publication is manual and builds on native amd64 and arm64 runners. Each exact
+native digest must pass a network-isolated, UID 1000, capability-free runtime
+gate: initialize disposable PostgreSQL, run real migrations, start Next only
+on loopback, fetch the prefixed login and all referenced scripts/styles/fonts,
+verify heartbeat and authenticated API calls, and fetch the prefixed tracker.
+The workflow assembles exactly those proven native manifests and their
+provenance/SBOM attestations into a run-specific candidate index, and uploads
+both native proofs and the immutable index. `promote_stable=false` is the
+default; only an explicit `promote_stable=true` moves `umami-stack` after both
+gates pass. Consumers adopt the resulting immutable digest separately.
 
 ## SearchAgent runtime
 
@@ -392,7 +411,7 @@ gh workflow run publish-default-local-llm-image.yml \
 
 gh workflow run publish-umami-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f image_tag=umami-stack
+  -f promote_stable=false
 
 gh workflow run publish-bwrap-runner.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -426,7 +445,7 @@ a separately authorized registry release action, never a supervisor
 transaction; the channel must not point to an incompatible image. Reuse,
 status, stop, and destroy do not pull the channel.
 
-The Node and Bubblewrap publish workflows are manually dispatched and default
+The Node, Umami, and Bubblewrap publish workflows are manually dispatched and default
 to candidate publication without stable promotion. Other workflows keep their
 own documented triggers and source inputs.
 

@@ -233,35 +233,31 @@ test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivile
     assert.doesNotMatch(runtime, /https:\/\//);
 });
 
-test('umami-agent workflow builds the all-in-one Umami stack', () => {
+test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
+    const sources = JSON.parse(read('images/umami-agent/sources.lock.json'));
 
     assert.match(workflow, /images\/umami-agent/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/umami-agent/);
-    assert.match(workflow, /DEFAULT_IMAGE_TAG:\s*umami-stack/);
-    assert.match(workflow, /docker\/login-action@[0-9a-f]{40}/);
-    assert.match(workflow, /docker\/build-push-action@[0-9a-f]{40}/);
-    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /IMAGE_TAG:\s*umami-stack/);
+    assert.match(workflow, /platforms:\s*\$\{\{ matrix\.platform \}\}/);
+    assert.match(workflow, /runner: ubuntu-24\.04-arm/);
     assert.match(workflow, /postgres --version/);
     assert.match(workflow, /bun --version/);
     assert.match(workflow, /\/opt\/umami-mcp\/dist\/index\.js/);
-
-    assert.match(dockerfile, /^FROM docker\.umami\.is\/umami-software\/umami:3\.2\.0@sha256:[0-9a-f]{64}$/m);
-    assert.doesNotMatch(dockerfile, /^ARG (?:UMAMI_BASE_IMAGE|BUN_VERSION|UMAMI_MCP_(?:REF|COMMIT))=/m);
-    assert.match(dockerfile, /\bpostgresql18=18\.4-r0\b/);
-    assert.match(dockerfile, /\bpostgresql18-client=18\.4-r0\b/);
-    assert.match(dockerfile, /\bpostgresql18-contrib=18\.4-r0\b/);
-    assert.match(dockerfile, /\bsu-exec\b/);
-    assert.match(dockerfile, /BUN_INSTALL=\/opt\/bun/);
-    assert.match(dockerfile, /github\.com\/MadsNyl\/umami-mcp\.git/);
-    assert.match(dockerfile, /git -C "\$\{UMAMI_MCP_DIR\}" checkout --detach FETCH_HEAD/);
-    assert.match(dockerfile, /git -C "\$\{UMAMI_MCP_DIR\}" rev-parse HEAD/);
-    assert.match(dockerfile, /sha256sum -c -/);
-    assert.match(dockerfile, /bun install --frozen-lockfile/);
-    assert.match(dockerfile, /bun run build/);
-    assert.doesNotMatch(dockerfile, /(?:postgresql-latest|curl[^\n]*\|\s*(?:ba)?sh|git clone --depth|refs\/heads\/|checkout (?:origin\/)?(?:main|master)\b)/);
+    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.doesNotMatch(workflow, /^  push:/m);
+    assert.deepEqual(dockerfile.match(/^FROM .+$/gm), [
+        `FROM ${sources.runtimeBase.image} AS umami-build`, `FROM ${sources.runtimeBase.image}`,
+    ]);
+    assert.match(dockerfile, /BASE_PATH=\/base-agent-additional-server\/umamiAgent\/3000/);
+    assert.match(dockerfile, /install --frozen-lockfile --prod=false/);
+    assert.match(dockerfile, /npm run build-docker/);
+    assert.match(dockerfile, /RUN rm -rf \/app && mkdir \/app/);
+    assert.doesNotMatch(dockerfile, /^ARG |apk add|npm install -g|git clone|sed -i/m);
+    assert.equal(sources.postgresql.version, '18.4');
+    assert.equal(sources.bun.version, '1.3.14');
 });
 
 test('bwrap-runner workflow publishes only digest-proven native candidates before optional promotion', () => {
