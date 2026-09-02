@@ -5,8 +5,44 @@ test -r /consumer/scripts/install-gpt-researcher.sh
 : "${HOME:=/gpt-state/home}"
 : "${WORKSPACE_PATH:=/gpt-state/workspace}"
 export HOME WORKSPACE_PATH
+export PYTHONDONTWRITEBYTECODE=1
 mkdir -p "$HOME" "$WORKSPACE_PATH"
 . /consumer/scripts/runtime-paths.sh
+
+verify_install() {
+    "$VENV_DIR/bin/python" - "$APP_DIR" "$VENV_DIR" <<'PY'
+import importlib.metadata
+import json
+from pathlib import Path
+import subprocess
+import sys
+from urllib.parse import unquote, urlparse
+
+import gpt_researcher
+
+app, venv = (Path(value).resolve() for value in sys.argv[1:])
+distribution = importlib.metadata.distribution("gpt-researcher")
+direct_url = json.loads(distribution.read_text("direct_url.json"))
+url = urlparse(direct_url["url"])
+assert url.scheme == "file" and not url.netloc, direct_url
+assert Path(unquote(url.path)).resolve() == app, direct_url
+assert direct_url.get("dir_info", {}).get("editable", False) is False, direct_url
+installed = Path(gpt_researcher.__file__).resolve().parent
+assert installed.is_relative_to(venv), installed
+source = app / "gpt_researcher"
+modules = sorted(source.rglob("*.py"))
+assert modules, source
+for module in modules:
+    target = installed / module.relative_to(source)
+    assert target.is_file() and target.read_bytes() == module.read_bytes(), module
+status = subprocess.check_output(["git", "-C", str(app), "status", "--porcelain=v1"], text=True)
+assert not status, status
+head = subprocess.check_output(["git", "-C", str(app), "rev-parse", "HEAD"], text=True).strip()
+print(json.dumps({"ok": True, "consumer": "GPTResearcher", "upstreamSha": head,
+                  "distributionVersion": distribution.version, "sourceModulesVerified": len(modules),
+                  "sameCheckoutInstall": True, "cleanCheckout": True}))
+PY
+}
 
 mode="${1:-smoke}"
 case "$mode" in
@@ -17,7 +53,7 @@ case "$mode" in
         sh /consumer/scripts/install-gpt-researcher.sh
         test -x "$VENV_DIR/bin/python"
         test -d "$APP_DIR/.git"
-        "$VENV_DIR/bin/python" -c 'import gpt_researcher; print("gpt-researcher-import-ok")'
+        verify_install
         printf '%s\n' '{"ok":true,"consumer":"GPTResearcher","coldInstall":true}'
         exit 0
         ;;
@@ -31,7 +67,7 @@ esac
 
 test -x "$VENV_DIR/bin/python"
 test -d "$APP_DIR/.git"
-"$VENV_DIR/bin/python" -c 'import gpt_researcher; print("gpt-researcher-import-ok")'
+verify_install
 
 # Exercise an actual lightweight tool/task path without provider credentials.
 settings_json="$(node /consumer/scripts/get-settings.mjs)"
@@ -99,5 +135,6 @@ for _ in $(seq 1 90); do
     sleep 1
 done
 test "$ready" = true
+verify_install
 
 printf '%s\n' '{"ok":true,"consumer":"GPTResearcher","network":"none","readiness":true,"minimalTask":true}'

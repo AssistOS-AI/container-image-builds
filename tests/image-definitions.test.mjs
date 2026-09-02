@@ -340,7 +340,9 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
     assert.match(dockerfile, /\/usr\/local\/bin\/bwrap-sandbox-exec/);
 
     assert.match(gptSmoke, /install-gpt-researcher\.sh/);
-    assert.match(gptSmoke, /gpt-researcher-import-ok/);
+    assert.match(gptSmoke, /import gpt_researcher/);
+    assert.match(gptSmoke, /"sameCheckoutInstall": True/);
+    assert.match(gptSmoke, /"sourceModulesVerified": len\(modules\)/);
     assert.match(gptSmoke, /readiness\.sh/);
     assert.match(gptSmoke, /gpt-researcher-task-adapter-ok/);
     assert.match(gptSmoke, /sh \/consumer\/scripts\/run-research\.sh <\/dev\/null/);
