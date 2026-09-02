@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "nodeBase": {
     "image": "docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
     "indexDigest": "sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
@@ -14,6 +14,28 @@
     "platformManifests": {
       "linux/amd64": "sha256:db56205ac0ac2637d879d5db8bcce47ebae7e06d57c92b7a5bd5c027d3f23e8a",
       "linux/arm64": "sha256:7082e7bfa8a371a5c84a170e0fba9e7f641373be69d9ae6f38aa16924b09215c"
+    }
+  },
+  "workstationBase": {
+    "image": "lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e",
+    "indexDigest": "sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e",
+    "platformManifests": {
+      "linux/amd64": "sha256:41c98b7eca2ac96fe0c797380298fbd82ff3ade0f5a7b28644a039f6a203b4c7",
+      "linux/arm64": "sha256:ee31a8828783b4c3497c638b0cd5b793a4b6a727b282358f9d64443afb9c7a03"
+    }
+  },
+  "computerUseLinux": {
+    "version": "0.5.0",
+    "releaseBaseUrl": "https://github.com/agent-sh/computer-use-linux/releases/download/v0.5.0",
+    "artifacts": {
+      "linux/amd64": {
+        "name": "computer-use-linux-x86_64-unknown-linux-gnu",
+        "sha256": "d21e798336f5c6b69ef7c8532886639950fe24855e2dbb205cc3f3452894020e"
+      },
+      "linux/arm64": {
+        "name": "computer-use-linux-aarch64-unknown-linux-gnu",
+        "sha256": "512718eb64f91cd8efc9610727f65f40ec93218bfe751a6bb60fe362668e22a6"
+      }
     }
   },
   "runtimeContract": {

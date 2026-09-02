@@ -15,6 +15,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
+| `assistos/roboteam-workstation:cul-0.5.0-v1` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
 | `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
@@ -84,12 +85,23 @@ requires package-manager or system-directory privileges.
 
 ## RoboTeam nested Podman runtime
 
-`docker.io/assistos/roboteam-agent` is the outer runtime for RoboTeam. It uses
+`docker.io/assistos/roboteam-agent:runtime` is the outer runtime for RoboTeam. It uses
 the exact Podman 6 upstream and Ploinky Node multiarchitecture bases recorded in
 `images/roboteam-agent/sources.lock.json`, copies the Node runtime into the
 Podman base, and provides Podman, fuse-overlayfs, pasta, curl, Git, and Bash.
-Chromium and Webtop are not baked into this image: RoboTeam starts them as
-replaceable inner OCI containers.
+The outer image does not contain a GUI. RoboTeam starts the separately published
+`docker.io/assistos/roboteam-workstation:cul-0.5.0-v1` as its inner OCI
+workstation.
+
+The workstation definition is `images/roboteam-agent/Dockerfile.workstation`.
+It derives from the digest-pinned LinuxServer Ubuntu XFCE Webtop base and adds
+`computer-use-linux` 0.5.0 after verifying the architecture-specific release
+checksum. The image also installs the X11, AT-SPI, window-control, and screenshot
+dependencies required by computer use. Its fixed stdio launcher reads the live
+XFCE display and D-Bus environment, disables the optional shell tool, and starts
+the MCP server without opening a network listener. A second launcher focuses or
+starts Chromium with renderer accessibility enabled. The image intentionally
+contains no LLM agent or task controller.
 
 The root-owned read-only contract is
 `/opt/roboteam-runtime/contract-v3`, containing `roboteam-runtime-v3` followed
@@ -102,10 +114,11 @@ private IPC and 1 GiB shared memory. It is intended for a Ploinky Box or another
 runtime that supplies `SYS_ADMIN`, `NET_ADMIN`, `/dev/fuse`, and `/dev/net/tun`;
 GitHub-hosted Docker does not provide the required nested mount behavior.
 
-Publication runs the source checks and a capability-free contract smoke on the
-runner architecture, then uses Buildx and QEMU to publish amd64 and arm64
-directly as the operator-managed `runtime` tag. The workflow does not attempt the
-nested smoke, use privileged mode, or mount a host engine socket.
+Publication runs source checks, a capability-free outer contract smoke, and a
+workstation tool smoke on the runner architecture. It then uses Buildx and QEMU
+to publish amd64 and arm64 directly as the operator-managed `runtime` and
+`cul-0.5.0-v1` tags. The workflow does not attempt the nested smoke, use
+privileged mode, or mount a host engine socket.
 
 ## Bubblewrap runner publication
 

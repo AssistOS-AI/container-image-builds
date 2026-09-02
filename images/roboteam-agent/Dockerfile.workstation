@@ -1,0 +1,36 @@
+FROM lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
+
+ARG TARGETARCH
+ARG COMPUTER_USE_LINUX_VERSION=0.5.0
+
+USER root
+
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        at-spi2-core \
+        ca-certificates \
+        curl \
+        gnome-screenshot \
+        wmctrl \
+        x11-utils \
+        xdotool; \
+    case "$TARGETARCH" in \
+        amd64) target="x86_64"; expected="d21e798336f5c6b69ef7c8532886639950fe24855e2dbb205cc3f3452894020e" ;; \
+        arm64) target="aarch64"; expected="512718eb64f91cd8efc9610727f65f40ec93218bfe751a6bb60fe362668e22a6" ;; \
+        *) echo "unsupported computer-use-linux architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    asset="computer-use-linux-${target}-unknown-linux-gnu"; \
+    curl --fail --location --retry 3 --output "/tmp/${asset}" "https://github.com/agent-sh/computer-use-linux/releases/download/v${COMPUTER_USE_LINUX_VERSION}/${asset}"; \
+    printf '%s  %s\n' "$expected" "/tmp/${asset}" | sha256sum --check --strict; \
+    install -o root -g root -m 0755 "/tmp/${asset}" /usr/local/bin/computer-use-linux; \
+    rm -f "/tmp/${asset}"; \
+    rm -rf /var/lib/apt/lists/*; \
+    computer-use-linux --help >/dev/null
+
+COPY --chmod=0755 roboteam-computer-use-mcp /usr/local/bin/roboteam-computer-use-mcp
+COPY --chmod=0755 roboteam-open-browser /usr/local/bin/roboteam-open-browser
+COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
+
+LABEL io.assistos.roboteam.workstation="1" \
+      io.assistos.roboteam.computer-use-linux.version="0.5.0"

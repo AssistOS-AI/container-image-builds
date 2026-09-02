@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+session_pid="$(pgrep -x xfce4-session 2>/dev/null | head -n 1 || true)"
+if [ -z "$session_pid" ] || [ ! -r "/proc/$session_pid/environ" ]; then
+    echo "XFCE desktop session is unavailable" >&2
+    exit 1
+fi
+
+desktop_env() {
+    tr '\000' '\n' < "/proc/$session_pid/environ" | sed -n "s/^$1=//p" | head -n 1
+}
+
+DISPLAY="$(desktop_env DISPLAY)"
+DBUS_SESSION_BUS_ADDRESS="$(desktop_env DBUS_SESSION_BUS_ADDRESS)"
+XDG_RUNTIME_DIR="$(desktop_env XDG_RUNTIME_DIR)"
+export DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+
+if wmctrl -lx | grep -qi 'chromium'; then
+    wmctrl -xa chromium.Chromium 2>/dev/null || wmctrl -a Chromium 2>/dev/null || true
+    exit 0
+fi
+
+mkdir -p /config/.cache/roboteam /config/.config/chromium
+nohup /usr/bin/chromium \
+    --no-sandbox \
+    --force-renderer-accessibility \
+    --start-maximized \
+    --user-data-dir=/config/.config/chromium \
+    about:blank \
+    > /config/.cache/roboteam/chromium.log 2>&1 </dev/null &

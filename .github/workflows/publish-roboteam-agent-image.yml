@@ -21,7 +21,10 @@ concurrency:
 env:
   IMAGE_NAME: assistos/roboteam-agent
   IMAGE_TAG: runtime
+  WORKSTATION_IMAGE_NAME: assistos/roboteam-workstation
+  WORKSTATION_IMAGE_TAG: cul-0.5.0-v1
   BASE_IMAGE: quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
+  WORKSTATION_BASE_IMAGE: lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
 
 jobs:
   publish:
@@ -45,21 +48,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Verify exact Podman base members
+      - name: Verify exact outer and workstation base members
         run: |
           set -euo pipefail
           docker buildx imagetools inspect --raw "$BASE_IMAGE" > "$RUNNER_TEMP/base-index.json"
+          docker buildx imagetools inspect --raw "$WORKSTATION_BASE_IMAGE" > "$RUNNER_TEMP/workstation-base-index.json"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
           const lock = JSON.parse(fs.readFileSync('images/roboteam-agent/sources.lock.json', 'utf8'));
-          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/base-index.json`, 'utf8'));
-          const members = new Map(index.manifests.map((entry) => [
-            `${entry.platform?.os}/${entry.platform?.architecture}`,
-            entry.digest,
-          ]));
-          for (const platform of ['linux/amd64', 'linux/arm64']) {
-            assert.equal(members.get(platform), lock.podmanBase.platformManifests[platform]);
+          for (const [lockKey, fileName] of [
+            ['podmanBase', 'base-index.json'],
+            ['workstationBase', 'workstation-base-index.json'],
+          ]) {
+            const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/${fileName}`, 'utf8'));
+            const members = new Map(index.manifests.map((entry) => [
+              `${entry.platform?.os}/${entry.platform?.architecture}`,
+              entry.digest,
+            ]));
+            for (const platform of ['linux/amd64', 'linux/arm64']) {
+              assert.equal(members.get(platform), lock[lockKey].platformManifests[platform]);
+            }
           }
           NODE
 
@@ -76,6 +85,19 @@ jobs:
             --volume "$PWD/scripts/smoke-roboteam-agent.sh:/smoke-roboteam-agent.sh:ro" \
             "$IMAGE_NAME:smoke" \
             bash /smoke-roboteam-agent.sh contract
+
+      - name: Smoke build and verify local workstation tools
+        run: |
+          set -euo pipefail
+          docker build \
+            --file images/roboteam-agent/Dockerfile.workstation \
+            --tag "$WORKSTATION_IMAGE_NAME:smoke" \
+            images/roboteam-agent
+          docker run --rm \
+            --network=none \
+            --entrypoint /bin/sh \
+            "$WORKSTATION_IMAGE_NAME:smoke" \
+            -c 'test -x /usr/local/bin/computer-use-linux && test -x /usr/local/bin/roboteam-computer-use-mcp && test -x /usr/local/bin/roboteam-open-browser && computer-use-linux --help >/dev/null'
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -98,19 +120,41 @@ jobs:
             io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
           provenance: false
 
-      - name: Verify and report published runtime
+      - name: Build and push multi-architecture workstation
+        id: publish_workstation
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/roboteam-agent
+          file: images/roboteam-agent/Dockerfile.workstation
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: docker.io/${{ env.WORKSTATION_IMAGE_NAME }}:${{ env.WORKSTATION_IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.base.digest=sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
+            io.assistos.roboteam.computer-use-linux.version=0.5.0
+          provenance: false
+
+      - name: Verify and report published runtime and workstation
         env:
-          DIGEST: ${{ steps.publish.outputs.digest }}
+          RUNTIME_DIGEST: ${{ steps.publish.outputs.digest }}
+          WORKSTATION_DIGEST: ${{ steps.publish_workstation.outputs.digest }}
         run: |
           set -euo pipefail
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${DIGEST}" > "$RUNNER_TEMP/published-index.json"
+          [[ "$RUNTIME_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$WORKSTATION_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${RUNTIME_DIGEST}" > "$RUNNER_TEMP/published-runtime-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${WORKSTATION_IMAGE_NAME}@${WORKSTATION_DIGEST}" > "$RUNNER_TEMP/published-workstation-index.json"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
-          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/published-index.json`, 'utf8'));
-          const platforms = index.manifests.map((entry) =>
-            `${entry.platform?.os}/${entry.platform?.architecture}`).sort();
-          assert.deepEqual(platforms, ['linux/amd64', 'linux/arm64']);
+          for (const fileName of ['published-runtime-index.json', 'published-workstation-index.json']) {
+            const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/${fileName}`, 'utf8'));
+            const platforms = index.manifests.map((entry) =>
+              `${entry.platform?.os}/${entry.platform?.architecture}`).sort();
+            assert.deepEqual(platforms, ['linux/amd64', 'linux/arm64']);
+          }
           NODE
-          printf 'Published: `docker.io/%s:%s@%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Published runtime: `docker.io/%s:%s@%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$RUNTIME_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Published workstation: `docker.io/%s:%s@%s`\n' "$WORKSTATION_IMAGE_NAME" "$WORKSTATION_IMAGE_TAG" "$WORKSTATION_DIGEST" >> "$GITHUB_STEP_SUMMARY"

@@ -7,20 +7,44 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 const dockerfile = read('images/roboteam-agent/Dockerfile');
+const workstationDockerfile = read('images/roboteam-agent/Dockerfile.workstation');
+const computerUseLauncher = read('images/roboteam-agent/roboteam-computer-use-mcp');
+const browserLauncher = read('images/roboteam-agent/roboteam-open-browser');
 const storage = read('images/roboteam-agent/storage.conf');
 const workflow = read('.github/workflows/publish-roboteam-agent-image.yml');
 const smoke = read('scripts/smoke-roboteam-agent.sh');
 const sources = JSON.parse(read('images/roboteam-agent/sources.lock.json'));
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
-test('RoboTeam locks exact multi-architecture Node and Podman bases', () => {
-    assert.equal(sources.schemaVersion, 2);
-    for (const base of [sources.nodeBase, sources.podmanBase]) {
+test('RoboTeam locks exact multi-architecture outer and workstation bases', () => {
+    assert.equal(sources.schemaVersion, 3);
+    for (const base of [sources.nodeBase, sources.podmanBase, sources.workstationBase]) {
         assert.match(base.indexDigest, SHA256);
         assert.ok(base.image.endsWith(`@${base.indexDigest}`));
         assert.deepEqual(Object.keys(base.platformManifests).sort(), ['linux/amd64', 'linux/arm64']);
         for (const digest of Object.values(base.platformManifests)) assert.match(digest, SHA256);
     }
+});
+
+test('workstation image pins Webtop and computer-use-linux for both architectures', () => {
+    assert.match(workstationDockerfile, new RegExp(`^FROM ${sources.workstationBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+    assert.equal(sources.computerUseLinux.version, '0.5.0');
+    assert.match(workstationDockerfile, /ARG TARGETARCH/);
+    assert.match(workstationDockerfile, /COMPUTER_USE_LINUX_VERSION=0\.5\.0/);
+    for (const platform of ['linux/amd64', 'linux/arm64']) {
+        const artifact = sources.computerUseLinux.artifacts[platform];
+        assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
+        assert.ok(workstationDockerfile.includes(artifact.sha256));
+    }
+    for (const dependency of ['at-spi2-core', 'gnome-screenshot', 'wmctrl', 'x11-utils', 'xdotool']) {
+        assert.match(workstationDockerfile, new RegExp(`\\b${dependency}\\b`));
+    }
+    assert.match(computerUseLauncher, /pgrep -x xfce4-session/);
+    assert.match(computerUseLauncher, /DBUS_SESSION_BUS_ADDRESS/);
+    assert.match(computerUseLauncher, /COMPUTER_USE_LINUX_SCREENSHOT_BACKEND=gnome-screenshot/);
+    assert.match(computerUseLauncher, /unset COMPUTER_USE_LINUX_ENABLE_SHELL/);
+    assert.match(computerUseLauncher, /computer-use-linux mcp/);
+    assert.match(browserLauncher, /--force-renderer-accessibility/);
 });
 
 test('outer image combines Node with the nested Podman controller', () => {
@@ -57,7 +81,7 @@ test('runtime contract and smoke describe bounded nested Podman v3', () => {
     }
 });
 
-test('publication pushes a verified multi-architecture runtime image directly', () => {
+test('publication pushes verified multi-architecture runtime and workstation images directly', () => {
     assert.match(workflow, /^\s{2}push:\s*$/m);
     assert.match(workflow, /^\s{4}branches:\s*\n\s{6}- main$/m);
     for (const triggerPath of [
@@ -70,11 +94,16 @@ test('publication pushes a verified multi-architecture runtime image directly', 
         assert.match(workflow, new RegExp(`^\\s{6}- ${escapedPath}$`, 'm'));
     }
     assert.match(workflow, /IMAGE_TAG:\s*runtime/);
+    assert.match(workflow, /WORKSTATION_IMAGE_NAME:\s*assistos\/roboteam-workstation/);
+    assert.match(workflow, /WORKSTATION_IMAGE_TAG:\s*cul-0\.5\.0-v1/);
     assert.match(workflow, /name:\s*Build and push runtime/);
     assert.match(workflow, /docker\/setup-qemu-action@/);
     assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
     assert.match(workflow, /^\s{10}push:\s*true$/m);
     assert.match(workflow, /tags:\s*docker\.io\/\$\{\{ env\.IMAGE_NAME \}\}:\$\{\{ env\.IMAGE_TAG \}\}/);
+    assert.match(workflow, /file:\s*images\/roboteam-agent\/Dockerfile\.workstation/);
+    assert.match(workflow, /tags:\s*docker\.io\/\$\{\{ env\.WORKSTATION_IMAGE_NAME \}\}:\$\{\{ env\.WORKSTATION_IMAGE_TAG \}\}/);
+    assert.match(workflow, /Smoke build and verify local workstation tools/);
     assert.match(workflow, /node --test tests\/roboteam-agent-supply-chain\.test\.mjs/);
     assert.match(workflow, /bash \/smoke-roboteam-agent\.sh contract/);
     assert.doesNotMatch(workflow, /bash \/smoke-roboteam-agent\.sh nested/);

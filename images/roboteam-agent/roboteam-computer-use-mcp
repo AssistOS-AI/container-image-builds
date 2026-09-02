@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+session_pid=""
+attempt=0
+while [ "$attempt" -lt 100 ]; do
+    session_pid="$(pgrep -x xfce4-session 2>/dev/null | head -n 1 || true)"
+    if [ -n "$session_pid" ] && [ -r "/proc/$session_pid/environ" ]; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+
+if [ -z "$session_pid" ] || [ ! -r "/proc/$session_pid/environ" ]; then
+    echo "XFCE desktop session is unavailable" >&2
+    exit 1
+fi
+
+desktop_env() {
+    tr '\000' '\n' < "/proc/$session_pid/environ" | sed -n "s/^$1=//p" | head -n 1
+}
+
+DISPLAY="$(desktop_env DISPLAY)"
+XDG_RUNTIME_DIR="$(desktop_env XDG_RUNTIME_DIR)"
+DBUS_SESSION_BUS_ADDRESS="$(desktop_env DBUS_SESSION_BUS_ADDRESS)"
+
+if [ -z "$DISPLAY" ] || [ -z "$XDG_RUNTIME_DIR" ] || [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    echo "XFCE desktop session environment is incomplete" >&2
+    exit 1
+fi
+
+export DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
+export XDG_SESSION_TYPE=x11
+export COMPUTER_USE_LINUX_SCREENSHOT_BACKEND=gnome-screenshot
+unset WAYLAND_DISPLAY
+unset COMPUTER_USE_LINUX_ENABLE_SHELL
+
+exec /usr/local/bin/computer-use-linux mcp

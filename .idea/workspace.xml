@@ -7,6 +7,7 @@
     <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update roboteam image, missing npm">
       <change beforePath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -82,6 +83,7 @@
       <workItem from="1783587125038" duration="359000" />
       <workItem from="1788253644028" duration="3134000" />
       <workItem from="1788261964242" duration="3814000" />
+      <workItem from="1788344072321" duration="584000" />
     </task>
     <task id="LOCAL-00002" summary="update roboteam image">
       <option name="closed" value="true" />
