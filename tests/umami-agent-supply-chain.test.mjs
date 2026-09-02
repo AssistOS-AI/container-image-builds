@@ -71,6 +71,9 @@ test('build uses verified supported source output and completely replaces the ol
     assert.match(dockerfile, /cp -a node_modules public scripts prisma prisma\.config\.ts generated geo package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \/out\//);
     assert.match(dockerfile, /verify-umami-build\.mjs seal/);
     assert.match(dockerfile, /RUN rm -rf \/app && mkdir \/app\nCOPY --from=umami-build --chown=1000:1000 \/out\/ \/app\//);
+    assert.match(dockerfile, /RUN mkdir -p \/usr\/local\/share\/ploinky \\\n    && chown 0:0 \/usr\/local\/share\/ploinky \\\n    && chmod 0755 \/usr\/local\/share\/ploinky\nCOPY --chown=0:0 --chmod=0444 sources\.lock\.json/);
+    assert.match(dockerfile, /COPY --chown=0:0 --chmod=0444 smoke-runtime\.mjs/);
+    assert.match(dockerfile, /su-exec 1000:1000 node -e .*\['umami-agent-sources\.json', 'smoke-umami-runtime\.mjs'\].*readFileSync/);
 });
 
 test('workflow assembles smoke-proven native digest outputs before explicit stable promotion', () => {

@@ -59,14 +59,18 @@ ENV NODE_ENV=production \
 # Replace the complete application; the immutable base supplies only the retained runtime stack.
 RUN rm -rf /app && mkdir /app
 COPY --from=umami-build --chown=1000:1000 /out/ /app/
-COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/umami-agent-sources.json
-COPY --chmod=0444 smoke-runtime.mjs /usr/local/share/ploinky/smoke-umami-runtime.mjs
+RUN mkdir -p /usr/local/share/ploinky \
+    && chown 0:0 /usr/local/share/ploinky \
+    && chmod 0755 /usr/local/share/ploinky
+COPY --chown=0:0 --chmod=0444 sources.lock.json /usr/local/share/ploinky/umami-agent-sources.json
+COPY --chown=0:0 --chmod=0444 smoke-runtime.mjs /usr/local/share/ploinky/smoke-umami-runtime.mjs
 RUN test -f /app/server.js \
     && test -f /app/scripts/update-tracker.js \
     && test -f /app/node_modules/.bin/prisma \
     && test -f /opt/umami-mcp/dist/index.js \
     && test "$(node --version)" = 'v22.23.1' \
     && test "$(bun --version)" = '1.3.14' \
-    && test "$(postgres --version | cut -d ' ' -f 3)" = '18.4'
+    && test "$(postgres --version | cut -d ' ' -f 3)" = '18.4' \
+    && su-exec 1000:1000 node -e "for (const file of ['umami-agent-sources.json', 'smoke-umami-runtime.mjs']) require('fs').readFileSync('/usr/local/share/ploinky/' + file)"
 
 WORKDIR /code
