@@ -1,4 +1,4 @@
-FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca AS searxng-builder
+FROM docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669 AS searxng-builder
 
 USER root
 
@@ -37,7 +37,7 @@ RUN set -eux; \
     rm -rf /opt/search-agent/searxng-src/.git /root/.cache; \
     /opt/search-agent/searx-pyenv/bin/python -c 'import searx, flask, httpx'
 
-FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca
+FROM docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
 
 ENV NODE_PATH=/opt/search-agent/node_modules \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -184,20 +184,34 @@ test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivile
     const workflow = read('.github/workflows/publish-search-agent-image.yml');
     const dockerfile = read('images/search-agent/Dockerfile');
     const packageJson = JSON.parse(read('images/search-agent/package.json'));
+    const runtime = read('images/search-agent/smoke-runtime.mjs');
 
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/search-agent/);
-    assert.match(workflow, /default:\s*searxng-browser/);
+    assert.doesNotMatch(workflow, /image_tag:|promote_stable:|IMAGE_TAG:|searxng-browser|setup-qemu/);
     assert.match(workflow, /runner:\s*ubuntu-24\.04/);
     assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
     assert.match(workflow, /push-by-digest=true/);
     assert.match(workflow, /--cap-drop=ALL --security-opt=no-new-privileges/);
     assert.match(workflow, /docker buildx imagetools create/);
-    assert.match(workflow, /grep -q 'linux\/amd64'/);
-    assert.match(workflow, /grep -q 'linux\/arm64'/);
+    assert.match(workflow, /assert\.equal\(index\.manifests\.length, 2\)/);
+    assert.match(workflow, /members\.get\('linux\/amd64'\), process\.env\.AMD64_DIGEST/);
+    assert.match(workflow, /members\.get\('linux\/arm64'\), process\.env\.ARM64_DIGEST/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /cmp "\$evidence\/candidate-index\.json" "\$evidence\/registry-index\.json"/);
+    assert.match(workflow, /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
+    assert.match(workflow, /smoke-git-transport\.mjs/);
+    assert.match(workflow, /assert\.equal\(transport\.probes\.length, 14\)/);
+    assert.match(workflow, /assert\.equal\(source\.workflowAttempt, process\.env\.GITHUB_RUN_ATTEMPT\)/);
+    assert.match(workflow, /assert\.deepEqual\(runtime\.browser\.errors, \[\]\)/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/);
+    }
 
-    assert.match(dockerfile, /^FROM docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64} AS searxng-builder$/m);
+    const base = 'docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base} AS searxng-builder`);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
     assert.equal(
-        dockerfile.match(/^FROM docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}(?: AS searxng-builder)?$/gm)?.length,
+        dockerfile.match(/^FROM docker\.io\/assistos\/ploinky-node:24-trixie-tools@sha256:[0-9a-f]{64}(?: AS searxng-builder)?$/gm)?.length,
         2,
     );
     assert.match(dockerfile, /9fea41204fdfa7a5cfa15b0ebd12904c520478ce/);
@@ -211,6 +225,12 @@ test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivile
     assert.match(dockerfile, /^USER root$/m);
     assert.match(dockerfile, /^USER 1000:1000$/m);
     assert.equal(packageJson.dependencies['puppeteer-core'], '25.9.0');
+    assert.match(runtime, /spawn\(python, \['-m', 'searx\.webapp'\]/);
+    assert.match(runtime, /127\.0\.0\.1:8888\/healthz/);
+    assert.match(runtime, /127\.0\.0\.1:8888\/search\?format=json/);
+    assert.match(runtime, /puppeteer\.launch\(/);
+    assert.match(runtime, /page\.\$eval\('#proof'/);
+    assert.doesNotMatch(runtime, /https:\/\//);
 });
 
 test('umami-agent workflow builds the all-in-one Umami stack', () => {
