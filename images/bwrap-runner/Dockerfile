@@ -31,7 +31,7 @@ RUN apt-get update \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && /usr/bin/python3 -c 'import sys; assert sys.version_info[:2] == (3, 12)' \
     && node --version && npm --version \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 
 # Install the reusable local sandbox runner under a stable image path so research
 # provider agents (which use this image as their container base) can invoke the
