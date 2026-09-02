@@ -159,21 +159,34 @@ The consumer SHAs are evidence-only prepublication code selections, recorded as
 `prepublication-code-only`; they do not authorize or perform manifest pinning.
 Native `ubuntu-24.04` amd64 and `ubuntu-24.04-arm` jobs each build and push one
 architecture by digest without moving the stable tag. Each job requires
-rootless Podman and runs the digest with all capabilities dropped,
+rootless Podman and runs the digest as its default UID/GID `1000:1000`, projected
+with `keep-id:uid=1000,gid=1000`, with all capabilities dropped,
 `no-new-privileges`, no host namespace options, and no unconfined profile. It
 records the image's effective UID/GID, capability and namespace state, SUID
 inventory, Bubblewrap mode/file capabilities, platform, pinned base image,
 workflow/action identity, and every exact source commit.
+Set-id and file-capability inventory covers private HOME as UID1000 and the rest
+of the image separately with a read-only filesystem as UID0, with capabilities
+dropped and no network. Neither traversal ignores errors. Actual transport,
+native policy, and provider gates always use the image's nonzero identity.
 
-The native gate has no skip path. It executes both private- and empty-proc
-production policies, the canonical healthcheck, and a representative staged
-runner task with network disabled and filesystem write confinement. Separate
+The native gate has no skip path. It requires actual empty-proc production
+execution with write, read-only-system-file, sibling/source, device, and
+environment boundary assertions. Private proc must either pass the same
+execution checks or produce canonical capability evidence that only empty proc
+is available, together with a real private-only task rejection before state or
+staged-file mutation. This matches ABI 2's `private-or-empty` default without
+claiming private execution on a host that forbids it. Fixed network files use
+private copies and `/dev` contains only four fixed devices; the policy never
+binds outer proc or relaxes container confinement. The canonical healthcheck
+and a representative staged runner task must also succeed networklessly. Separate
 consumer gates prepare Open Interpreter with installation-only network access,
 then require its networkless terminal
 `PLOINKY_OPEN_INTERPRETER_BOX_UNAVAILABLE` disposition, and perform a real
 GPTResearcher cold install in a networked container followed by import,
 UI/readiness, and lightweight task-adapter checks in a separate networkless
-container over the same persisted install. Installation egress is not
+container over the same HOME-owned persisted install; no writable `/opt` mount
+is provided. Installation egress is not
 task-time network authority.
 
 Only after both architecture jobs upload their digest and evidence artifacts

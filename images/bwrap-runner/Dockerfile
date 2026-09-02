@@ -45,4 +45,12 @@ RUN chmod +x /opt/bwrap-runner/bin/sandbox-exec.mjs \
         > /usr/local/bin/bwrap-sandbox-exec \
     && chmod +x /usr/local/bin/bwrap-sandbox-exec
 
+# A nonzero identity can create a nested user namespace with no capabilities.
+# Provider installations belong under HOME; /opt remains image-owned.
+RUN groupadd --gid 1000 runner \
+    && useradd --uid 1000 --gid 1000 --create-home --home-dir /home/runner runner \
+    && mkdir -p /var/lib/ploinky-bwrap-runner \
+    && chown 1000:1000 /var/lib/ploinky-bwrap-runner
+ENV HOME=/home/runner
+USER 1000:1000
 WORKDIR /code

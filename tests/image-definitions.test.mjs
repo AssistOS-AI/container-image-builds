@@ -324,6 +324,17 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
     assert.match(workflow, /smoke-git-transport\.mjs/);
     assert.doesNotMatch(workflow, /node24-python-bookworm/);
     assert.match(dockerfile, /\blibcap2-bin\b/);
+    assert.match(dockerfile, /^USER 1000:1000$/m);
+    assert.match(workflow, /test "\$config_user" = 1000:1000/);
+    assert.match(workflow, /--userns=keep-id:uid=1000,gid=1000/);
+    assert.match(workflow, /--user=0:0 --network=none --read-only/);
+    assert.match(workflow, /find \/home\/runner -xdev -type f -exec getcap/);
+    assert.match(workflow, /find \/ -xdev -path \/home\/runner -prune -o -type f -exec getcap/);
+    assert.doesNotMatch(gptStep, /gpt_opt|:\/opt/);
+    for (const invocation of workflow.matchAll(/podman run ([^\n]+)/g)) {
+        assert.ok(invocation[1].includes('--userns=keep-id:uid=1000,gid=1000')
+            || invocation[1].includes('--user=0:0 --network=none --read-only'));
+    }
     assert.match(dockerfile, /COPY\s+bin\/\s+\/opt\/bwrap-runner\/bin\//);
     assert.match(dockerfile, /COPY\s+lib\/\s+\/opt\/bwrap-runner\/lib\//);
     assert.match(dockerfile, /\/usr\/local\/bin\/bwrap-sandbox-exec/);
@@ -332,7 +343,7 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
     assert.match(gptSmoke, /gpt-researcher-import-ok/);
     assert.match(gptSmoke, /readiness\.sh/);
     assert.match(gptSmoke, /gpt-researcher-task-adapter-ok/);
-    assert.match(gptSmoke, /start-research\.py <\/dev\/null/);
+    assert.match(gptSmoke, /sh \/consumer\/scripts\/run-research\.sh <\/dev\/null/);
     assert.match(gptSmoke, /"coldInstall":true/);
     assert.match(gptSmoke, /"network":"none","readiness":true,"minimalTask":true/);
 });

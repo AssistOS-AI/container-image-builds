@@ -174,7 +174,7 @@ jobs:
           set -euo pipefail
           evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
           mkdir -p "$evidence"
-          podman run --rm --cap-drop=all --security-opt=no-new-privileges \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 --cap-drop=all --security-opt=no-new-privileges \
             --volume "$PWD/scripts/smoke-git-transport.mjs:/smoke-git-transport.mjs:ro" \
             --entrypoint node "docker.io/${IMAGE_NAME}@${DIGEST}" /smoke-git-transport.mjs \
             | tee "$evidence/git-transport.json"
@@ -187,15 +187,15 @@ jobs:
           evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
           mkdir -p "$evidence"
           config_user="$(podman image inspect --format '{{.Config.User}}' "docker.io/${IMAGE_NAME}@${DIGEST}")"
-          test -z "$config_user"
+          test "$config_user" = 1000:1000
           podman image inspect "docker.io/${IMAGE_NAME}@${DIGEST}" > "$evidence/image-inspect.json"
-          podman run --rm \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 \
             --network=none \
             --cap-drop=all \
             --security-opt=no-new-privileges \
             "docker.io/${IMAGE_NAME}@${DIGEST}" \
             bash -euo pipefail -c '
-              test "$(id -u):$(id -g)" = 0:0
+              test "$(id -u):$(id -g)" = 1000:1000
               for field in CapInh CapPrm CapEff CapBnd CapAmb; do
                 test "$(sed -n "s/^${field}:[[:space:]]*//p" /proc/self/status)" = 0000000000000000
               done
@@ -206,15 +206,32 @@ jobs:
               printf "uid=%s gid=%s bwrap_mode=%s bwrap_caps=none\n" "$(id -u)" "$(id -g)" "$mode"
               grep -E "^(Cap(Inh|Prm|Eff|Bnd|Amb)|NoNewPrivs):" /proc/self/status
               for ns in mnt pid user net ipc uts; do printf "%s=%s\n" "$ns" "$(readlink /proc/self/ns/$ns)"; done
-              find / -xdev -type f -perm /6000 -print 2>/dev/null | sort
+              printf "inventory_scope=/home/runner inventory_uid=1000\n"
+              find /home/runner -xdev -type f -perm /6000 -print | sort
+              find /home/runner -xdev -type f -exec getcap {} + | sort
             ' | tee "$evidence/security.txt"
+          # Read-only UID0 inventories the rest of the image. Private HOME was
+          # inventoried by its owner above; neither traversal may ignore errors.
+          # Actual transport, policy, and provider tasks retain default USER1000.
+          podman run --rm --user=0:0 --network=none --read-only \
+            --cap-drop=all --security-opt=no-new-privileges \
+            "docker.io/${IMAGE_NAME}@${DIGEST}" \
+            bash -euo pipefail -c '
+              printf "inventory_uid=%s scope=outside-inventoried-home capabilities=none filesystem=read-only\n" "$(id -u)"
+              for field in CapInh CapPrm CapEff CapBnd CapAmb; do
+                test "$(sed -n "s/^${field}:[[:space:]]*//p" /proc/self/status)" = 0000000000000000
+              done
+              test "$(sed -n "s/^NoNewPrivs:[[:space:]]*//p" /proc/self/status)" = 1
+              find / -xdev -path /home/runner -prune -o -type f -perm /6000 -print | sort
+              find / -xdev -path /home/runner -prune -o -type f -exec getcap {} + | sort
+            ' | tee "$evidence/image-file-inventory.txt"
 
-      - name: Run non-skipping private and empty production-policy gates
+      - name: Run non-skipping empty policy and private disposition gates
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          podman run --rm \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 \
             --network=none \
             --cap-drop=all \
             --security-opt=no-new-privileges \
@@ -229,7 +246,7 @@ jobs:
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
-          podman run --rm \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 \
             --network=none \
             --cap-drop=all \
             --security-opt=no-new-privileges \
@@ -237,7 +254,7 @@ jobs:
             node /opt/bwrap-runner/bin/healthcheck.mjs \
             | tee "$evidence/health.json"
           printf '%s' '{"command":"printf representative-task-ok > /outputs/result.txt && cat /outputs/result.txt","files":[{"path":"input.txt","content":"staged"}]}' \
-            | podman run --rm -i \
+            | podman run --rm --userns=keep-id:uid=1000,gid=1000 -i \
                 --network=none \
                 --cap-drop=all \
                 --security-opt=no-new-privileges \
@@ -270,7 +287,7 @@ jobs:
           oi_data="$RUNNER_TEMP/open-interpreter-data-${{ matrix.arch }}"
           mkdir -p "$oi_data"
           printf '%s' '{}' \
-            | podman run --rm -i \
+            | podman run --rm --userns=keep-id:uid=1000,gid=1000 -i \
                 --cap-drop=all \
                 --security-opt=no-new-privileges \
                 --volume "$PWD/sources/copilot-agents/openInterpreterAgent:/code:ro" \
@@ -281,7 +298,7 @@ jobs:
                 node /code/tools/prepare-runtime.mjs \
             | tee "$evidence/open-interpreter-prepare.json"
           printf '%s' '{}' \
-            | podman run --rm -i \
+            | podman run --rm --userns=keep-id:uid=1000,gid=1000 -i \
                 --network=none \
                 --cap-drop=all \
                 --security-opt=no-new-privileges \
@@ -315,32 +332,29 @@ jobs:
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/bwrap-runner-evidence-${{ matrix.arch }}"
-          gpt_opt="$RUNNER_TEMP/gpt-researcher-opt-${{ matrix.arch }}"
           gpt_state="$RUNNER_TEMP/gpt-researcher-state-${{ matrix.arch }}"
-          mkdir -p "$gpt_opt" "$gpt_state/home" "$gpt_state/workspace"
+          mkdir -p "$gpt_state/home" "$gpt_state/workspace"
 
           # Only the cold installer receives network authority. Its exact
-          # /opt and state outputs are then reused read-write by a distinct
+          # HOME-owned runtime and state outputs are reused by a distinct
           # networkless container for import, adapter, UI, and readiness.
-          podman run --rm \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 \
             --cap-drop=all \
             --security-opt=no-new-privileges \
             --volume "$PWD/sources/AchillesCLI/GPTResearcher:/consumer:ro" \
             --volume "$PWD/scripts/smoke-gpt-researcher.sh:/smoke-gpt-researcher.sh:ro" \
-            --volume "$gpt_opt:/opt" \
             --volume "$gpt_state:/gpt-state" \
             --env HOME=/gpt-state/home \
             --env WORKSPACE_PATH=/gpt-state/workspace \
             "docker.io/${IMAGE_NAME}@${DIGEST}" \
             /smoke-gpt-researcher.sh install \
             | tee "$evidence/gpt-researcher-install.json"
-          podman run --rm \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 \
             --network=none \
             --cap-drop=all \
             --security-opt=no-new-privileges \
             --volume "$PWD/sources/AchillesCLI/GPTResearcher:/consumer:ro" \
             --volume "$PWD/scripts/smoke-gpt-researcher.sh:/smoke-gpt-researcher.sh:ro" \
-            --volume "$gpt_opt:/opt" \
             --volume "$gpt_state:/gpt-state" \
             --env HOME=/gpt-state/home \
             --env WORKSPACE_PATH=/gpt-state/workspace \
