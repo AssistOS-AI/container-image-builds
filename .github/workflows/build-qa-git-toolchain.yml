@@ -1,0 +1,69 @@
+name: Build QA Git toolchain
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-qa-git-toolchain
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact toolchain definition
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and prove the relocated native Noble toolchain
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          docker buildx build --platform linux/amd64 \
+            --file images/qa-git/Dockerfile --target artifact \
+            --output type=local,dest=/tmp/qa-git-artifact .
+
+      - name: Seal complete installation and provenance
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/qa-git-release
+          tar -C /tmp/qa-git-artifact -czf /tmp/qa-git-release/qa-git-linux-amd64.tar.gz qa-git
+          cp /tmp/qa-git-artifact/proof/git-transport.json /tmp/qa-git-release/
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path('/tmp/qa-git-release')
+          archive = root / 'qa-git-linux-amd64.tar.gz'
+          proof = json.loads((root / 'git-transport.json').read_text())
+          assert proof['ok'] is True and proof['platform'] == 'linux/x64'
+          (root / 'release.json').write_text(json.dumps({
+              'schema': 'qa-git-toolchain/v1',
+              'version': '2.55.0',
+              'platform': 'linux/amd64',
+              'sourceCommit': os.environ['GITHUB_SHA'],
+              'workflowRun': os.environ['GITHUB_RUN_ID'],
+              'workflowAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'archive': archive.name,
+              'archiveSha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+              'tlsBackend': 'ubuntu-libcurl-openssl',
+              'relocationVerified': True,
+          }, indent=2) + '\n')
+          PY
+          cat /tmp/qa-git-release/release.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verified QA bootstrap toolchain
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qa-git-linux-amd64
+          path: /tmp/qa-git-release/*
+          if-no-files-found: error
+          retention-days: 14

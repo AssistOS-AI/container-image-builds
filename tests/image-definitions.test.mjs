@@ -39,16 +39,32 @@ function dockerfileInstructions(dockerfile) {
     return instructions;
 }
 
-test('ploinky-node workflow builds the local image definition', () => {
+test('ploinky-node publishes proven native Trixie candidates before explicit promotion', () => {
     const workflow = read('.github/workflows/publish-ploinky-node-image.yml');
     const dockerfile = read('images/ploinky-node/Dockerfile');
 
     assert.match(workflow, /images\/ploinky-node/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /docker\/login-action@[0-9a-f]{40}/);
+    assert.match(workflow, /docker\/build-push-action@[0-9a-f]{40}/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim$/m);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /platform:\s*linux\/amd64/);
+    assert.match(workflow, /platform:\s*linux\/arm64/);
+    assert.match(workflow, /push-by-digest=true/);
+    assert.match(workflow, /smoke-git-transport\.mjs/);
+    assert.match(workflow, /transport\.ok, true/);
+    assert.match(workflow, /assert\.equal\(index\.manifests\.length, 2\)/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /IMAGE_TAG: 24-trixie-tools/);
+    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.doesNotMatch(workflow, /24-bookworm-tools|setup-qemu-action|node_base:|image_tag:|^\s*push:/m);
+    const base = 'docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base}`);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/);
+    }
     assert.match(dockerfile, /\bbubblewrap\b/);
     assert.match(dockerfile, /\bffmpeg\b/);
     assert.match(dockerfile, /\bpython3\b/);
@@ -294,9 +310,19 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }
 
-    const baseDigest = '4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d';
-    assert.match(dockerfile, new RegExp(`^FROM node:24\\.15\\.0-bookworm-slim@sha256:${baseDigest}$`, 'm'));
-    assert.match(workflow, new RegExp(`BASE_IMAGE: docker\\.io/library/node:24\\.15\\.0-bookworm-slim@sha256:${baseDigest}`));
+    const base = 'docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base} AS node-runtime`);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
+    const pythonBase = 'docker.io/library/python:3.12.14-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea';
+    assert.ok(dockerfile.includes(`FROM ${pythonBase}`));
+    assert.ok(workflow.includes(`PYTHON_BASE_IMAGE: ${pythonBase}`));
+    assert.match(workflow, /pythonBaseImage: process\.env\.PYTHON_BASE_IMAGE/);
+    assert.match(dockerfile, /test ! -e \/usr\/bin\/python3/);
+    assert.match(dockerfile, /ln -s \/usr\/local\/bin\/python3 \/usr\/bin\/python3/);
+    assert.doesNotMatch(dockerfile, /^\s*python3(?:-dev|-pip|-setuptools|-venv|-wheel)?\s*\\$/m);
+    assert.match(workflow, /IMAGE_TAG: node24-python-trixie/);
+    assert.match(workflow, /smoke-git-transport\.mjs/);
+    assert.doesNotMatch(workflow, /node24-python-bookworm/);
     assert.match(dockerfile, /\blibcap2-bin\b/);
     assert.match(dockerfile, /COPY\s+bin\/\s+\/opt\/bwrap-runner\/bin\//);
     assert.match(dockerfile, /COPY\s+lib\/\s+\/opt\/bwrap-runner\/lib\//);

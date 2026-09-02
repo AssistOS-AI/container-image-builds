@@ -8,7 +8,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 
 | Image | Source repo | Build context | Dockerfile | Workflow |
 | --- | --- | --- | --- | --- |
-| `assistos/ploinky-node:24-bookworm-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
+| `assistos/ploinky-node:24-trixie-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
@@ -16,7 +16,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-workstation:cul-0.5.0-v1` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
-| `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
+| `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus immutable `AssistOS-AI/ploinky` and lock-selected `AssistOS-AI/MCPSDK` commits | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
@@ -120,6 +120,37 @@ to publish amd64 and arm64 directly as the operator-managed `runtime` and
 `cul-0.5.0-v1` tags. The workflow does not attempt the nested smoke, use
 privileged mode, or mount a host engine socket.
 
+## Node and Python Git transport
+
+The Node and Bubblewrap images use the pinned official Node 24.20.0 Trixie
+index `sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0`.
+Trixie's Git-linked libcurl preserves TLS 1.3 tickets with the default TLS
+configuration. The images require no HTTP/1.1 override or TLS interception.
+The Bubblewrap image combines Node with official Python 3.12.14 Trixie index
+`sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`.
+Python 3.12 satisfies both GPTResearcher and Open Interpreter's pinned tiktoken
+wheel compatibility; distro Python 3.13 is not installed. `/usr/bin/python3`
+is created only when absent and points to the official Python interpreter.
+Both base indices are recorded in Bubblewrap's publication evidence.
+
+Each native architecture gate runs `scripts/smoke-git-transport.mjs` inside
+the exact published digest. The probe inventories Git's actual HTTPS helper
+and linked libraries, clears inherited Git, npm, proxy and loader overrides,
+and isolates Git system/global and npm user/global configuration. It requires
+anonymous HTTP/2 negotiation for default and explicitly selected HTTP/2
+`ls-remote`, clone and fetch against Soplang and GPTResearcher, followed by
+each mode's cold npm installation of a small public Git fixture. The npm lock
+must contain only that fixture and its reviewed commit; this probe never
+downloads MCPSDK. JSON evidence retains operation, negotiation and response
+status on failure without recording credentials or request headers.
+
+The Node workflow builds amd64 and arm64 natively, checks tools and transport
+by digest, then assembles only those successful members into a run-scoped
+candidate index. It always reports the immutable candidate. Dispatching with
+`promote_stable=true` additionally moves `24-trixie-tools` after those gates.
+The old Bookworm tag is never reused for a Trixie image. Consumers must be
+updated explicitly to the approved image digest.
+
 ## Bubblewrap runner publication
 
 `publish-bwrap-runner.yml` accepts only exact 40-character commits for the
@@ -148,7 +179,7 @@ task-time network authority.
 Only after both architecture jobs upload their digest and evidence artifacts
 does the assemble job create a run-scoped candidate index from exactly those
 two digests and verify exact `linux/amd64` and `linux/arm64` membership. The
-candidate digest is always reported. The `node24-python-bookworm` convenience
+candidate digest is always reported. The `node24-python-trixie` convenience
 tag moves only when dispatch explicitly sets `promote_stable=true`, and only
 after all prior gates; no behavioral check occurs after promotion. Consumer
 manifests must use the recorded `docker.io/assistos/bwrap-runner@sha256:...`
@@ -327,7 +358,7 @@ Do not store Docker Hub token values in repository files.
 ```sh
 gh workflow run publish-ploinky-node-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f image_tag=24-bookworm-tools
+  -f promote_stable=false
 
 gh workflow run publish-onlyoffice-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -382,7 +413,30 @@ a separately authorized registry release action, never a supervisor
 transaction; the channel must not point to an incompatible image. Reuse,
 status, stop, and destroy do not pull the channel.
 
-`publish-ploinky-node-image.yml` and `publish-onlyoffice-agent-image.yml` also
-run on pushes to their image
-definitions or workflow files. The other publish workflows stay manual because
-their build contexts live in separate source repositories.
+The Node and Bubblewrap publish workflows are manually dispatched and default
+to candidate publication without stable promotion. Other workflows keep their
+own documented triggers and source inputs.
+
+## QA host Git bootstrap
+
+`build-qa-git-toolchain.yml` builds a native `linux/amd64` Git 2.55.0
+installation from the checksum-pinned official release in
+`images/qa-git/Dockerfile`. Its Ubuntu 24.04 builder selects Ubuntu's OpenSSL
+libcurl development package; the resulting HTTPS helper uses the host's
+ordinary `libcurl.so.4`, without shipping or replacing TLS libraries.
+
+The complete installation includes Git's HTTPS helpers, scripts and templates.
+`RUNTIME_PREFIX` permits relocation. A clean Ubuntu 24.04 validation stage moves
+the installation to a different prefix, checks helper linkage and templates,
+and runs the shared default/HTTP2 Git and npm download probes before the
+workflow seals its archive and provenance. The artifact is a bootstrap toolchain,
+not an agent image or a host package installation.
+
+A QA operator installs the verified archive into a versioned QA-owned directory
+outside the disposable workspace and prepends its `bin` directory only to the
+QA bootstrap/deployment process. Clear inherited `GIT_EXEC_PATH` and transport
+settings for acceptance tests, and verify helper resolution and library linkage
+on the target. Do not modify system Git, production PATH, host TLS libraries, or
+system/global Git configuration. Ubuntu maintains the dynamically linked TLS
+packages; updating this separate Git release requires a reviewed source pin and
+a new passing artifact.

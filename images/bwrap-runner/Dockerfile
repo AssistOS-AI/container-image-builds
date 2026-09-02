@@ -1,4 +1,13 @@
-FROM node:24.15.0-bookworm-slim@sha256:4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d
+FROM docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS node-runtime
+
+# Open Interpreter 0.4.3 requires tiktoken 0.7, whose published Linux wheels
+# support Python 3.12. Keep the Trixie Git stack and provide the
+# official Python runtime instead of introducing distro Python 3.13.
+FROM docker.io/library/python:3.12.14-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/include/node /usr/local/include/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -14,13 +23,14 @@ RUN apt-get update \
         curl \
         build-essential \
         pkg-config \
-        python3 \
-        python3-dev \
-        python3-pip \
-        python3-setuptools \
-        python3-venv \
-        python3-wheel \
-    && python3 -m pip install --break-system-packages --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && test ! -e /usr/bin/python3 \
+    && test ! -L /usr/bin/python3 \
+    && ln -s /usr/local/bin/python3 /usr/bin/python3 \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && /usr/bin/python3 -c 'import sys; assert sys.version_info[:2] == (3, 12)' \
+    && node --version && npm --version \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the reusable local sandbox runner under a stable image path so research
