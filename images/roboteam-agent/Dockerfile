@@ -18,8 +18,9 @@ RUN set -eux; \
     truncate -s 0 /etc/subuid; \
     truncate -s 0 /etc/subgid; \
     rm -f /usr/bin/newuidmap /usr/bin/newgidmap; \
-    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
-    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
+    printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"' > /usr/local/bin/npm; \
+    printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npx-cli.js "$@"' > /usr/local/bin/npx; \
+    chmod 0755 /usr/local/bin/npm /usr/local/bin/npx; \
     for executable in \
         /usr/bin/podman \
         /usr/bin/fuse-overlayfs \

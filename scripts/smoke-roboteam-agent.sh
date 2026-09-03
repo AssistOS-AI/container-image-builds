@@ -15,6 +15,7 @@ require_contract() {
     test ! -e /usr/bin/newgidmap
     node --version
     npm --version
+    NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version
     podman --version | grep -E '^podman version 6\.'
 }
 
@@ -25,7 +26,7 @@ case "${1:-contract}" in
     nested)
         require_contract
         install -d /data/podman/storage /tmp/roboteam-podman-run /tmp/roboteam-podman-xdg
-        podman run --rm --ipc private --shm-size 1g --network pasta \
+        podman run --rm --ipc none --tmpfs /dev/shm:rw,size=1g,mode=1777 --network pasta \
             docker.io/library/alpine:latest echo nested-podman-ok
         ;;
     *)

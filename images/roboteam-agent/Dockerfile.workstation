@@ -25,7 +25,10 @@ RUN set -eux; \
 
 COPY --chmod=0755 roboteam-computer-use-mcp /usr/local/bin/roboteam-computer-use-mcp
 COPY --chmod=0755 roboteam-open-browser /usr/local/bin/roboteam-open-browser
-COPY --chmod=0755 services/desktop-mcp.run /custom-services.d/roboteam-desktop-mcp/run
+COPY --chmod=0755 services/desktop-mcp.run /etc/s6-overlay/s6-rc.d/svc-roboteam-desktop-mcp/run
+COPY --chmod=0444 services/longrun.type /etc/s6-overlay/s6-rc.d/svc-roboteam-desktop-mcp/type
+COPY --chmod=0444 services/s6-marker /etc/s6-overlay/s6-rc.d/svc-roboteam-desktop-mcp/dependencies.d/init-services
+COPY --chmod=0444 services/s6-marker /etc/s6-overlay/s6-rc.d/user/contents.d/svc-roboteam-desktop-mcp
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
 
 EXPOSE 8100

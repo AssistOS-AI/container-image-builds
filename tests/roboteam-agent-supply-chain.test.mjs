@@ -15,6 +15,8 @@ const browserMcpService = read('images/roboteam-agent/services/browser-mcp.run')
 const storage = read('images/roboteam-agent/storage.conf');
 const workflow = read('.github/workflows/publish-roboteam-agent-image.yml');
 const smoke = read('scripts/smoke-roboteam-agent.sh');
+const localInstaller = read('scripts/install-roboteam-local.mjs');
+const localInBoxInstaller = read('scripts/install-roboteam-local-in-box.sh');
 const sources = JSON.parse(read('images/roboteam-agent/sources.lock.json'));
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
@@ -50,11 +52,17 @@ test('GUI images provide system runtimes while tools come from the persistent ru
     assert.match(desktopMcpService, /\/opt\/roboteam-tools\/node_modules\/\.bin\/supergateway/);
     assert.match(desktopMcpService, /outputTransport streamableHttp/);
     assert.match(desktopMcpService, /--port 8100/);
+    assert.match(workstationDockerfile, /s6-rc\.d\/svc-roboteam-desktop-mcp\/run/);
+    assert.match(workstationDockerfile, /s6-rc\.d\/user\/contents\.d\/svc-roboteam-desktop-mcp/);
+    assert.doesNotMatch(workstationDockerfile, /custom-services\.d/);
     assert.doesNotMatch(browserDockerfile, /npm install|@playwright\/mcp@/);
     assert.match(browserDockerfile, new RegExp(`^FROM ${sources.browserBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
     assert.match(browserMcpService, /\/opt\/roboteam-tools\/node_modules\/\.bin\/playwright-mcp/);
     assert.match(browserMcpService, /--cdp-endpoint http:\/\/127\.0\.0\.1:9222/);
     assert.match(browserMcpService, /--port 8100/);
+    assert.match(browserDockerfile, /s6-rc\.d\/svc-roboteam-browser-mcp\/run/);
+    assert.match(browserDockerfile, /s6-rc\.d\/user\/contents\.d\/svc-roboteam-browser-mcp/);
+    assert.doesNotMatch(browserDockerfile, /custom-services\.d/);
 });
 
 test('outer image combines Node with the nested Podman controller', () => {
@@ -63,6 +71,9 @@ test('outer image combines Node with the nested Podman controller', () => {
     assert.match(dockerfile, /^FROM \$\{PODMAN_BASE_IMAGE\}$/m);
     assert.match(dockerfile, /COPY --from=node-runtime --chmod=0755 \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
     assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules\/npm\/ \/usr\/local\/lib\/node_modules\/npm\//);
+    assert.match(dockerfile, /exec \/usr\/local\/bin\/node \/usr\/local\/lib\/node_modules\/npm\/bin\/npm-cli\.js/);
+    assert.match(dockerfile, /exec \/usr\/local\/bin\/node \/usr\/local\/lib\/node_modules\/npm\/bin\/npx-cli\.js/);
+    assert.doesNotMatch(dockerfile, /ln -s .*npm-cli\.js/);
     assert.doesNotMatch(dockerfile, /COPY --from=node-runtime \/usr\/local\/ \/usr\/local\//);
     for (const executable of [
         '/usr/bin/podman',
@@ -77,6 +88,7 @@ test('outer image combines Node with the nested Podman controller', () => {
     }
     assert.match(dockerfile, /rm -f \/usr\/bin\/newuidmap \/usr\/bin\/newgidmap/);
     assert.match(smoke, /npm --version/);
+    assert.match(smoke, /NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version/);
     assert.match(storage, /graphroot = "\/data\/podman\/storage"/);
     assert.match(storage, /ignore_chown_errors = "true"/);
     assert.match(storage, /mount_program = "\/usr\/bin\/fuse-overlayfs"/);
@@ -129,10 +141,23 @@ test('publication pushes verified multi-architecture runtime, desktop, and brows
     assert.doesNotMatch(workflow, /push-by-digest|candidate-|Promote proven candidate/);
     assert.doesNotMatch(workflow, /--privileged/);
     assert.doesNotMatch(workflow, /--cap-add SYS_ADMIN|--cap-add NET_ADMIN|--device \/dev\/fuse|--device \/dev\/net\/tun/);
-    assert.match(smoke, /--ipc private --shm-size 1g/);
+    assert.match(smoke, /--ipc none --tmpfs \/dev\/shm:rw,size=1g,mode=1777/);
     assert.match(smoke, /--network pasta/);
     assert.doesNotMatch(workflow, /podman\.sock|docker\.sock/);
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }
+});
+
+test('local development installer builds in the owned Box and streams GUI images into nested Podman', () => {
+    assert.match(localInstaller, /createBoxSupervisor/);
+    assert.match(localInstaller, /running-initialized/);
+    assert.match(localInstaller, /container', 'exec'/);
+    assert.doesNotMatch(localInstaller, /--privileged|docker\.sock|podman\.sock/);
+    assert.match(localInBoxInstaller, /podman build --pull=missing/);
+    assert.match(localInBoxInstaller, /podman save "\$image" \| podman exec --interactive "\$outer_container" \/usr\/bin\/podman load/);
+    assert.match(localInBoxInstaller, /io\.assistos\.ploinky\.managed=1/);
+    assert.match(localInBoxInstaller, /io\.assistos\.ploinky\.resource=agent/);
+    assert.match(localInBoxInstaller, /ploinky-local reinstall roboTeamAgent/);
+    assert.doesNotMatch(localInBoxInstaller, /push|login|--privileged|docker\.sock|podman\.sock/);
 });

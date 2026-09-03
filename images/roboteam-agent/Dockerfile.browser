@@ -15,7 +15,10 @@ RUN set -eux; \
     node --version; \
     npm --version
 
-COPY --chmod=0755 services/browser-mcp.run /custom-services.d/roboteam-browser-mcp/run
+COPY --chmod=0755 services/browser-mcp.run /etc/s6-overlay/s6-rc.d/svc-roboteam-browser-mcp/run
+COPY --chmod=0444 services/longrun.type /etc/s6-overlay/s6-rc.d/svc-roboteam-browser-mcp/type
+COPY --chmod=0444 services/s6-marker /etc/s6-overlay/s6-rc.d/svc-roboteam-browser-mcp/dependencies.d/init-services
+COPY --chmod=0444 services/s6-marker /etc/s6-overlay/s6-rc.d/user/contents.d/svc-roboteam-browser-mcp
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
 
 EXPOSE 8100

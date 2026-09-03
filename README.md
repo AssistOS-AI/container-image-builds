@@ -160,6 +160,33 @@ the dynamic tools are absent. It then uses Buildx and QEMU to publish amd64 and
 arm64 directly under the three operator-managed `runtime` tags. The workflow does not attempt the nested smoke, use
 privileged mode, or mount a host engine socket.
 
+### Local RoboTeam development images
+
+Development does not require publishing the three rolling tags. From the
+workspace host, run one of these commands:
+
+```bash
+node container-image-builds/scripts/install-roboteam-local.mjs agent
+node container-image-builds/scripts/install-roboteam-local.mjs desktop
+node container-image-builds/scripts/install-roboteam-local.mjs browser
+node container-image-builds/scripts/install-roboteam-local.mjs all
+```
+
+The owned Ploinky Box must already be running, and RoboTeam must be running
+before a GUI target can be transferred.
+
+The host launcher proves exact Box ownership, then executes the build inside
+that Box so the outer RoboTeam image lands directly in Ploinky's Podman storage.
+Desktop and browser images are streamed from the Box image store into the
+running RoboTeam container's nested Podman store without a registry or an image
+archive on disk. The installer accepts exactly one managed RoboTeam runtime and
+finishes with `reinstall roboTeamAgent`, so active robot sessions are stopped
+and subsequent sessions use the new local images. Local builds are native to
+the development host architecture. Missing base images may be pulled once and
+are reused afterward; the built RoboTeam images are never pulled or pushed by
+this loop. The publication workflow remains the source of multiarchitecture
+images.
+
 ## Node and Python Git transport
 
 The Node and Bubblewrap images use the pinned official Node 24.20.0 Trixie
