@@ -633,94 +633,58 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 });
 
-test('ploinky-box workflow publishes two native immutable digests without behavioral gates', () => {
+test('ploinky-box publishes proven native candidates before explicit promotion', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
-    const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
-    const ploinkyCheckout = buildJob.match(
-        /- name: Checkout immutable Ploinky source[\s\S]*?(?=\n      - name:)/,
-    )?.[0] || '';
-
-    assert.ok(buildJob);
-    assert.ok(mergeJob);
-    assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
-    assert.match(buildJob, /Resolve immutable MCP SDK input from the Ploinky lock/);
-    assert.match(buildJob, /repository:\s*\$\{\{ steps\.mcp_sdk\.outputs\.repository \}\}/);
-    assert.match(buildJob, /ref:\s*\$\{\{ steps\.mcp_sdk\.outputs\.commit \}\}/);
-    assert.match(buildJob, /path:\s*sources\/mcp-sdk/);
-    assert.match(buildJob, /persist-credentials:\s*false/);
-    assert.match(buildJob, /git -C sources\/mcp-sdk rev-parse HEAD/);
-    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
-    assert.match(workflow, /IMAGE_TAG:\s*latest/);
-    assert.match(workflow, /COMPATIBILITY_IMAGE_TAG:\s*runtime/);
+    const mergeJob = workflow.match(/\n  merge:[\s\S]*?(?=\n  promote:)/)?.[0] || '';
+    const promoteJob = workflow.match(/\n  promote:[\s\S]*$/)?.[0] || '';
+    assert.match(workflow, /source_ref:[\s\S]*?required: true/);
+    assert.match(workflow, /promote_stable:[\s\S]*?type: boolean[\s\S]*?default: false/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
-    assert.doesNotMatch(
-        workflow,
-        /explorer_ref|webmeet_infra_ref|umami_ref|achilles_cli_ref|proxies_ref|basic_ref/,
-    );
-    assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
-    assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
-    assert.match(buildJob, /platform:\s*linux\/amd64/);
-    assert.match(buildJob, /platform:\s*linux\/arm64/);
-    assert.doesNotMatch(buildJob, /setup-qemu-action|--privileged|seccomp=unconfined/);
-    for (const repository of [
-        'AssistOSExplorer', 'webmeetInfra', 'UmamiAgent', 'AchillesCLI', 'proxies', 'basic',
-    ]) {
-        assert.doesNotMatch(buildJob, new RegExp(repository));
-    }
-    assert.match(read('.gitignore'), /^sources\/$/m);
+    assert.match(buildJob, /repository: AssistOS-AI\/ploinky[\s\S]*?ref: \$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(buildJob, /Resolve immutable MCP SDK input from the Ploinky lock/);
+    assert.match(buildJob, /repository: \$\{\{ steps\.mcp_sdk\.outputs\.repository \}\}/);
+    assert.match(buildJob, /ref: \$\{\{ steps\.mcp_sdk\.outputs\.commit \}\}/);
+    assert.match(buildJob, /git -C sources\/mcp-sdk rev-parse HEAD/);
+    assert.match(buildJob, /persist-credentials: false/);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
-    assert.match(buildJob, /Build and push architecture image by digest/);
-    assert.match(
-        buildJob,
-        /build-args:\s*\|[\s\S]*?PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/,
-    );
+    assert.match(read('.gitignore'), /^sources\/$/m);
+    assert.match(buildJob, /runner: ubuntu-24\.04\n/);
+    assert.match(buildJob, /runner: ubuntu-24\.04-arm/);
+    for (const arch of ['amd64', 'arm64']) assert.match(buildJob, new RegExp('platform: linux/' + arch));
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
-    assert.match(buildJob, /Record architecture digest evidence/);
-    assert.match(buildJob, /\^sha256:\[0-9a-f\]\{64\}\$/);
-    assert.match(buildJob, /ploinky-box-digest-\$\{\{ matrix\.arch \}\}/);
-    assert.match(buildJob, /actions\/upload-artifact@[0-9a-f]{40}/);
-    assert.doesNotMatch(
-        workflow,
-        /\bnode --test\b|tests\/(?:unit|integration|e2e)\/|\bpodman\b|SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/,
-    );
-    assert.doesNotMatch(workflow, /\bgated?\b/i);
-
+    assert.match(buildJob, /provenance: false/);
+    assert.match(buildJob, /PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(buildJob, /docker pull --platform "linux\/\$ARCH" "\$image"/);
+    assert.match(buildJob, /--network none --read-only/);
+    assert.match(buildJob, /--user 1000:1000/);
+    assert.match(buildJob, /--cap-drop ALL --security-opt no-new-privileges/);
+    assert.match(buildJob, /native-probe\.mjs --verify/);
+    assert.match(buildJob, /verify-publication\.mjs native/);
+    assert.match(buildJob, /Upload native runtime evidence\n        if: always\(\)/);
+    assert.match(buildJob, /ploinky-box-native-\$\{\{ matrix\.arch \}\}/);
+    assert.doesNotMatch(workflow, /setup-qemu|--privileged|seccomp=unconfined|\bnode --test\b|tests\/(?:unit|integration|e2e)\/|SMOKE_GRAPH_/);
+    for (const repo of ['AssistOSExplorer', 'webmeetInfra', 'UmamiAgent', 'AchillesCLI', 'proxies', 'basic']) assert.doesNotMatch(buildJob, new RegExp(repo));
     assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build/);
-    assert.match(mergeJob, /actions\/download-artifact@[0-9a-f]{40}/);
-    assert.match(mergeJob, /pattern:\s*ploinky-box-digest-\*/);
-    assert.match(mergeJob, /test "\$\{#digest_files\[@\]\}" -eq 2/);
+    assert.match(mergeJob, /pattern: ploinky-box-native-\*/);
+    assert.match(mergeJob, /verify-publication\.mjs proofs/);
     assert.match(mergeJob, /runtime-candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
     assert.match(mergeJob, /Prove the run-scoped staging tag is unused/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.workflow-run/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.source-sha/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.amd64-digest/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.arm64-digest/);
-    assert.match(mergeJob, /assert\.equal\(index\.manifests\.length, 2\)/);
-    assert.match(mergeJob, /members\.get\('linux\/amd64'\)/);
-    assert.match(mergeJob, /members\.get\('linux\/arm64'\)/);
-    assert.match(mergeJob, /Assemble and inspect the exact two-member manifest/);
-    assert.match(mergeJob, /imagetools inspect --raw "\$STAGING_REF"/);
-    assert.match(mergeJob, /sha256sum "\$RUNNER_TEMP\/staging-index\.json"/);
-    assert.doesNotMatch(mergeJob, /sed -n 's\/\^Digest:/);
-    assert.match(mergeJob, /Move latest and runtime compatibility alias by the exact inspected staging digest/);
-    assert.match(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}"/);
-    assert.match(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{COMPATIBILITY_IMAGE_TAG\}"/);
-    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
-    assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
-    assert.match(mergeJob, /test "\$latest_digest" = "\$STAGING_DIGEST"/);
-    assert.match(mergeJob, /test "\$runtime_digest" = "\$STAGING_DIGEST"/);
-    const promote = mergeJob.indexOf('Move latest and runtime compatibility alias by the exact inspected staging digest');
-    const readOnly = mergeJob.indexOf('Read-only post-promotion digest confirmation');
-    assert.ok(promote > 0 && promote < readOnly);
-    assert.doesNotMatch(mergeJob.slice(promote), /node --test|podman run|docker run/);
-    assert.match(mergeJob, /Published latest and runtime:/);
-    assert.match(mergeJob, /GITHUB_STEP_SUMMARY/);
-
-    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
-        assert.match(use[1], /^[0-9a-f]{40}$/, 'workflow action is not SHA-pinned: ' + use[0]);
-    }
+    assert.match(mergeJob, /verify-publication\.mjs candidate/);
+    assert.match(mergeJob, /cmp "\$evidence\/candidate-index\.json" "\$evidence\/immutable-index\.json"/);
+    assert.match(mergeJob, /cp -R \/tmp\/ploinky-box-proofs "\$evidence\/native-proofs"/);
+    assert.match(mergeJob, /Upload immutable candidate evidence/);
+    assert.doesNotMatch(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{(?:IMAGE_TAG|COMPATIBILITY_IMAGE_TAG)\}"/);
+    assert.match(promoteJob, /if: \$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.match(promoteJob, /needs: merge/);
+    assert.match(promoteJob, /STAGING_DIGEST: \$\{\{ needs\.merge\.outputs\.digest \}\}/);
+    assert.match(promoteJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}"/);
+    assert.match(promoteJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{COMPATIBILITY_IMAGE_TAG\}"/);
+    assert.match(promoteJob, /test "\$latest_digest" = "\$STAGING_DIGEST"/);
+    assert.match(promoteJob, /test "\$runtime_digest" = "\$STAGING_DIGEST"/);
+    assert.doesNotMatch(promoteJob, /node --test|podman run|docker run/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) assert.match(use[1], /^[0-9a-f]{40}$/);
 });
 
 test('latest channel documentation separates creation from hard-cut recovery', () => {

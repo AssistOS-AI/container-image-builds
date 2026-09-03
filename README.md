@@ -244,8 +244,9 @@ multiarchitecture digest.
 ## Ploinky Box runtime
 
 `docker.io/assistos/ploinky-box:latest` is the primary mutable release channel
-for the outer appliance. Every publication also moves `runtime` to the same
-manifest digest for compatibility with older Ploinky installations. The image
+for the outer appliance. An explicit stable promotion also moves `runtime` to
+the same manifest digest for compatibility with older Ploinky installations.
+Candidate publication leaves both channels unchanged. The image
 supports native rootless Podman only;
 it requires `/dev/fuse`, `/dev/net/tun`, the explicit unmask security option,
 and no engine socket, privilege, added capabilities, or unconfined seccomp
@@ -370,22 +371,36 @@ destroy path.
 ## Ploinky box publication
 
 Manual dispatch requires one exact 40-character Ploinky commit in `source_ref`.
-The workflow verifies that immutable source checkout and its own image-definition
-checkout are clean and at the requested revisions. It performs no behavioral,
-unit, integration, E2E, Podman, or sibling-repository test execution.
+The workflow verifies that immutable source checkout, the lock-selected MCP SDK,
+and its own image-definition checkout are clean and at the requested revisions.
+`promote_stable=false` is the default; only an explicit `true` can move `latest`
+and the `runtime` compatibility alias after candidate verification.
 
-Each native architecture job builds and pushes one image blob by immutable
-digest, validates the digest format, and uploads only that digest as publication
-evidence. The merge job requires exactly one amd64 digest and one arm64 digest,
-proves the run-scoped
-`runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused, and creates
-a staging manifest from those two exact digests. It annotates and inspects
-that manifest, requires exactly the supplied amd64 and arm64 members, records its
-immutable digest, and moves both `latest` and the `runtime` compatibility alias
-to that exact staging digest. Read-only confirmation proves both tags resolve to
-the staged digest after promotion. The staging tag is retained as provenance,
-workflow concurrency prevents competing promotion, and functional validation
-remains separate from this publication-only workflow.
+Each native architecture job preserves the Dockerfile's SDK and WebTTY build
+checks, pushes one image by immutable digest, and runs the image's own WebTTY
+`--verify` probe as UID/GID 1000 with no network, no capabilities, no new
+privileges, and a read-only rootfs. Its retained evidence includes the exact
+image configuration, probe result, sealed contract, source-probe fingerprint,
+source and workflow commits, and run/attempt identity. The selected Ploinky
+source validator must accept every PTY capability, and the image probe bytes,
+source SHA, package lock, native architecture, and sealed contract must match.
+These package capability checks do not execute the full Box lifecycle, sibling
+repository tests, or browser E2E; those acceptance gates remain separate.
+
+The merge job revalidates both native evidence sets, requires distinct amd64 and
+arm64 digests, and proves the run-scoped
+`runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused. It creates an
+index with exactly those two members and annotations binding the Ploinky and
+image-definition commits, run/attempt, and native digests. It verifies the index
+by immutable digest and confirms the candidate tag still has identical bytes.
+The index, candidate proof, and both complete native evidence sets are retained
+for 30 days. Failed native checks also retain their available diagnostics.
+
+A separate promotion job runs only for `promote_stable=true` after the merge job
+succeeds. It moves both release aliases to that already-verified immutable index
+and confirms both resolve to the same digest. The candidate tag is retained,
+and workflow concurrency prevents competing promotions. A candidate-only run
+never writes either release alias.
 
 ## Secrets
 
@@ -451,7 +466,8 @@ gh workflow run publish-soul-gateway-image.yml \
 
 gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref="$(git -C ../ploinky rev-parse HEAD)"
+  -f source_ref="$(git -C ../ploinky rev-parse HEAD)" \
+  -f promote_stable=false
 ```
 
 `latest` and its `runtime` compatibility alias are intentionally mutable, but an
@@ -464,7 +480,7 @@ a separately authorized registry release action, never a supervisor
 transaction; the channel must not point to an incompatible image. Reuse,
 status, stop, and destroy do not pull the channel.
 
-The Node, Umami, and Bubblewrap publish workflows are manually dispatched and default
+The Node, Umami, Bubblewrap, and Ploinky Box publish workflows are manually dispatched and default
 to candidate publication without stable promotion. Other workflows keep their
 own documented triggers and source inputs.
 
