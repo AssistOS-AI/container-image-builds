@@ -20,7 +20,6 @@ RUN set -eux; \
     rm -f /usr/bin/newuidmap /usr/bin/newgidmap; \
     ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
-    npm install --global --omit=dev @openai/codex@0.152.1; \
     for executable in \
         /usr/bin/podman \
         /usr/bin/fuse-overlayfs \
@@ -34,12 +33,11 @@ RUN set -eux; \
         test -x "$executable"; \
     done; \
     podman --version | grep -E '^podman version 6\.'; \
-    codex --version | grep -F 'codex-cli 0.152.1'; \
     node -e 'JSON.parse(require("node:fs").readFileSync("/usr/local/share/ploinky/roboteam-agent-sources.json", "utf8"))'; \
     install -d -o root -g root -m 0755 /opt/roboteam-runtime; \
-    printf 'roboteam-runtime-v3\n' > /opt/roboteam-runtime/contract-v3; \
-    chmod 0444 /opt/roboteam-runtime/contract-v3; \
-    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v3)" = '0:0:444'
+    printf 'roboteam-runtime-v4\n' > /opt/roboteam-runtime/contract-v4; \
+    chmod 0444 /opt/roboteam-runtime/contract-v4; \
+    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v4)" = '0:0:444'
 
 WORKDIR /code
 CMD ["bash"]

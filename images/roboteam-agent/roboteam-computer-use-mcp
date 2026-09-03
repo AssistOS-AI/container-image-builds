@@ -36,4 +36,4 @@ export COMPUTER_USE_LINUX_SCREENSHOT_BACKEND=gnome-screenshot
 unset WAYLAND_DISPLAY
 unset COMPUTER_USE_LINUX_ENABLE_SHELL
 
-exec /usr/local/bin/computer-use-linux mcp
+exec /opt/roboteam-tools/computer-use-linux mcp

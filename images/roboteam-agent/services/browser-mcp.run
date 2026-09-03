@@ -3,7 +3,7 @@ set -euo pipefail
 
 for _ in $(seq 1 600); do
   if curl --fail --silent http://127.0.0.1:9222/json/version >/dev/null; then
-    exec /usr/local/bin/playwright-mcp \
+    exec /opt/roboteam-tools/node_modules/.bin/playwright-mcp \
       --cdp-endpoint http://127.0.0.1:9222 \
       --host 0.0.0.0 \
       --port 8100 \

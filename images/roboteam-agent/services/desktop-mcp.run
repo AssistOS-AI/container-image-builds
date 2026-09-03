@@ -1,7 +1,7 @@
 #!/usr/bin/with-contenv bash
 set -euo pipefail
 
-exec /usr/local/bin/supergateway \
+exec /opt/roboteam-tools/node_modules/.bin/supergateway \
   --stdio /usr/local/bin/roboteam-computer-use-mcp \
   --outputTransport streamableHttp \
   --stateful \

@@ -2,9 +2,6 @@ FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf
 
 FROM lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
 
-ARG TARGETARCH
-ARG COMPUTER_USE_LINUX_VERSION=0.5.0
-
 USER root
 
 COPY --from=node-runtime --chmod=0755 /usr/local/bin/node /usr/local/bin/node
@@ -22,19 +19,9 @@ RUN set -eux; \
         xdotool; \
     ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
-    npm install --global --omit=dev supergateway@3.4.3; \
-    case "$TARGETARCH" in \
-        amd64) target="x86_64"; expected="d21e798336f5c6b69ef7c8532886639950fe24855e2dbb205cc3f3452894020e" ;; \
-        arm64) target="aarch64"; expected="512718eb64f91cd8efc9610727f65f40ec93218bfe751a6bb60fe362668e22a6" ;; \
-        *) echo "unsupported computer-use-linux architecture: $TARGETARCH" >&2; exit 1 ;; \
-    esac; \
-    asset="computer-use-linux-${target}-unknown-linux-gnu"; \
-    curl --fail --location --retry 3 --output "/tmp/${asset}" "https://github.com/agent-sh/computer-use-linux/releases/download/v${COMPUTER_USE_LINUX_VERSION}/${asset}"; \
-    printf '%s  %s\n' "$expected" "/tmp/${asset}" | sha256sum --check --strict; \
-    install -o root -g root -m 0755 "/tmp/${asset}" /usr/local/bin/computer-use-linux; \
-    rm -f "/tmp/${asset}"; \
     rm -rf /var/lib/apt/lists/*; \
-    computer-use-linux --help >/dev/null
+    node --version; \
+    npm --version
 
 COPY --chmod=0755 roboteam-computer-use-mcp /usr/local/bin/roboteam-computer-use-mcp
 COPY --chmod=0755 roboteam-open-browser /usr/local/bin/roboteam-open-browser
@@ -44,4 +31,4 @@ COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sour
 EXPOSE 8100
 
 LABEL io.assistos.roboteam.desktop="1" \
-      io.assistos.roboteam.computer-use-linux.version="0.5.0"
+      io.assistos.roboteam.tools="runtime-cache"

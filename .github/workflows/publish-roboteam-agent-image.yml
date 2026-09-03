@@ -22,9 +22,9 @@ env:
   IMAGE_NAME: assistos/roboteam-agent
   IMAGE_TAG: runtime
   DESKTOP_IMAGE_NAME: assistos/roboteam-desktop
-  DESKTOP_IMAGE_TAG: cul-0.5.0-v1
+  DESKTOP_IMAGE_TAG: runtime
   BROWSER_IMAGE_NAME: assistos/roboteam-browser
-  BROWSER_IMAGE_TAG: playwright-v1
+  BROWSER_IMAGE_TAG: runtime
   BASE_IMAGE: quay.io/podman/upstream:latest
   WORKSTATION_BASE_IMAGE: lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
   BROWSER_BASE_IMAGE: lscr.io/linuxserver/chromium@sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
@@ -102,7 +102,7 @@ jobs:
             "$IMAGE_NAME:smoke" \
             bash /smoke-roboteam-agent.sh contract
 
-      - name: Smoke build and verify local workstation tools
+      - name: Smoke build and verify local workstation runtime
         run: |
           set -euo pipefail
           docker build \
@@ -113,13 +113,13 @@ jobs:
             --network=none \
             --entrypoint /bin/sh \
             "$DESKTOP_IMAGE_NAME:smoke" \
-            -c 'test -x /usr/local/bin/computer-use-linux && test -x /usr/local/bin/roboteam-computer-use-mcp && test -x /usr/local/bin/supergateway && computer-use-linux --help >/dev/null'
+            -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -x /usr/local/bin/roboteam-computer-use-mcp && test ! -e /usr/local/bin/computer-use-linux && test ! -e /usr/local/bin/supergateway'
 
-      - name: Smoke build and verify local browser tools
+      - name: Smoke build and verify local browser runtime
         run: |
           set -euo pipefail
           docker build --file images/roboteam-agent/Dockerfile.browser --tag "$BROWSER_IMAGE_NAME:smoke" images/roboteam-agent
-          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/playwright-mcp && playwright-mcp --help >/dev/null'
+          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test ! -e /usr/local/bin/playwright-mcp'
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -140,7 +140,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.base.digest=${{ steps.resolve_base.outputs.digest }}
-            io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
+            io.assistos.roboteam.runtime-contract=roboteam-runtime-v4
           provenance: false
 
       - name: Build and push multi-architecture desktop
@@ -156,7 +156,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.base.digest=sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
-            io.assistos.roboteam.computer-use-linux.version=0.5.0
+            io.assistos.roboteam.tools=runtime-cache
           provenance: false
 
       - name: Build and push multi-architecture browser
@@ -172,7 +172,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.base.digest=sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
-            io.assistos.roboteam.playwright-mcp.version=0.0.79
+            io.assistos.roboteam.tools=runtime-cache
           provenance: false
 
       - name: Verify and report published runtime and workstation

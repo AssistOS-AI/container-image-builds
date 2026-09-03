@@ -3,8 +3,8 @@ set -euo pipefail
 
 require_contract() {
     test "$(id -u):$(id -g)" = '0:0'
-    test "$(cat /opt/roboteam-runtime/contract-v3)" = 'roboteam-runtime-v3'
-    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v3)" = '0:0:444'
+    test "$(cat /opt/roboteam-runtime/contract-v4)" = 'roboteam-runtime-v4'
+    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v4)" = '0:0:444'
     test -x /usr/bin/podman
     test -x /usr/bin/fuse-overlayfs
     test -x /usr/bin/pasta

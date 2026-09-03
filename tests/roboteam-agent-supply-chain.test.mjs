@@ -19,7 +19,7 @@ const sources = JSON.parse(read('images/roboteam-agent/sources.lock.json'));
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 test('RoboTeam locks immutable bases and constrains the rolling Podman 6 base', () => {
-    assert.equal(sources.schemaVersion, 3);
+    assert.equal(sources.schemaVersion, 4);
     for (const base of [sources.nodeBase, sources.workstationBase, sources.browserBase]) {
         assert.match(base.indexDigest, SHA256);
         assert.ok(base.image.endsWith(`@${base.indexDigest}`));
@@ -30,16 +30,14 @@ test('RoboTeam locks immutable bases and constrains the rolling Podman 6 base', 
     assert.equal(sources.podmanBase.requiredVersionMajor, 6);
 });
 
-test('workstation image pins Webtop and computer-use-linux for both architectures', () => {
+test('GUI images provide system runtimes while tools come from the persistent runtime cache', () => {
     assert.match(workstationDockerfile, new RegExp(`^FROM ${sources.workstationBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
-    assert.equal(sources.computerUseLinux.version, '0.5.0');
-    assert.match(workstationDockerfile, /ARG TARGETARCH/);
-    assert.match(workstationDockerfile, /COMPUTER_USE_LINUX_VERSION=0\.5\.0/);
-    for (const platform of ['linux/amd64', 'linux/arm64']) {
-        const artifact = sources.computerUseLinux.artifacts[platform];
-        assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
-        assert.ok(workstationDockerfile.includes(artifact.sha256));
-    }
+    assert.equal(sources.runtimeTools.strategy, 'resolve-latest-into-persistent-cache');
+    assert.equal(sources.runtimeTools.mountPath, '/opt/roboteam-tools');
+    assert.equal(sources.runtimeTools.codexPackage, '@openai/codex');
+    assert.equal(sources.runtimeTools.supergatewayPackage, 'supergateway');
+    assert.equal(sources.runtimeTools.playwrightMcpPackage, '@playwright/mcp');
+    assert.equal(sources.runtimeTools.computerUseLinuxRepository, 'agent-sh/computer-use-linux');
     for (const dependency of ['at-spi2-core', 'gnome-screenshot', 'wmctrl', 'x11-utils', 'xdotool']) {
         assert.match(workstationDockerfile, new RegExp(`\\b${dependency}\\b`));
     }
@@ -47,12 +45,14 @@ test('workstation image pins Webtop and computer-use-linux for both architecture
     assert.match(computerUseLauncher, /DBUS_SESSION_BUS_ADDRESS/);
     assert.match(computerUseLauncher, /COMPUTER_USE_LINUX_SCREENSHOT_BACKEND=gnome-screenshot/);
     assert.match(computerUseLauncher, /unset COMPUTER_USE_LINUX_ENABLE_SHELL/);
-    assert.match(computerUseLauncher, /computer-use-linux mcp/);
-    assert.match(workstationDockerfile, /supergateway@3\.4\.3/);
+    assert.match(computerUseLauncher, /\/opt\/roboteam-tools\/computer-use-linux mcp/);
+    assert.doesNotMatch(workstationDockerfile, /computer-use-linux|npm install|supergateway@/);
+    assert.match(desktopMcpService, /\/opt\/roboteam-tools\/node_modules\/\.bin\/supergateway/);
     assert.match(desktopMcpService, /outputTransport streamableHttp/);
     assert.match(desktopMcpService, /--port 8100/);
-    assert.match(browserDockerfile, /@playwright\/mcp@0\.0\.79/);
+    assert.doesNotMatch(browserDockerfile, /npm install|@playwright\/mcp@/);
     assert.match(browserDockerfile, new RegExp(`^FROM ${sources.browserBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+    assert.match(browserMcpService, /\/opt\/roboteam-tools\/node_modules\/\.bin\/playwright-mcp/);
     assert.match(browserMcpService, /--cdp-endpoint http:\/\/127\.0\.0\.1:9222/);
     assert.match(browserMcpService, /--port 8100/);
 });
@@ -81,15 +81,15 @@ test('outer image combines Node with the nested Podman controller', () => {
     assert.match(storage, /ignore_chown_errors = "true"/);
     assert.match(storage, /mount_program = "\/usr\/bin\/fuse-overlayfs"/);
     assert.match(dockerfile, /podman --version \| grep -E '\^podman version 6\\\.'/);
-    assert.match(dockerfile, /@openai\/codex@0\.152\.1/);
+    assert.doesNotMatch(dockerfile, /npm install|@openai\/codex@|codex --version/);
     assert.doesNotMatch(dockerfile, /chromium|Xvfb|x11vnc|websockify|novnc/i);
 });
 
-test('runtime contract and smoke describe bounded nested Podman v3', () => {
-    assert.equal(sources.runtimeContract.path, '/opt/roboteam-runtime/contract-v3');
-    assert.equal(sources.runtimeContract.content, 'roboteam-runtime-v3\n');
+test('runtime contract and smoke describe bounded nested Podman v4', () => {
+    assert.equal(sources.runtimeContract.path, '/opt/roboteam-runtime/contract-v4');
+    assert.equal(sources.runtimeContract.content, 'roboteam-runtime-v4\n');
     for (const source of [dockerfile, smoke]) {
-        assert.match(source, /roboteam-runtime-v3/);
+        assert.match(source, /roboteam-runtime-v4/);
         assert.match(source, /podman/);
     }
 });
@@ -108,7 +108,7 @@ test('publication pushes verified multi-architecture runtime, desktop, and brows
     }
     assert.match(workflow, /IMAGE_TAG:\s*runtime/);
     assert.match(workflow, /DESKTOP_IMAGE_NAME:\s*assistos\/roboteam-desktop/);
-    assert.match(workflow, /DESKTOP_IMAGE_TAG:\s*cul-0\.5\.0-v1/);
+    assert.match(workflow, /DESKTOP_IMAGE_TAG:\s*runtime/);
     assert.match(workflow, /BROWSER_IMAGE_NAME:\s*assistos\/roboteam-browser/);
     assert.match(workflow, /name:\s*Build and push runtime/);
     assert.match(workflow, /docker\/setup-qemu-action@/);
@@ -119,7 +119,7 @@ test('publication pushes verified multi-architecture runtime, desktop, and brows
     assert.match(workflow, /tags:\s*docker\.io\/\$\{\{ env\.DESKTOP_IMAGE_NAME \}\}:\$\{\{ env\.DESKTOP_IMAGE_TAG \}\}/);
     assert.match(workflow, /file:\s*images\/roboteam-agent\/Dockerfile\.browser/);
     assert.match(workflow, /tags:\s*docker\.io\/\$\{\{ env\.BROWSER_IMAGE_NAME \}\}:\$\{\{ env\.BROWSER_IMAGE_TAG \}\}/);
-    assert.match(workflow, /Smoke build and verify local workstation tools/);
+    assert.match(workflow, /Smoke build and verify local workstation runtime/);
     assert.match(workflow, /node --test tests\/roboteam-agent-supply-chain\.test\.mjs/);
     assert.match(workflow, /RESOLVED_BASE_IMAGE/);
     assert.match(workflow, /build-args: PODMAN_BASE_IMAGE=\$\{\{ steps\.resolve_base\.outputs\.image \}\}/);

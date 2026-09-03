@@ -12,8 +12,8 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN set -eux; \
     ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
-    npm install --global --omit=dev @playwright/mcp@0.0.79; \
-    playwright-mcp --help >/dev/null
+    node --version; \
+    npm --version
 
 COPY --chmod=0755 services/browser-mcp.run /custom-services.d/roboteam-browser-mcp/run
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
@@ -21,4 +21,4 @@ COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sour
 EXPOSE 8100
 
 LABEL io.assistos.roboteam.browser="1" \
-      io.assistos.roboteam.playwright-mcp.version="0.0.79"
+      io.assistos.roboteam.tools="runtime-cache"

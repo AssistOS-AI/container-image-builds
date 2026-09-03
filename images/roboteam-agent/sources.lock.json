@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "nodeBase": {
     "image": "docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
     "indexDigest": "sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
@@ -29,31 +29,18 @@
       "linux/arm64": "sha256:3464d4995b8450d20182222d94ab61e5363347167cc86b3a97d1ce73e5ab5243"
     }
   },
-  "mcpBridges": {
-    "supergateway": "3.4.3",
-    "playwrightMcp": "0.0.79",
-    "port": 8100
-  },
-  "codingAgents": {
-    "codex": "0.152.1"
-  },
-  "computerUseLinux": {
-    "version": "0.5.0",
-    "releaseBaseUrl": "https://github.com/agent-sh/computer-use-linux/releases/download/v0.5.0",
-    "artifacts": {
-      "linux/amd64": {
-        "name": "computer-use-linux-x86_64-unknown-linux-gnu",
-        "sha256": "d21e798336f5c6b69ef7c8532886639950fe24855e2dbb205cc3f3452894020e"
-      },
-      "linux/arm64": {
-        "name": "computer-use-linux-aarch64-unknown-linux-gnu",
-        "sha256": "512718eb64f91cd8efc9610727f65f40ec93218bfe751a6bb60fe362668e22a6"
-      }
-    }
+  "runtimeTools": {
+    "strategy": "resolve-latest-into-persistent-cache",
+    "codexPackage": "@openai/codex",
+    "supergatewayPackage": "supergateway",
+    "playwrightMcpPackage": "@playwright/mcp",
+    "computerUseLinuxRepository": "agent-sh/computer-use-linux",
+    "mountPath": "/opt/roboteam-tools",
+    "mcpPort": 8100
   },
   "runtimeContract": {
-    "path": "/opt/roboteam-runtime/contract-v3",
-    "content": "roboteam-runtime-v3\n",
+    "path": "/opt/roboteam-runtime/contract-v4",
+    "content": "roboteam-runtime-v4\n",
     "owner": "0:0",
     "mode": "0444",
     "controllerUser": "root"
