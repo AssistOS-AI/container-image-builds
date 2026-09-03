@@ -1,6 +1,7 @@
+ARG PODMAN_BASE_IMAGE=quay.io/podman/upstream:latest
 FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca AS node-runtime
 
-FROM quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
+FROM ${PODMAN_BASE_IMAGE}
 
 USER root
 

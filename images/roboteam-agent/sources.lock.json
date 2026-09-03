@@ -9,12 +9,9 @@
     }
   },
   "podmanBase": {
-    "image": "quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099",
-    "indexDigest": "sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099",
-    "platformManifests": {
-      "linux/amd64": "sha256:db56205ac0ac2637d879d5db8bcce47ebae7e06d57c92b7a5bd5c027d3f23e8a",
-      "linux/arm64": "sha256:7082e7bfa8a371a5c84a170e0fba9e7f641373be69d9ae6f38aa16924b09215c"
-    }
+    "image": "quay.io/podman/upstream:latest",
+    "requiredVersionMajor": 6,
+    "resolution": "The publication workflow resolves this rolling tag once and uses that exact digest for every architecture in the run."
   },
   "workstationBase": {
     "image": "lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e",
