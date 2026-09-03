@@ -21,10 +21,13 @@ concurrency:
 env:
   IMAGE_NAME: assistos/roboteam-agent
   IMAGE_TAG: runtime
-  WORKSTATION_IMAGE_NAME: assistos/roboteam-workstation
-  WORKSTATION_IMAGE_TAG: cul-0.5.0-v1
+  DESKTOP_IMAGE_NAME: assistos/roboteam-desktop
+  DESKTOP_IMAGE_TAG: cul-0.5.0-v1
+  BROWSER_IMAGE_NAME: assistos/roboteam-browser
+  BROWSER_IMAGE_TAG: playwright-v1
   BASE_IMAGE: quay.io/podman/upstream@sha256:bc1938030b525c1a17e5488cb074077d6a25beb18cfc146d71a92bcbbd959099
   WORKSTATION_BASE_IMAGE: lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
+  BROWSER_BASE_IMAGE: lscr.io/linuxserver/chromium@sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
 
 jobs:
   publish:
@@ -53,6 +56,7 @@ jobs:
           set -euo pipefail
           docker buildx imagetools inspect --raw "$BASE_IMAGE" > "$RUNNER_TEMP/base-index.json"
           docker buildx imagetools inspect --raw "$WORKSTATION_BASE_IMAGE" > "$RUNNER_TEMP/workstation-base-index.json"
+          docker buildx imagetools inspect --raw "$BROWSER_BASE_IMAGE" > "$RUNNER_TEMP/browser-base-index.json"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
@@ -60,6 +64,7 @@ jobs:
           for (const [lockKey, fileName] of [
             ['podmanBase', 'base-index.json'],
             ['workstationBase', 'workstation-base-index.json'],
+            ['browserBase', 'browser-base-index.json'],
           ]) {
             const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/${fileName}`, 'utf8'));
             const members = new Map(index.manifests.map((entry) => [
@@ -91,13 +96,19 @@ jobs:
           set -euo pipefail
           docker build \
             --file images/roboteam-agent/Dockerfile.workstation \
-            --tag "$WORKSTATION_IMAGE_NAME:smoke" \
+            --tag "$DESKTOP_IMAGE_NAME:smoke" \
             images/roboteam-agent
           docker run --rm \
             --network=none \
             --entrypoint /bin/sh \
-            "$WORKSTATION_IMAGE_NAME:smoke" \
-            -c 'test -x /usr/local/bin/computer-use-linux && test -x /usr/local/bin/roboteam-computer-use-mcp && test -x /usr/local/bin/roboteam-open-browser && computer-use-linux --help >/dev/null'
+            "$DESKTOP_IMAGE_NAME:smoke" \
+            -c 'test -x /usr/local/bin/computer-use-linux && test -x /usr/local/bin/roboteam-computer-use-mcp && test -x /usr/local/bin/supergateway && computer-use-linux --help >/dev/null'
+
+      - name: Smoke build and verify local browser tools
+        run: |
+          set -euo pipefail
+          docker build --file images/roboteam-agent/Dockerfile.browser --tag "$BROWSER_IMAGE_NAME:smoke" images/roboteam-agent
+          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/playwright-mcp && playwright-mcp --help >/dev/null'
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -120,15 +131,15 @@ jobs:
             io.assistos.roboteam.runtime-contract=roboteam-runtime-v3
           provenance: false
 
-      - name: Build and push multi-architecture workstation
-        id: publish_workstation
+      - name: Build and push multi-architecture desktop
+        id: publish_desktop
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: images/roboteam-agent
           file: images/roboteam-agent/Dockerfile.workstation
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: docker.io/${{ env.WORKSTATION_IMAGE_NAME }}:${{ env.WORKSTATION_IMAGE_TAG }}
+          tags: docker.io/${{ env.DESKTOP_IMAGE_NAME }}:${{ env.DESKTOP_IMAGE_TAG }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -136,20 +147,39 @@ jobs:
             io.assistos.roboteam.computer-use-linux.version=0.5.0
           provenance: false
 
+      - name: Build and push multi-architecture browser
+        id: publish_browser
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/roboteam-agent
+          file: images/roboteam-agent/Dockerfile.browser
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: docker.io/${{ env.BROWSER_IMAGE_NAME }}:${{ env.BROWSER_IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.base.digest=sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
+            io.assistos.roboteam.playwright-mcp.version=0.0.79
+          provenance: false
+
       - name: Verify and report published runtime and workstation
         env:
           RUNTIME_DIGEST: ${{ steps.publish.outputs.digest }}
-          WORKSTATION_DIGEST: ${{ steps.publish_workstation.outputs.digest }}
+          DESKTOP_DIGEST: ${{ steps.publish_desktop.outputs.digest }}
+          BROWSER_DIGEST: ${{ steps.publish_browser.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$RUNTIME_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$WORKSTATION_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$DESKTOP_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$BROWSER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${RUNTIME_DIGEST}" > "$RUNNER_TEMP/published-runtime-index.json"
-          docker buildx imagetools inspect --raw "docker.io/${WORKSTATION_IMAGE_NAME}@${WORKSTATION_DIGEST}" > "$RUNNER_TEMP/published-workstation-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${DESKTOP_IMAGE_NAME}@${DESKTOP_DIGEST}" > "$RUNNER_TEMP/published-desktop-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${BROWSER_IMAGE_NAME}@${BROWSER_DIGEST}" > "$RUNNER_TEMP/published-browser-index.json"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
-          for (const fileName of ['published-runtime-index.json', 'published-workstation-index.json']) {
+          for (const fileName of ['published-runtime-index.json', 'published-desktop-index.json', 'published-browser-index.json']) {
             const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/${fileName}`, 'utf8'));
             const platforms = index.manifests.map((entry) =>
               `${entry.platform?.os}/${entry.platform?.architecture}`).sort();
@@ -157,4 +187,5 @@ jobs:
           }
           NODE
           printf 'Published runtime: `docker.io/%s:%s@%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$RUNTIME_DIGEST" >> "$GITHUB_STEP_SUMMARY"
-          printf 'Published workstation: `docker.io/%s:%s@%s`\n' "$WORKSTATION_IMAGE_NAME" "$WORKSTATION_IMAGE_TAG" "$WORKSTATION_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Published desktop: `docker.io/%s:%s@%s`\n' "$DESKTOP_IMAGE_NAME" "$DESKTOP_IMAGE_TAG" "$DESKTOP_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Published browser: `docker.io/%s:%s@%s`\n' "$BROWSER_IMAGE_NAME" "$BROWSER_IMAGE_TAG" "$BROWSER_DIGEST" >> "$GITHUB_STEP_SUMMARY"

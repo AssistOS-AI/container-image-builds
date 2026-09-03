@@ -6,7 +6,9 @@
   <component name="ChangeListManager">
     <list default="true" id="b8937d7a-2767-4354-b754-ade87ea29673" name="Changes" comment="update roboteam image, missing npm">
       <change beforePath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/publish-roboteam-agent-image.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile.workstation" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/Dockerfile.workstation" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/roboteam-agent/roboteam-computer-use-mcp" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/roboteam-computer-use-mcp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/images/roboteam-agent/sources.lock.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/roboteam-agent-supply-chain.test.mjs" afterDir="false" />
     </list>
@@ -84,6 +86,7 @@
       <workItem from="1788253644028" duration="3134000" />
       <workItem from="1788261964242" duration="3814000" />
       <workItem from="1788344072321" duration="584000" />
+      <workItem from="1788416387610" duration="1697000" />
     </task>
     <task id="LOCAL-00002" summary="update roboteam image">
       <option name="closed" value="true" />

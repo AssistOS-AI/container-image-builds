@@ -3,7 +3,7 @@ set -eu
 
 session_pid=""
 attempt=0
-while [ "$attempt" -lt 100 ]; do
+while [ "$attempt" -lt 600 ]; do
     session_pid="$(pgrep -x xfce4-session 2>/dev/null | head -n 1 || true)"
     if [ -n "$session_pid" ] && [ -r "/proc/$session_pid/environ" ]; then
         break

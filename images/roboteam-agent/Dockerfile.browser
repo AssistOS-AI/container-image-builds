@@ -1,0 +1,24 @@
+FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca AS node-runtime
+
+FROM lscr.io/linuxserver/chromium@sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
+
+USER root
+
+COPY --from=node-runtime --chmod=0755 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules/npm/ /usr/local/lib/node_modules/npm/
+
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+RUN set -eux; \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
+    npm install --global --omit=dev @playwright/mcp@0.0.79; \
+    playwright-mcp --help >/dev/null
+
+COPY --chmod=0755 services/browser-mcp.run /custom-services.d/roboteam-browser-mcp/run
+COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
+
+EXPOSE 8100
+
+LABEL io.assistos.roboteam.browser="1" \
+      io.assistos.roboteam.playwright-mcp.version="0.0.79"

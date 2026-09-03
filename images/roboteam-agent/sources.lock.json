@@ -24,6 +24,22 @@
       "linux/arm64": "sha256:ee31a8828783b4c3497c638b0cd5b793a4b6a727b282358f9d64443afb9c7a03"
     }
   },
+  "browserBase": {
+    "image": "lscr.io/linuxserver/chromium@sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d",
+    "indexDigest": "sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d",
+    "platformManifests": {
+      "linux/amd64": "sha256:c1f4607cc2a6bfb74a1142ea288a3d9465071d5a6e20043126de3029875578d5",
+      "linux/arm64": "sha256:3464d4995b8450d20182222d94ab61e5363347167cc86b3a97d1ce73e5ab5243"
+    }
+  },
+  "mcpBridges": {
+    "supergateway": "3.4.3",
+    "playwrightMcp": "0.0.79",
+    "port": 8100
+  },
+  "codingAgents": {
+    "codex": "0.152.1"
+  },
   "computerUseLinux": {
     "version": "0.5.0",
     "releaseBaseUrl": "https://github.com/agent-sh/computer-use-linux/releases/download/v0.5.0",
