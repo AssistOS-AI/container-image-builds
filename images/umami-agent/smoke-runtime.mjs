@@ -7,6 +7,18 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const BASE_PATH = '/base-agent-additional-server/umamiAgent/3000';
+export const METADATA_ASSETS = {
+    'favicon.ico': { kind: 'ico', source: 'head' },
+    'apple-touch-icon.png': { kind: 'png', source: 'head' },
+    'favicon-32x32.png': { kind: 'png', source: 'head' },
+    'favicon-16x16.png': { kind: 'png', source: 'head' },
+    'site.webmanifest': { kind: 'manifest', source: 'head' },
+    'safari-pinned-tab.svg': { kind: 'svg', source: 'head' },
+    'browserconfig.xml': { kind: 'xml', source: 'head' },
+    'android-chrome-192x192.png': { kind: 'png', source: 'manifest' },
+    'android-chrome-512x512.png': { kind: 'png', source: 'manifest' },
+    'mstile-150x150.png': { kind: 'png', source: 'browserconfig' },
+};
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const sha = filename => hash(fs.readFileSync(filename));
 const readJson = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -43,7 +55,100 @@ export function verifyBuildMetadata(app, lock) {
     assert.equal(config.assetPrefix, BASE_PATH);
     assert.equal(config.env.basePath, BASE_PATH);
     assert.equal(config.output, 'standalone');
+    for (const name of Object.keys(METADATA_ASSETS)) {
+        assert.equal(sha(path.join(app, 'public', name)), metadataAssetHash(lock, name), 'runtime metadata asset bytes');
+    }
     return metadata;
+}
+
+export function metadataAssetHash(lock, name) {
+    assert.ok(Object.hasOwn(METADATA_ASSETS, name), 'unknown metadata asset');
+    const target = 'public/' + name;
+    const patch = lock.umami.sourcePatches.flatMap(value => value.targets || [value]).find(value => value.target === target);
+    const expected = patch?.patchedSha256 || lock.umami.sourceFiles[target];
+    assert.match(expected, /^[a-f0-9]{64}$/);
+    return expected;
+}
+
+function metadataResource(value, documentUrl, source) {
+    const url = new URL(value, documentUrl);
+    const origin = new URL(documentUrl).origin;
+    const entry = Object.entries(METADATA_ASSETS).find(([name, definition]) => definition.source === source
+        && url.href === origin + BASE_PATH + '/' + name);
+    assert.ok(entry, 'metadata resource escaped its exact published path');
+    return { url: url.href, name: entry[0], ...entry[1] };
+}
+
+export function metadataHeadAssets(html, origin) {
+    const found = new Map();
+    for (const [tag] of html.matchAll(/<(?:link|meta)\b[^>]*>/g)) {
+        const attributes = Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)]
+            .map(match => [match[1], match[2].replaceAll('&amp;', '&')]));
+        const isLink = tag.startsWith('<link') && /(?:^|\s)(?:icon|apple-touch-icon|mask-icon|manifest)(?:\s|$)/.test(attributes.rel || '');
+        const isConfig = tag.startsWith('<meta') && attributes.name === 'msapplication-config';
+        if (!isLink && !isConfig) continue;
+        const entry = metadataResource(isLink ? attributes.href : attributes.content, origin, 'head');
+        assert.ok(!found.has(entry.name), 'duplicate metadata declaration');
+        found.set(entry.name, entry);
+    }
+    assert.deepEqual([...found.keys()].sort(), Object.keys(METADATA_ASSETS).filter(name => METADATA_ASSETS[name].source === 'head').sort(),
+        'HTML must declare every published icon, manifest, and browser configuration');
+    return [...found.values()];
+}
+
+export function nestedMetadataAssets(body, resource) {
+    let source;
+    let values;
+    if (resource.kind === 'manifest') {
+        const manifest = JSON.parse(body.toString('utf8'));
+        assert.ok(Array.isArray(manifest.icons), 'manifest must declare icons');
+        assert.ok(manifest.icons.every(icon => icon.type === 'image/png'), 'manifest icon media types');
+        source = 'manifest'; values = manifest.icons.map(icon => icon.src);
+    } else if (resource.kind === 'xml') {
+        source = 'browserconfig';
+        values = [...body.toString('utf8').matchAll(/<square150x150logo\b[^>]*\bsrc="([^"]+)"/g)].map(match => match[1]);
+    } else return [];
+    const resources = values.map(value => metadataResource(value, resource.url, source));
+    assert.deepEqual(resources.map(value => value.name).sort(), Object.keys(METADATA_ASSETS).filter(name => METADATA_ASSETS[name].source === source).sort(),
+        'nested metadata must declare exactly the published icons or tile');
+    return resources;
+}
+
+export function verifyMetadataContentType(kind, contentType) {
+    const types = { ico: /^image\/(?:x-icon|vnd\.microsoft\.icon)$/i, png: /^image\/png$/i, svg: /^image\/svg\+xml$/i,
+        manifest: /^application\/(?:manifest\+json|json)$/i, xml: /^(?:application|text)\/xml$/i };
+    assert.ok(types[kind]?.test(contentType.split(';')[0].trim()), 'metadata asset returned the wrong media type');
+}
+
+export function verifyMetadataContent(kind, contentType, body) {
+    verifyMetadataContentType(kind, contentType);
+    assert.ok(body.length > 0, 'empty metadata asset');
+    if (kind === 'png') assert.ok(body.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')), 'invalid PNG asset');
+    if (kind === 'ico') assert.ok(body.subarray(0, 4).equals(Buffer.from('00000100', 'hex')), 'invalid icon asset');
+    if (kind === 'svg') assert.match(body.toString('utf8'), /<svg[\s>]/, 'invalid SVG asset');
+    if (kind === 'xml') assert.match(body.toString('utf8'), /<browserconfig[\s>]/, 'invalid browser configuration');
+    if (kind === 'manifest') assert.equal(typeof JSON.parse(body.toString('utf8')), 'object');
+}
+
+export async function fetchMetadataAssets(html, origin, lock) {
+    const pending = metadataHeadAssets(html, origin);
+    const observed = [];
+    for (const resource of pending) {
+        const response = await fetch(resource.url, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+        assert.equal(response.status, 200, 'published metadata asset must load');
+        const body = Buffer.from(await response.arrayBuffer());
+        const contentType = response.headers.get('content-type') || '';
+        verifyMetadataContent(resource.kind, contentType, body);
+        assert.equal(hash(body), metadataAssetHash(lock, resource.name), 'HTTP metadata bytes must match the pinned source or recorded patch');
+        pending.push(...nestedMetadataAssets(body, resource));
+        const unprefixed = await fetch(origin + '/' + resource.name, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+        assert.equal(unprefixed.status, 404, 'metadata assets must be unavailable outside the compiled prefix');
+        await unprefixed.arrayBuffer();
+        observed.push({ path: new URL(resource.url).pathname, kind: resource.kind, source: resource.source,
+            status: 200, contentType, bytes: body.length, sha256: hash(body), unprefixedHttp: 404 });
+    }
+    assert.equal(observed.length, Object.keys(METADATA_ASSETS).length);
+    return observed;
 }
 
 export function pageAssets(html, origin) {
@@ -154,6 +259,7 @@ async function main() {
             assert.ok(body.length > 0, 'empty Next asset');
             observed.push({ path: new URL(url).pathname, kind, bytes: body.length, sha256: hash(body) });
         }
+        const metadataAssets = await fetchMetadataAssets(html, origin, lock);
         const heartbeat = await fetch(origin + BASE_PATH + '/api/heartbeat', { signal: AbortSignal.timeout(10000) });
         assert.equal(heartbeat.status, 200);
         assert.deepEqual(await heartbeat.json(), { ok: true });
@@ -181,7 +287,7 @@ async function main() {
         assert.equal(closed, false, 'Next stopped during asset verification');
         console.log(JSON.stringify({ schema: 'ploinky.umami-image-smoke/v1', passed: true, uid: process.getuid(),
             capabilityEffective: '0', noNewPrivileges: true, listener: '127.0.0.1:3001',
-            metadata, loginHttp: 200, databaseMigration: true, heartbeatHttp: 200, authLoginHttp: 200, authVerifyHttp: 200, trackerHttp: 200, unprefixedNextHttp: 404, assets: observed }));
+            metadata, loginHttp: 200, databaseMigration: true, heartbeatHttp: 200, authLoginHttp: 200, authVerifyHttp: 200, trackerHttp: 200, unprefixedNextHttp: 404, assets: observed, metadataAssets }));
     } catch (error) {
         error.serverOutput = safeDiagnostic(output);
         throw error;

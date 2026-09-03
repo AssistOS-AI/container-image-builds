@@ -10,7 +10,7 @@ ENV NODE_ENV=development \
 
 COPY sources.lock.json /tmp/umami-sources.lock.json
 COPY verify-build.mjs /tmp/verify-umami-build.mjs
-COPY patch-login-query-cache.mjs verify-login-query-cache.mjs /tmp/
+COPY patch-login-query-cache.mjs patch-metadata-assets.mjs verify-login-query-cache.mjs /tmp/
 
 RUN set -eux; \
     test "$(node --version)" = 'v22.23.1'; \
@@ -28,7 +28,7 @@ RUN set -eux; \
     tar -xzf /tmp/pnpm.tgz --strip-components=1 -C /opt/umami-build-tools/pnpm; \
     test "$(node /opt/umami-build-tools/pnpm/bin/pnpm.cjs --version)" = '10.15.1'; \
     node /tmp/verify-umami-build.mjs source /build /tmp/umami-sources.lock.json; \
-    node /tmp/patch-login-query-cache.mjs /build /tmp/umami-sources.lock.json; \
+    node /tmp/patch-metadata-assets.mjs /build /tmp/umami-sources.lock.json; \
     test -s /app/geo/GeoLite2-City.mmdb; \
     mkdir -p /build/geo; \
     cp -a /app/geo/. /build/geo/; \

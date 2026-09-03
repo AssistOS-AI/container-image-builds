@@ -4,9 +4,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { BASE_PATH, pageAssets, verifyBuildMetadata, verifyLoopbackListener } from '../images/umami-agent/smoke-runtime.mjs';
+import { BASE_PATH, METADATA_ASSETS, metadataAssetHash, metadataHeadAssets, nestedMetadataAssets, fetchMetadataAssets, pageAssets, verifyBuildMetadata, verifyLoopbackListener } from '../images/umami-agent/smoke-runtime.mjs';
+import { rewriteMetadataSource, targets as metadataTargets } from '../images/umami-agent/patch-metadata-assets.mjs';
 import { nativeIndex, verifyNativeProof, verifyCandidate } from '../images/umami-agent/verify-publication.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -17,10 +19,11 @@ const sources = JSON.parse(read('images/umami-agent/sources.lock.json'));
 const originalLoginForm = read('tests/fixtures/umami-login/LoginForm.tsx');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const digest = character => 'sha256:' + character.repeat(64);
+const metadataTypes = { ico: 'image/x-icon', png: 'image/png', svg: 'image/svg+xml', manifest: 'application/manifest+json', xml: 'application/xml' };
 const write = (directory, name, value) => {
     const target = path.join(directory, name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, typeof value === 'string' ? value : JSON.stringify(value));
+    fs.writeFileSync(target, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value));
 };
 const json = (directory, name) => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
 function temp(t) {
@@ -120,13 +123,16 @@ function application(t) {
         'src/app/login/LoginForm.tsx': originalLoginForm,
         'public/script.js': 'tracker', 'geo/GeoLite2-City.mmdb': 'retained-geo',
         '.next/required-server-files.json': JSON.stringify({ config: { basePath: BASE_PATH, assetPrefix: BASE_PATH, env: { basePath: BASE_PATH }, output: 'standalone' } }) };
+    for (const name of ['src/app/layout.tsx', ...Object.keys(METADATA_ASSETS).map(name => 'public/' + name)]) {
+        files[name] = fs.readFileSync(path.join(root, 'tests/fixtures/umami-metadata', name));
+    }
     for (const [name, value] of Object.entries(files)) write(directory, name, value);
     lock.umami.sourceFiles = Object.fromEntries(Object.entries(files).map(([name, value]) => [name, hash(value)]));
     lock.umami.geo.path = path.join(directory, 'original-geo');
     write(directory, 'original-geo', 'retained-geo');
     write(directory, 'lock.json', lock);
     const run = mode => spawnSync(process.execPath, mode === 'patch'
-        ? [path.join(root, 'images/umami-agent/patch-login-query-cache.mjs'), directory, path.join(directory, 'lock.json')]
+        ? [path.join(root, 'images/umami-agent/patch-metadata-assets.mjs'), directory, path.join(directory, 'lock.json')]
         : [path.join(root, 'images/umami-agent/verify-build.mjs'), mode, directory, path.join(directory, 'lock.json'), directory], { encoding: 'utf8' });
     return { directory, lock, run };
 }
@@ -142,7 +148,7 @@ test('source and artifact seals bind actual bytes and never overwrite a prior se
     assert.throws(() => verifyBuildMetadata(directory, lock));
     assert.notEqual(run('source').status, 0);
 });
-for (const field of ['geo', 'basePath', 'lock', 'tracker', 'patch receipt']) test(`artifact verification rejects ${field} drift`, t => {
+for (const field of ['geo', 'basePath', 'lock', 'tracker', 'patch receipt', 'manifest', 'icon']) test(`artifact verification rejects ${field} drift`, t => {
     const { directory, lock, run } = application(t);
     assert.equal(run('patch').status, 0);
     assert.equal(run('seal').status, 0);
@@ -150,6 +156,8 @@ for (const field of ['geo', 'basePath', 'lock', 'tracker', 'patch receipt']) tes
     if (field === 'tracker') write(directory, 'public/script.js', 'changed');
     if (field === 'lock') write(directory, 'pnpm-lock.yaml', 'changed');
     if (field === 'basePath') write(directory, '.next/required-server-files.json', { config: { basePath: '' } });
+    if (field === 'manifest') write(directory, 'public/site.webmanifest', '{}');
+    if (field === 'icon') write(directory, 'public/favicon.ico', 'changed');
     if (field === 'patch receipt') {
         fs.unlinkSync(path.join(directory, 'ploinky-umami-source-patches.json'));
         write(directory, 'ploinky-umami-source-patches.json', { sourcePatches: [] });
@@ -250,6 +258,8 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
             sourcePatches: sources.umami.sourcePatches, sourcePatchReceiptSha256: 'f'.repeat(64),
             sourceArchiveSha256: sources.umami.sourceArchive.sha256, pnpmLockSha256: sources.umami.sourceFiles['pnpm-lock.yaml'], runtimeBaseImage: sources.runtimeBase.image },
         assets: ['script', 'css'].map(kind => ({ kind, path: BASE_PATH + '/_next/' + kind, bytes: 100, sha256: 'f'.repeat(64) })) };
+    smoke.metadataAssets = Object.entries(METADATA_ASSETS).map(([name, definition]) => ({ ...definition, path: BASE_PATH + '/' + name,
+        status: 200, unprefixedHttp: 404, bytes: 100, sha256: metadataAssetHash(sources, name), contentType: metadataTypes[definition.kind] }));
     write(directory, 'runtime-smoke.json', smoke);
     verifyNativeProof(directory, 'amd64', identity);
     for (const change of [{ workflowRunId: '11' }, { workflowSha: '2'.repeat(40) }, { sourceLockSha256: 'f'.repeat(64) }]) {
@@ -258,6 +268,13 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
     }
     write(directory, 'source-evidence.json', source);
     for (const change of [{ authLoginHttp: 500 }, { passed: false }, { uid: 0 }, { assets: [] },
+        { metadataAssets: [] }, { metadataAssets: smoke.metadataAssets.slice(1) },
+        { metadataAssets: [...smoke.metadataAssets, smoke.metadataAssets[0]] },
+        { metadataAssets: smoke.metadataAssets.map((asset, i) => i ? asset : { ...asset, path: '/favicon.ico' }) },
+        { metadataAssets: smoke.metadataAssets.map((asset, i) => i ? asset : { ...asset, sha256: '0'.repeat(64) }) },
+        { metadataAssets: smoke.metadataAssets.map((asset, i) => i ? asset : { ...asset, contentType: 'text/html' }) },
+        { metadataAssets: smoke.metadataAssets.map((asset, i) => i ? asset : { ...asset, contentType: 'application/octet-stream' }) },
+        { metadataAssets: smoke.metadataAssets.map((asset, i) => i ? asset : { ...asset, unprefixedHttp: 200 }) },
         { metadata: { ...smoke.metadata, sourcePatches: [] } },
         { metadata: { ...smoke.metadata, sourcePatchReceiptSha256: undefined } }]) {
         write(directory, 'runtime-smoke.json', { ...smoke, ...change });
@@ -266,4 +283,90 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
     write(directory, 'runtime-smoke.json', smoke);
     inspect[0].Id = digest('f'); write(directory, 'image-inspect.json', inspect);
     assert.throws(() => verifyNativeProof(directory, 'amd64', identity));
+});
+
+test('metadata source correction preserves login patch identity and binds every exact original and patched file', t => {
+    const { directory, lock, run } = application(t);
+    assert.equal(hash(read('images/umami-agent/patch-login-query-cache.mjs')), '0eeb9ce76331aeb425a35989c872fbd265a74d43875ba70290323b8c2b274a7b');
+    const patch = lock.umami.sourcePatches[1];
+    assert.equal(patch.sha256, hash(read('images/umami-agent/patch-metadata-assets.mjs')));
+    assert.deepEqual(patch.targets.map(value => value.target), metadataTargets);
+    for (const item of patch.targets) {
+        const original = fs.readFileSync(path.join(directory, item.target), 'utf8');
+        assert.equal(hash(original), item.originalSha256);
+        assert.equal(hash(rewriteMetadataSource(item.target, original)), item.patchedSha256);
+    }
+    assert.equal(run('source').status, 0);
+    assert.equal(run('patch').status, 0);
+    assert.deepEqual(json(directory, 'ploinky-umami-source-patches.json').sourcePatches, sources.umami.sourcePatches);
+    assert.equal(run('seal').status, 0);
+    verifyBuildMetadata(directory, lock);
+});
+
+test('metadata patch rejects substituted patch identity and target output before touching the login source', t => {
+    const { directory, lock, run } = application(t);
+    for (const modify of [patch => { patch.sha256 = 'f'.repeat(64); }, patch => { patch.targets[1].patchedSha256 = 'f'.repeat(64); }]) {
+        const changed = structuredClone(lock);
+        modify(changed.umami.sourcePatches[1]);
+        write(directory, 'lock.json', changed);
+        assert.notEqual(run('patch').status, 0);
+        assert.equal(fs.readFileSync(path.join(directory, 'src/app/login/LoginForm.tsx'), 'utf8'), originalLoginForm);
+        assert.ok(!fs.existsSync(path.join(directory, 'ploinky-umami-source-patches.json')));
+    }
+});
+
+for (const target of metadataTargets) test(`metadata patch refuses changed ${target} before applying any source patch`, t => {
+    const { directory, run } = application(t);
+    fs.appendFileSync(path.join(directory, target), '\n');
+    assert.notEqual(run('patch').status, 0);
+    assert.equal(fs.readFileSync(path.join(directory, 'src/app/login/LoginForm.tsx'), 'utf8'), originalLoginForm);
+    assert.ok(!fs.existsSync(path.join(directory, 'ploinky-umami-source-patches.json')));
+});
+
+const metadataHtml = prefix => Object.entries(METADATA_ASSETS).filter(([, value]) => value.source === 'head').map(([name]) => name === 'browserconfig.xml'
+    ? `<meta name="msapplication-config" content="${prefix}/${name}">`
+    : `<link rel="${name === 'site.webmanifest' ? 'manifest' : 'icon'}" href="${prefix}/${name}">`).join('');
+
+test('metadata declarations reject root, foreign, sibling-prefix and missing assets including nested icon paths', t => {
+    const { directory, run } = application(t);
+    assert.equal(run('patch').status, 0);
+    const origin = 'http://127.0.0.1:3001';
+    for (const prefix of ['', 'https://foreign.test' + BASE_PATH, BASE_PATH + '0']) assert.throws(() => metadataHeadAssets(metadataHtml(prefix), origin));
+    assert.throws(() => metadataHeadAssets(metadataHtml(BASE_PATH).replace(/<meta[^>]+>/, ''), origin));
+    const assets = metadataHeadAssets(metadataHtml(BASE_PATH), origin);
+    assert.equal(assets.length, 7);
+    for (const kind of ['manifest', 'xml']) {
+        const resource = assets.find(value => value.kind === kind);
+        const body = fs.readFileSync(path.join(directory, 'public', resource.name));
+        assert.equal(nestedMetadataAssets(body, resource).length, kind === 'manifest' ? 2 : 1);
+        for (const replacement of ['', 'https://foreign.test' + BASE_PATH, BASE_PATH + '0']) {
+            assert.throws(() => nestedMetadataAssets(Buffer.from(body.toString().replaceAll(BASE_PATH, replacement)), resource));
+        }
+    }
+});
+
+test('native metadata probe fetches real head, manifest icons and XML tile bytes and rejects HTTP fallback', async t => {
+    const { directory, lock, run } = application(t);
+    assert.equal(run('patch').status, 0);
+    const seen = [];
+    let failure;
+    const server = http.createServer((req, res) => {
+        seen.push(req.url);
+        const name = req.url.startsWith(BASE_PATH + '/') ? req.url.slice(BASE_PATH.length + 1) : null;
+        const definition = METADATA_ASSETS[name];
+        if (!definition) { res.writeHead(failure === 'unprefixed' ? 200 : 404); res.end(); return; }
+        if (failure === 'html') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html>fallback</html>'); return; }
+        res.writeHead(200, { 'content-type': metadataTypes[definition.kind] });
+        res.end(failure === 'bytes' ? Buffer.from('substituted') : fs.readFileSync(path.join(directory, 'public', name)));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    const observed = await fetchMetadataAssets(metadataHtml(BASE_PATH), origin, lock);
+    assert.equal(observed.length, 10);
+    assert.deepEqual(new Set(seen), new Set(Object.keys(METADATA_ASSETS).flatMap(name => [BASE_PATH + '/' + name, '/' + name])));
+    for (const mode of ['html', 'bytes', 'unprefixed']) {
+        failure = mode;
+        await assert.rejects(fetchMetadataAssets(metadataHtml(BASE_PATH), origin, lock));
+    }
 });

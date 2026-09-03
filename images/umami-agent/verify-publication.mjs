@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BASE_PATH } from './smoke-runtime.mjs';
+import { BASE_PATH, METADATA_ASSETS, metadataAssetHash, verifyMetadataContentType } from './smoke-runtime.mjs';
 
 const read = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -93,6 +93,20 @@ export function verifyNativeProof(directory, architecture, identity, sources = l
         kinds.add(asset.kind);
     }
     assert.ok(kinds.has('script') && kinds.has('css'));
+    assert.ok(Array.isArray(smoke.metadataAssets), 'native proof must include metadata resources');
+    assert.deepEqual(smoke.metadataAssets.map(asset => asset.path).sort(), Object.keys(METADATA_ASSETS).map(name => BASE_PATH + '/' + name).sort(),
+        'native proof must cover all head and nested metadata resources exactly once');
+    for (const asset of smoke.metadataAssets) {
+        const name = asset.path.slice(BASE_PATH.length + 1);
+        assert.equal(asset.kind, METADATA_ASSETS[name].kind);
+        assert.equal(asset.source, METADATA_ASSETS[name].source);
+        assert.equal(asset.status, 200);
+        assert.equal(asset.unprefixedHttp, 404);
+        assert.ok(asset.bytes > 0);
+        assert.equal(asset.sha256, metadataAssetHash(sources, name));
+        assert.equal(typeof asset.contentType, 'string');
+        verifyMetadataContentType(asset.kind, asset.contentType);
+    }
     return { architecture, buildDigest, nativeDigest, index };
 }
 

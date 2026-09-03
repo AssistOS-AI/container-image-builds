@@ -24,9 +24,16 @@ if (mode === 'source') {
         upstreamSourceArchiveSha256: lock.umami.sourceArchive.sha256,
         sourcePatches: lock.umami.sourcePatches,
     });
-    assert.equal(lock.umami.sourcePatches.length, 1);
+    assert.deepEqual(lock.umami.sourcePatches.map(patch => patch.id), ['login-query-cache', 'metadata-assets']);
     for (const patch of lock.umami.sourcePatches) {
-        assert.equal(sha(path.join(sourceDirectory, patch.target)), patch.patchedSha256, 'actual source compiled with the reviewed patch');
+        for (const target of patch.targets || [patch]) {
+            assert.equal(sha(path.join(sourceDirectory, target.target)), target.patchedSha256, 'actual source compiled with the reviewed patch');
+            if (target.target.startsWith('public/')) assert.equal(sha(path.join(directory, target.target)), target.patchedSha256, 'runtime metadata must preserve the patched public file');
+        }
+    }
+    for (const [name, originalSha256] of Object.entries(lock.umami.sourceFiles).filter(([name]) => name.startsWith('public/'))) {
+        const patch = lock.umami.sourcePatches.flatMap(value => value.targets || [value]).find(value => value.target === name);
+        assert.equal(sha(path.join(directory, name)), patch?.patchedSha256 || originalSha256, 'sealed metadata asset bytes');
     }
     const required = path.join(directory, '.next/required-server-files.json');
     const config = JSON.parse(fs.readFileSync(required)).config;

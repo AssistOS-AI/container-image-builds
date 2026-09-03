@@ -40,7 +40,18 @@
       "pnpm-workspace.yaml": "94c1f0c28b5dc7f96d9262931305c2f5497ffd292473c2bac800bd366cefc3b1",
       "scripts/build-geo.js": "e766d35223249983d4f247ce33d1f6ed4309145eb49219ae2215747d895f8e67",
       "scripts/build-prisma-client.js": "e1255e9108ab104ef766809ca35f35d9ef0403b175cc7ea97faae9d008e8a6c2",
-      "src/app/login/LoginForm.tsx": "71a0069a1f099365e6ec6e37fc58f81c759d85918742e8eb9635e8fd6a79794d"
+      "src/app/login/LoginForm.tsx": "71a0069a1f099365e6ec6e37fc58f81c759d85918742e8eb9635e8fd6a79794d",
+      "src/app/layout.tsx": "208c2e427b69d3ec60d590a98c218d2461ae0f6f8122125fb0a292eb2c11f9ff",
+      "public/site.webmanifest": "e302b643ac7a6e1f1f8ab02b6c5605654b057af967920b7ff686cea8a144663d",
+      "public/browserconfig.xml": "c348b0d6df3d900efef7ae4b4dfc8b62b1737b04d09d4584fef243211c266866",
+      "public/favicon.ico": "42db99711f76494af5ea6d9ad0655e3babbd58cfe84eedf9e6e55576a2eda571",
+      "public/apple-touch-icon.png": "d1e226b7989d100cf404cc7c2dcc63017b79e1e8848cee6c9aa8c5a27ceba097",
+      "public/favicon-32x32.png": "65e5c8002254ba4bbc9206ae3346fc5643a2059f5c29257ecc895c2f13519e23",
+      "public/favicon-16x16.png": "40fdfe178aea1849dc1b1b3cc8c8ad177c2f28b05b8f444b35fd13fe8846092e",
+      "public/safari-pinned-tab.svg": "1b82a7321c07d2b2a7beb6b689fbe2aa7f4fc482eeb64a67253a000103af3880",
+      "public/android-chrome-192x192.png": "994680e10dec4bde65aee757742ff7d95942edc2db2b7f61e8646bb4ff9a6eb8",
+      "public/android-chrome-512x512.png": "64bb4fa928178e26b6a9b37d58a112382995a430bf924a252d2c4be5105df32d",
+      "public/mstile-150x150.png": "dcbcd2991f3f6d766a0ef21bfc4981086768de544225a9facfcb637c6adb550d"
     },
     "pnpm": {
       "integrity": "sha512-NOU4wym1VTAUyo6PRTWZf5YYCh0PYUM5NXRJk1NQ2STiL4YUaCGRJk7DPRRirCFWGv+X9rsYBlNRwWLH6PbeZw==",
@@ -60,6 +71,28 @@
         "target": "src/app/login/LoginForm.tsx",
         "originalSha256": "71a0069a1f099365e6ec6e37fc58f81c759d85918742e8eb9635e8fd6a79794d",
         "patchedSha256": "438d1c0ab564a559c56b951b2b4dbd2f34b9b299a3a7f7f2908e0ac3831508bf"
+      },
+      {
+        "id": "metadata-assets",
+        "file": "patch-metadata-assets.mjs",
+        "sha256": "bce41c071a36ef1daf0e6162a19b7792ae0a4b674a0d6a6fcb7d7472a13b8e39",
+        "targets": [
+          {
+            "target": "src/app/layout.tsx",
+            "originalSha256": "208c2e427b69d3ec60d590a98c218d2461ae0f6f8122125fb0a292eb2c11f9ff",
+            "patchedSha256": "7ecc3cbbae88c54f6bfa0aafd0f76a6f644931c8abb21e9e6da6348581c8554d"
+          },
+          {
+            "target": "public/site.webmanifest",
+            "originalSha256": "e302b643ac7a6e1f1f8ab02b6c5605654b057af967920b7ff686cea8a144663d",
+            "patchedSha256": "364c2c84ab2c14ebd229b7b91d5516d466ef7c5613bbfb282cf7dd5e343de9d4"
+          },
+          {
+            "target": "public/browserconfig.xml",
+            "originalSha256": "c348b0d6df3d900efef7ae4b4dfc8b62b1737b04d09d4584fef243211c266866",
+            "patchedSha256": "71bffd1642fdc57884b3ecf09062d016784a8d8ac91b775433b1cb7086baf9b7"
+          }
+        ]
       }
     ]
   },
