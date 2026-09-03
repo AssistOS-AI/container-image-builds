@@ -39,16 +39,32 @@ function dockerfileInstructions(dockerfile) {
     return instructions;
 }
 
-test('ploinky-node workflow builds the local image definition', () => {
+test('ploinky-node publishes proven native Trixie candidates before explicit promotion', () => {
     const workflow = read('.github/workflows/publish-ploinky-node-image.yml');
     const dockerfile = read('images/ploinky-node/Dockerfile');
 
     assert.match(workflow, /images\/ploinky-node/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /docker\/build-push-action@v6/);
+    assert.match(workflow, /docker\/login-action@[0-9a-f]{40}/);
+    assert.match(workflow, /docker\/build-push-action@[0-9a-f]{40}/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
-    assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim$/m);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04(?:\s|$)/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /platform:\s*linux\/amd64/);
+    assert.match(workflow, /platform:\s*linux\/arm64/);
+    assert.match(workflow, /push-by-digest=true/);
+    assert.match(workflow, /smoke-git-transport\.mjs/);
+    assert.match(workflow, /transport\.ok, true/);
+    assert.match(workflow, /assert\.equal\(index\.manifests\.length, 2\)/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /IMAGE_TAG: 24-trixie-tools/);
+    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.doesNotMatch(workflow, /24-bookworm-tools|setup-qemu-action|node_base:|image_tag:|^\s*push:/m);
+    const base = 'docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base}`);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/);
+    }
     assert.match(dockerfile, /\bbubblewrap\b/);
     assert.match(dockerfile, /\bffmpeg\b/);
     assert.match(dockerfile, /\bpython3\b/);
@@ -168,20 +184,34 @@ test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivile
     const workflow = read('.github/workflows/publish-search-agent-image.yml');
     const dockerfile = read('images/search-agent/Dockerfile');
     const packageJson = JSON.parse(read('images/search-agent/package.json'));
+    const runtime = read('images/search-agent/smoke-runtime.mjs');
 
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/search-agent/);
-    assert.match(workflow, /default:\s*searxng-browser/);
+    assert.doesNotMatch(workflow, /image_tag:|promote_stable:|IMAGE_TAG:|searxng-browser|setup-qemu/);
     assert.match(workflow, /runner:\s*ubuntu-24\.04/);
     assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
     assert.match(workflow, /push-by-digest=true/);
     assert.match(workflow, /--cap-drop=ALL --security-opt=no-new-privileges/);
     assert.match(workflow, /docker buildx imagetools create/);
-    assert.match(workflow, /grep -q 'linux\/amd64'/);
-    assert.match(workflow, /grep -q 'linux\/arm64'/);
+    assert.match(workflow, /assert\.equal\(index\.manifests\.length, 2\)/);
+    assert.match(workflow, /members\.get\('linux\/amd64'\), process\.env\.AMD64_DIGEST/);
+    assert.match(workflow, /members\.get\('linux\/arm64'\), process\.env\.ARM64_DIGEST/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /cmp "\$evidence\/candidate-index\.json" "\$evidence\/registry-index\.json"/);
+    assert.match(workflow, /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
+    assert.match(workflow, /smoke-git-transport\.mjs/);
+    assert.match(workflow, /assert\.equal\(transport\.probes\.length, 14\)/);
+    assert.match(workflow, /assert\.equal\(source\.workflowAttempt, process\.env\.GITHUB_RUN_ATTEMPT\)/);
+    assert.match(workflow, /assert\.deepEqual\(runtime\.browser\.errors, \[\]\)/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/);
+    }
 
-    assert.match(dockerfile, /^FROM docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64} AS searxng-builder$/m);
+    const base = 'docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base} AS searxng-builder`);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
     assert.equal(
-        dockerfile.match(/^FROM docker\.io\/assistos\/ploinky-node:24-bookworm-tools@sha256:[0-9a-f]{64}(?: AS searxng-builder)?$/gm)?.length,
+        dockerfile.match(/^FROM docker\.io\/assistos\/ploinky-node:24-trixie-tools@sha256:[0-9a-f]{64}(?: AS searxng-builder)?$/gm)?.length,
         2,
     );
     assert.match(dockerfile, /9fea41204fdfa7a5cfa15b0ebd12904c520478ce/);
@@ -195,37 +225,39 @@ test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivile
     assert.match(dockerfile, /^USER root$/m);
     assert.match(dockerfile, /^USER 1000:1000$/m);
     assert.equal(packageJson.dependencies['puppeteer-core'], '25.9.0');
+    assert.match(runtime, /spawn\(python, \['-m', 'searx\.webapp'\]/);
+    assert.match(runtime, /127\.0\.0\.1:8888\/healthz/);
+    assert.match(runtime, /127\.0\.0\.1:8888\/search\?format=json/);
+    assert.match(runtime, /puppeteer\.launch\(/);
+    assert.match(runtime, /page\.\$eval\('#proof'/);
+    assert.doesNotMatch(runtime, /https:\/\//);
 });
 
-test('umami-agent workflow builds the all-in-one Umami stack', () => {
+test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
+    const sources = JSON.parse(read('images/umami-agent/sources.lock.json'));
 
     assert.match(workflow, /images\/umami-agent/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/umami-agent/);
-    assert.match(workflow, /DEFAULT_IMAGE_TAG:\s*umami-stack/);
-    assert.match(workflow, /docker\/login-action@[0-9a-f]{40}/);
-    assert.match(workflow, /docker\/build-push-action@[0-9a-f]{40}/);
-    assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /platforms:\s*linux\/amd64,linux\/arm64/);
+    assert.match(workflow, /IMAGE_TAG:\s*umami-stack/);
+    assert.match(workflow, /platforms:\s*\$\{\{ matrix\.platform \}\}/);
+    assert.match(workflow, /runner: ubuntu-24\.04-arm/);
     assert.match(workflow, /postgres --version/);
     assert.match(workflow, /bun --version/);
     assert.match(workflow, /\/opt\/umami-mcp\/dist\/index\.js/);
-
-    assert.match(dockerfile, /^FROM docker\.umami\.is\/umami-software\/umami:3\.2\.0@sha256:[0-9a-f]{64}$/m);
-    assert.doesNotMatch(dockerfile, /^ARG (?:UMAMI_BASE_IMAGE|BUN_VERSION|UMAMI_MCP_(?:REF|COMMIT))=/m);
-    assert.match(dockerfile, /\bpostgresql18=18\.4-r0\b/);
-    assert.match(dockerfile, /\bpostgresql18-client=18\.4-r0\b/);
-    assert.match(dockerfile, /\bpostgresql18-contrib=18\.4-r0\b/);
-    assert.match(dockerfile, /\bsu-exec\b/);
-    assert.match(dockerfile, /BUN_INSTALL=\/opt\/bun/);
-    assert.match(dockerfile, /github\.com\/MadsNyl\/umami-mcp\.git/);
-    assert.match(dockerfile, /git -C "\$\{UMAMI_MCP_DIR\}" checkout --detach FETCH_HEAD/);
-    assert.match(dockerfile, /git -C "\$\{UMAMI_MCP_DIR\}" rev-parse HEAD/);
-    assert.match(dockerfile, /sha256sum -c -/);
-    assert.match(dockerfile, /bun install --frozen-lockfile/);
-    assert.match(dockerfile, /bun run build/);
-    assert.doesNotMatch(dockerfile, /(?:postgresql-latest|curl[^\n]*\|\s*(?:ba)?sh|git clone --depth|refs\/heads\/|checkout (?:origin\/)?(?:main|master)\b)/);
+    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.doesNotMatch(workflow, /^  push:/m);
+    assert.deepEqual(dockerfile.match(/^FROM .+$/gm), [
+        `FROM ${sources.runtimeBase.image} AS umami-build`, `FROM ${sources.runtimeBase.image}`,
+    ]);
+    assert.match(dockerfile, /BASE_PATH=\/base-agent-additional-server\/umamiAgent\/3000/);
+    assert.match(dockerfile, /install --frozen-lockfile --prod=false/);
+    assert.match(dockerfile, /npm run build-docker/);
+    assert.match(dockerfile, /RUN rm -rf \/app && mkdir \/app/);
+    assert.doesNotMatch(dockerfile, /^ARG |apk add|npm install -g|git clone|sed -i/m);
+    assert.equal(sources.postgresql.version, '18.4');
+    assert.equal(sources.bun.version, '1.3.14');
 });
 
 test('bwrap-runner workflow publishes only digest-proven native candidates before optional promotion', () => {
@@ -294,19 +326,42 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
         assert.match(use[1], /^[0-9a-f]{40}$/, `workflow action is not SHA-pinned: ${use[0]}`);
     }
 
-    const baseDigest = '4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d';
-    assert.match(dockerfile, new RegExp(`^FROM node:24\\.15\\.0-bookworm-slim@sha256:${baseDigest}$`, 'm'));
-    assert.match(workflow, new RegExp(`BASE_IMAGE: docker\\.io/library/node:24\\.15\\.0-bookworm-slim@sha256:${baseDigest}`));
+    const base = 'docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base} AS node-runtime`);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
+    const pythonBase = 'docker.io/library/python:3.12.14-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea';
+    assert.ok(dockerfile.includes(`FROM ${pythonBase}`));
+    assert.ok(workflow.includes(`PYTHON_BASE_IMAGE: ${pythonBase}`));
+    assert.match(workflow, /pythonBaseImage: process\.env\.PYTHON_BASE_IMAGE/);
+    assert.match(dockerfile, /test ! -e \/usr\/bin\/python3/);
+    assert.match(dockerfile, /ln -s \/usr\/local\/bin\/python3 \/usr\/bin\/python3/);
+    assert.doesNotMatch(dockerfile, /^\s*python3(?:-dev|-pip|-setuptools|-venv|-wheel)?\s*\\$/m);
+    assert.match(workflow, /IMAGE_TAG: node24-python-trixie/);
+    assert.match(workflow, /smoke-git-transport\.mjs/);
+    assert.doesNotMatch(workflow, /node24-python-bookworm/);
     assert.match(dockerfile, /\blibcap2-bin\b/);
+    assert.match(dockerfile, /^USER 1000:1000$/m);
+    assert.match(workflow, /test "\$config_user" = 1000:1000/);
+    assert.match(workflow, /--userns=keep-id:uid=1000,gid=1000/);
+    assert.match(workflow, /--user=0:0 --network=none --read-only/);
+    assert.match(workflow, /find \/home\/runner -xdev -type f -exec getcap/);
+    assert.match(workflow, /find \/ -xdev -path \/home\/runner -prune -o -type f -exec getcap/);
+    assert.doesNotMatch(gptStep, /gpt_opt|:\/opt/);
+    for (const invocation of workflow.matchAll(/podman run ([^\n]+)/g)) {
+        assert.ok(invocation[1].includes('--userns=keep-id:uid=1000,gid=1000')
+            || invocation[1].includes('--user=0:0 --network=none --read-only'));
+    }
     assert.match(dockerfile, /COPY\s+bin\/\s+\/opt\/bwrap-runner\/bin\//);
     assert.match(dockerfile, /COPY\s+lib\/\s+\/opt\/bwrap-runner\/lib\//);
     assert.match(dockerfile, /\/usr\/local\/bin\/bwrap-sandbox-exec/);
 
     assert.match(gptSmoke, /install-gpt-researcher\.sh/);
-    assert.match(gptSmoke, /gpt-researcher-import-ok/);
+    assert.match(gptSmoke, /import gpt_researcher/);
+    assert.match(gptSmoke, /"sameCheckoutInstall": True/);
+    assert.match(gptSmoke, /"sourceModulesVerified": len\(modules\)/);
     assert.match(gptSmoke, /readiness\.sh/);
     assert.match(gptSmoke, /gpt-researcher-task-adapter-ok/);
-    assert.match(gptSmoke, /start-research\.py <\/dev\/null/);
+    assert.match(gptSmoke, /sh \/consumer\/scripts\/run-research\.sh <\/dev\/null/);
     assert.match(gptSmoke, /"coldInstall":true/);
     assert.match(gptSmoke, /"network":"none","readiness":true,"minimalTask":true/);
 });
@@ -578,94 +633,58 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.equal(instructions.filter(({ keyword }) => keyword === 'CMD').length, 0);
 });
 
-test('ploinky-box workflow publishes two native immutable digests without behavioral gates', () => {
+test('ploinky-box publishes proven native candidates before explicit promotion', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
     const buildJob = workflow.match(/\n  build:[\s\S]*?(?=\n  merge:)/)?.[0] || '';
-    const mergeJob = workflow.match(/\n  merge:[\s\S]*$/)?.[0] || '';
-    const ploinkyCheckout = buildJob.match(
-        /- name: Checkout immutable Ploinky source[\s\S]*?(?=\n      - name:)/,
-    )?.[0] || '';
-
-    assert.ok(buildJob);
-    assert.ok(mergeJob);
-    assert.match(ploinkyCheckout, /fetch-depth:\s*0/);
-    assert.match(buildJob, /Resolve immutable MCP SDK input from the Ploinky lock/);
-    assert.match(buildJob, /repository:\s*\$\{\{ steps\.mcp_sdk\.outputs\.repository \}\}/);
-    assert.match(buildJob, /ref:\s*\$\{\{ steps\.mcp_sdk\.outputs\.commit \}\}/);
-    assert.match(buildJob, /path:\s*sources\/mcp-sdk/);
-    assert.match(buildJob, /persist-credentials:\s*false/);
-    assert.match(buildJob, /git -C sources\/mcp-sdk rev-parse HEAD/);
-    assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
-    assert.match(workflow, /IMAGE_TAG:\s*latest/);
-    assert.match(workflow, /COMPATIBILITY_IMAGE_TAG:\s*runtime/);
+    const mergeJob = workflow.match(/\n  merge:[\s\S]*?(?=\n  promote:)/)?.[0] || '';
+    const promoteJob = workflow.match(/\n  promote:[\s\S]*$/)?.[0] || '';
+    assert.match(workflow, /source_ref:[\s\S]*?required: true/);
+    assert.match(workflow, /promote_stable:[\s\S]*?type: boolean[\s\S]*?default: false/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
-    assert.doesNotMatch(
-        workflow,
-        /explorer_ref|webmeet_infra_ref|umami_ref|achilles_cli_ref|proxies_ref|basic_ref/,
-    );
-    assert.match(buildJob, /runner:\s*ubuntu-24\.04(?:\s|$)/);
-    assert.match(buildJob, /runner:\s*ubuntu-24\.04-arm/);
-    assert.match(buildJob, /platform:\s*linux\/amd64/);
-    assert.match(buildJob, /platform:\s*linux\/arm64/);
-    assert.doesNotMatch(buildJob, /setup-qemu-action|--privileged|seccomp=unconfined/);
-    for (const repository of [
-        'AssistOSExplorer', 'webmeetInfra', 'UmamiAgent', 'AchillesCLI', 'proxies', 'basic',
-    ]) {
-        assert.doesNotMatch(buildJob, new RegExp(repository));
-    }
-    assert.match(read('.gitignore'), /^sources\/$/m);
+    assert.match(buildJob, /repository: AssistOS-AI\/ploinky[\s\S]*?ref: \$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(buildJob, /Resolve immutable MCP SDK input from the Ploinky lock/);
+    assert.match(buildJob, /repository: \$\{\{ steps\.mcp_sdk\.outputs\.repository \}\}/);
+    assert.match(buildJob, /ref: \$\{\{ steps\.mcp_sdk\.outputs\.commit \}\}/);
+    assert.match(buildJob, /git -C sources\/mcp-sdk rev-parse HEAD/);
+    assert.match(buildJob, /persist-credentials: false/);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
-    assert.match(buildJob, /Build and push architecture image by digest/);
-    assert.match(
-        buildJob,
-        /build-args:\s*\|[\s\S]*?PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/,
-    );
+    assert.match(read('.gitignore'), /^sources\/$/m);
+    assert.match(buildJob, /runner: ubuntu-24\.04\n/);
+    assert.match(buildJob, /runner: ubuntu-24\.04-arm/);
+    for (const arch of ['amd64', 'arm64']) assert.match(buildJob, new RegExp('platform: linux/' + arch));
     assert.match(buildJob, /push-by-digest=true/);
     assert.match(buildJob, /name-canonical=true/);
-    assert.match(buildJob, /Record architecture digest evidence/);
-    assert.match(buildJob, /\^sha256:\[0-9a-f\]\{64\}\$/);
-    assert.match(buildJob, /ploinky-box-digest-\$\{\{ matrix\.arch \}\}/);
-    assert.match(buildJob, /actions\/upload-artifact@[0-9a-f]{40}/);
-    assert.doesNotMatch(
-        workflow,
-        /\bnode --test\b|tests\/(?:unit|integration|e2e)\/|\bpodman\b|SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/,
-    );
-    assert.doesNotMatch(workflow, /\bgated?\b/i);
-
+    assert.match(buildJob, /provenance: false/);
+    assert.match(buildJob, /PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
+    assert.match(buildJob, /docker pull --platform "linux\/\$ARCH" "\$image"/);
+    assert.match(buildJob, /--network none --read-only/);
+    assert.match(buildJob, /--user 1000:1000/);
+    assert.match(buildJob, /--cap-drop ALL --security-opt no-new-privileges/);
+    assert.match(buildJob, /native-probe\.mjs --verify/);
+    assert.match(buildJob, /verify-publication\.mjs native/);
+    assert.match(buildJob, /Upload native runtime evidence\n        if: always\(\)/);
+    assert.match(buildJob, /ploinky-box-native-\$\{\{ matrix\.arch \}\}/);
+    assert.doesNotMatch(workflow, /setup-qemu|--privileged|seccomp=unconfined|\bnode --test\b|tests\/(?:unit|integration|e2e)\/|SMOKE_GRAPH_/);
+    for (const repo of ['AssistOSExplorer', 'webmeetInfra', 'UmamiAgent', 'AchillesCLI', 'proxies', 'basic']) assert.doesNotMatch(buildJob, new RegExp(repo));
     assert.match(mergeJob, /needs:\s*\n\s+- resolve-source\s*\n\s+- build/);
-    assert.match(mergeJob, /actions\/download-artifact@[0-9a-f]{40}/);
-    assert.match(mergeJob, /pattern:\s*ploinky-box-digest-\*/);
-    assert.match(mergeJob, /test "\$\{#digest_files\[@\]\}" -eq 2/);
+    assert.match(mergeJob, /pattern: ploinky-box-native-\*/);
+    assert.match(mergeJob, /verify-publication\.mjs proofs/);
     assert.match(mergeJob, /runtime-candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
     assert.match(mergeJob, /Prove the run-scoped staging tag is unused/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.workflow-run/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.source-sha/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.amd64-digest/);
-    assert.match(mergeJob, /io\.assistos\.ploinky\.arm64-digest/);
-    assert.match(mergeJob, /assert\.equal\(index\.manifests\.length, 2\)/);
-    assert.match(mergeJob, /members\.get\('linux\/amd64'\)/);
-    assert.match(mergeJob, /members\.get\('linux\/arm64'\)/);
-    assert.match(mergeJob, /Assemble and inspect the exact two-member manifest/);
-    assert.match(mergeJob, /imagetools inspect --raw "\$STAGING_REF"/);
-    assert.match(mergeJob, /sha256sum "\$RUNNER_TEMP\/staging-index\.json"/);
-    assert.doesNotMatch(mergeJob, /sed -n 's\/\^Digest:/);
-    assert.match(mergeJob, /Move latest and runtime compatibility alias by the exact inspected staging digest/);
-    assert.match(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}"/);
-    assert.match(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{COMPATIBILITY_IMAGE_TAG\}"/);
-    assert.match(mergeJob, /docker\.io\/\$\{IMAGE_NAME\}@\$\{STAGING_DIGEST\}/);
-    assert.match(mergeJob, /Read-only post-promotion digest confirmation/);
-    assert.match(mergeJob, /test "\$latest_digest" = "\$STAGING_DIGEST"/);
-    assert.match(mergeJob, /test "\$runtime_digest" = "\$STAGING_DIGEST"/);
-    const promote = mergeJob.indexOf('Move latest and runtime compatibility alias by the exact inspected staging digest');
-    const readOnly = mergeJob.indexOf('Read-only post-promotion digest confirmation');
-    assert.ok(promote > 0 && promote < readOnly);
-    assert.doesNotMatch(mergeJob.slice(promote), /node --test|podman run|docker run/);
-    assert.match(mergeJob, /Published latest and runtime:/);
-    assert.match(mergeJob, /GITHUB_STEP_SUMMARY/);
-
-    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
-        assert.match(use[1], /^[0-9a-f]{40}$/, 'workflow action is not SHA-pinned: ' + use[0]);
-    }
+    assert.match(mergeJob, /verify-publication\.mjs candidate/);
+    assert.match(mergeJob, /cmp "\$evidence\/candidate-index\.json" "\$evidence\/immutable-index\.json"/);
+    assert.match(mergeJob, /cp -R \/tmp\/ploinky-box-proofs "\$evidence\/native-proofs"/);
+    assert.match(mergeJob, /Upload immutable candidate evidence/);
+    assert.doesNotMatch(mergeJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{(?:IMAGE_TAG|COMPATIBILITY_IMAGE_TAG)\}"/);
+    assert.match(promoteJob, /if: \$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.match(promoteJob, /needs: merge/);
+    assert.match(promoteJob, /STAGING_DIGEST: \$\{\{ needs\.merge\.outputs\.digest \}\}/);
+    assert.match(promoteJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}"/);
+    assert.match(promoteJob, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{COMPATIBILITY_IMAGE_TAG\}"/);
+    assert.match(promoteJob, /test "\$latest_digest" = "\$STAGING_DIGEST"/);
+    assert.match(promoteJob, /test "\$runtime_digest" = "\$STAGING_DIGEST"/);
+    assert.doesNotMatch(promoteJob, /node --test|podman run|docker run/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) assert.match(use[1], /^[0-9a-f]{40}$/);
 });
 
 test('latest channel documentation separates creation from hard-cut recovery', () => {

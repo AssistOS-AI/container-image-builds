@@ -3,22 +3,14 @@ name: Publish Ploinky Node Image
 on:
   workflow_dispatch:
     inputs:
-      node_base:
-        description: 'Node base image to build from'
-        required: false
-        default: 'node:24-bookworm-slim'
-        type: string
-      image_tag:
-        description: 'Docker Hub tag to publish'
-        required: false
-        default: '24-bookworm-tools'
-        type: string
-  push:
-    branches:
-      - ploinky-proxy
-    paths:
-      - 'images/ploinky-node/**'
-      - '.github/workflows/publish-ploinky-node-image.yml'
+      promote_stable:
+        description: Move 24-trixie-tools after both native architecture gates pass
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
 
 concurrency:
   group: publish-ploinky-node-image
@@ -26,65 +18,217 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/ploinky-node
-  DEFAULT_NODE_BASE: node:24-bookworm-slim
-  DEFAULT_IMAGE_TAG: 24-bookworm-tools
+  IMAGE_TAG: 24-trixie-tools
+  BASE_IMAGE: docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0
 
 jobs:
-  publish:
-    name: Build and Push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
+  build:
+    name: Build and prove ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-      - name: Resolve image inputs
-        id: image
+      - name: Verify immutable base and workflow inputs
         run: |
           set -euo pipefail
-          node_base="${{ github.event.inputs.node_base }}"
-          image_tag="${{ github.event.inputs.image_tag }}"
-          if [ -z "$node_base" ]; then
-            node_base="$DEFAULT_NODE_BASE"
-          fi
-          if [ -z "$image_tag" ]; then
-            image_tag="$DEFAULT_IMAGE_TAG"
-          fi
-          echo "node_base=$node_base" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke build local architecture
-        run: |
-          set -euo pipefail
-          docker build \
-            --build-arg NODE_BASE='${{ steps.image.outputs.node_base }}' \
-            -t "$IMAGE_NAME:smoke" \
-            images/ploinky-node
-          docker run --rm "$IMAGE_NAME:smoke" sh -lc 'node --version && npm --version && git --version && python3 --version && make --version && g++ --version && bwrap --version && ffmpeg -version | head -1'
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(sed -n '1s/^FROM //p' images/ploinky-node/Dockerfile)" = "$BASE_IMAGE"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
+      - name: Build and push native architecture by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: images/ploinky-node
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            NODE_BASE=${{ steps.image.outputs.node_base }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.image_tag }}
-            ${{ env.IMAGE_NAME }}:${{ env.DEFAULT_IMAGE_TAG }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
+          provenance: false
+
+      - name: Prove tools and Git transport in the exact native digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="docker.io/${IMAGE_NAME}@${DIGEST}"
+          evidence="$RUNNER_TEMP/ploinky-node-proof-${EXPECTED_ARCH}"
+          mkdir -p "$evidence"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$EXPECTED_ARCH"
+          docker image inspect "$image" > "$evidence/image-inspect.json"
+          docker run --rm --cap-drop=ALL --security-opt=no-new-privileges \
+            --entrypoint bash "$image" -euo pipefail -c '
+              test "$(id -u):$(id -g)" = 1000:1000
+              node --version; npm --version; git --version; python3 --version
+              make --version; g++ --version; bwrap --version
+              ffmpeg -version | sed -n "1p"
+            ' | tee "$evidence/tools.txt"
+          docker run --rm --cap-drop=ALL --security-opt=no-new-privileges \
+            --volume "$PWD/scripts/smoke-git-transport.mjs:/smoke-git-transport.mjs:ro" \
+            --entrypoint node "$image" /smoke-git-transport.mjs \
+            | tee "$evidence/git-transport.json"
+          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
+          node --input-type=module <<'NODE' > "$evidence/source-evidence.json"
+          process.stdout.write(JSON.stringify({
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            architecture: process.env.EXPECTED_ARCH,
+            baseImage: process.env.BASE_IMAGE,
+            imageDigest: process.env.DIGEST,
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Upload architecture proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-node-proof-${{ matrix.arch }}
+          path: ${{ runner.temp }}/ploinky-node-proof-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble:
+    name: Assemble proven multiarchitecture candidate
+    needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.candidate.outputs.digest }}
+    steps:
+      - name: Download native architecture proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ploinky-node-proof-*
+          path: /tmp/ploinky-node-proofs
+
+      - name: Verify both successful architecture proofs
+        id: digests
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const root = '/tmp/ploinky-node-proofs';
+          assert.deepEqual(fs.readdirSync(root).sort(), ['ploinky-node-proof-amd64', 'ploinky-node-proof-arm64']);
+          const digests = [];
+          for (const arch of ['amd64', 'arm64']) {
+            const directory = `${root}/ploinky-node-proof-${arch}`;
+            const digest = fs.readFileSync(`${directory}/digest.txt`, 'utf8').trim();
+            const source = JSON.parse(fs.readFileSync(`${directory}/source-evidence.json`));
+            const transport = JSON.parse(fs.readFileSync(`${directory}/git-transport.json`));
+            assert.match(digest, /^sha256:[0-9a-f]{64}$/);
+            assert.equal(source.imageDigest, digest);
+            assert.equal(source.architecture, arch);
+            assert.equal(source.workflowSha, process.env.GITHUB_SHA);
+            assert.equal(source.baseImage, process.env.BASE_IMAGE);
+            assert.equal(transport.ok, true);
+            digests.push(digest);
+            console.log(`${arch}_digest=${digest}`);
+          }
+          assert.notEqual(digests[0], digests[1]);
+          NODE
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Assemble and verify only the proven native digests
+        id: candidate
+        env:
+          AMD64_DIGEST: ${{ steps.digests.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.digests.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing staging tag: $staging" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$staging" \
+            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
+            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+          evidence="$RUNNER_TEMP/ploinky-node-candidate-evidence"
+          mkdir -p "$evidence"
+          docker buildx imagetools inspect --raw "$staging" > "$evidence/candidate-index.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/ploinky-node-candidate-evidence/candidate-index.json`));
+          assert.equal(index.manifests.length, 2);
+          const members = new Map(index.manifests.map(entry => [`${entry.platform.os}/${entry.platform.architecture}`, entry.digest]));
+          assert.deepEqual([...members.keys()].sort(), ['linux/amd64', 'linux/arm64']);
+          assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
+          assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
+          NODE
+          candidate_digest="sha256:$(sha256sum "$evidence/candidate-index.json" | cut -d ' ' -f1)"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${candidate_digest}" > /dev/null
+          printf '%s\n' "$candidate_digest" > "$evidence/digest.txt"
+          cp -R /tmp/ploinky-node-proofs "$evidence/native-proofs"
+          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          printf 'Proven candidate: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload assembled candidate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ploinky-node-candidate-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  promote:
+    name: Promote proven Trixie convenience tag
+    if: ${{ inputs.promote_stable == true }}
+    needs: assemble
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Move new stable tag by exact proven candidate digest
+        env:
+          CANDIDATE_DIGEST: ${{ needs.assemble.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools create --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+            "docker.io/${IMAGE_NAME}@${CANDIDATE_DIGEST}"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" > "$RUNNER_TEMP/stable-index.json"
+          test "sha256:$(sha256sum "$RUNNER_TEMP/stable-index.json" | cut -d ' ' -f1)" = "$CANDIDATE_DIGEST"
+          printf 'Promoted `docker.io/%s:%s` -> `%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$CANDIDATE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

@@ -33,12 +33,14 @@ test('ploinky-box image consumes only the canonical entrypoint and sealed runtim
     assert.match(workflow, /PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
 });
 
-test('publication workflow contains no behavioral test execution', () => {
+test('publication verifies immutable native capability without running full graph tests', () => {
     const workflow = read('.github/workflows/publish-ploinky-box-image.yml');
 
     assert.doesNotMatch(workflow, /\bnode --test\b/);
     assert.doesNotMatch(workflow, /tests\/(?:unit|integration|e2e)\//);
-    assert.doesNotMatch(workflow, /\bpodman\b/);
+    assert.match(workflow, /native-probe\.mjs --verify/);
+    assert.match(workflow, /verify-publication\.mjs native/);
+    assert.doesNotMatch(workflow, /podman run/);
     assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);
 });
 

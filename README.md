@@ -8,7 +8,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 
 | Image | Source repo | Build context | Dockerfile | Workflow |
 | --- | --- | --- | --- | --- |
-| `assistos/ploinky-node:24-bookworm-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
+| `assistos/ploinky-node:24-trixie-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
@@ -16,7 +16,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-workstation:cul-0.5.0-v1` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
-| `assistos/bwrap-runner:node24-python-bookworm` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
+| `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus immutable `AssistOS-AI/ploinky` and lock-selected `AssistOS-AI/MCPSDK` commits | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
@@ -55,24 +55,62 @@ manifests remain separate authorized operations.
 
 ## Umami agent supply chain
 
-The Umami Agent build has no source-image, Bun-version, or MCP-revision input.
-`images/umami-agent/sources.lock.json` records the reviewed inputs, and focused
-tests require the Dockerfile, embedded image metadata, and publication workflow
-to agree with that lock.
+Umami 3.2.0 is compiled from its checksum-pinned upstream source plus the
+explicit `login-query-cache` and `metadata-assets` source patches with
+`BASE_PATH=/base-agent-additional-server/umamiAgent/3000`. This matches the
+existing Router publication. The UmamiAgent ingress restores that prefix after
+Router forwarding, while Next listens only on `127.0.0.1:3001` behind the agent's
+port 3000 ingress. A runtime environment change cannot substitute for this
+build-time Next configuration.
 
-| Input | Immutable selection | Architecture contract |
+`images/umami-agent/sources.lock.json` records every selected image, source
+archive, source lockfile, and package-manager artifact. No workflow input can
+override those selections.
+
+| Input | Immutable selection | Contract |
 | --- | --- | --- |
-| Umami | `docker.umami.is/umami-software/umami:3.2.0@sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec` | The index resolves to `sha256:afbd42695964762c2accf8ed0d863211d764c3937dbba0bf808ba5e33afae763` for `linux/amd64` and `sha256:41c5df65ee777b762411c105f9b040e33708ef8640a19a2d2b9abf3284ee3f37` for `linux/arm64`. |
-| Bun | Release `1.3.14` | The build selects the exact x64-musl or aarch64-musl archive and verifies its recorded SHA-256 before extraction. |
-| `MadsNyl/umami-mcp` | Commit `3ab73beda2db0ebffb0b07439b218ef562107520` | The build fetches that object directly, checks out detached `FETCH_HEAD`, verifies the resulting commit, and verifies the committed `bun.lock` digest before frozen installation. |
+| Runtime and build tools | `docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6` | Both native manifests and image configs are pinned in the lock. This retains Node 22.23.1, Bun 1.3.14, PostgreSQL 18.4, and the existing MCP installation. |
+| Umami source | `umami-software/umami` commit `2f6e2b5ff256862a081d9e74bed18a42ebf795e3` (3.2.0), with the recorded login and metadata patches | The archive and original source hashes are verified before patching. Each patch script and every resulting source file hash are pinned separately before the upstream `build-docker` script runs. |
+| Dependencies | pnpm 10.15.1 and upstream `pnpm-lock.yaml` SHA-256 `b5ba02abd9e346194926658cbfecd95fe4c0a5c765d653a745cf3deb06ec8171` | The package manager archive is checksum-pinned; installation is frozen. Production dependencies and Prisma are retained for the normal database migration command. |
+| `MadsNyl/umami-mcp` | Commit `3ab73beda2db0ebffb0b07439b218ef562107520` | The immutable runtime retains its frozen Bun installation; publication verifies its inherited revision and lock labels. |
+| GeoIP | Existing `/app/geo/GeoLite2-City.mmdb` from each pinned runtime manifest | Upstream `SKIP_BUILD_GEO=1` avoids a mutable download. The seal verifies the copied database matches the original bytes. |
 
-The direct Alpine packages are version-pinned. The built image carries OCI
-labels for the base index, Bun version, MCP commit, and MCP lock digest, plus a
-read-only copy of the full source lock. The workflow smoke-checks those values,
-publishes an amd64/arm64 index with provenance and an SBOM, verifies that both
-platform manifests exist, and reports the resulting immutable image digest.
-Publishing does not update the consumer manifest; pinning that new output is a
-separate reviewed operation.
+The final stage removes the old `/app` completely and installs the source-built
+standalone server, static assets, public files, scripts, Prisma artifacts, and
+production dependencies. `/app/ploinky-umami-build.json` binds the compiled
+base path, upstream source revision, applied patch identities and receipt,
+lockfile, server, tracker, and GeoIP hashes. The seal also checks the actual
+patched build source. The
+image also carries the source lock at
+`/usr/local/share/ploinky/umami-agent-sources.json`. The retained runtime base
+and rebuilt application ancestry are recorded separately.
+
+The login patch cancels only an outstanding `['login']` verification and seeds
+that query with the successful login response's user before publishing the user
+or navigating. This prevents an earlier or late verification 401 from forcing
+a full login-page reload after authentication. Each native build executes the
+actual original and patched submit handlers against its frozen Query Core
+5.101.0 dependency, proving both failure cases and preservation of unrelated
+queries. The image is explicitly labeled as modified upstream source.
+
+The metadata patch preserves that login correction and separately prefixes the
+layout's six icon/manifest links, explicitly declares the published browser
+configuration, and prefixes the manifest icons and browser configuration tile.
+Only the three pinned source files are changed before compilation. Native
+runtime proof fetches all ten declared and nested metadata resources, verifies
+their media types and exact source/output bytes, and requires the unprefixed
+paths to return 404. No compiled asset or Router response rewriting is used.
+
+Publication is manual and builds on native amd64 and arm64 runners. Each exact
+native digest must pass a network-isolated, UID 1000, capability-free runtime
+gate: initialize disposable PostgreSQL, run real migrations, start Next only
+on loopback, fetch the prefixed login, scripts/styles/fonts, and metadata assets,
+verify heartbeat and authenticated API calls, and fetch the prefixed tracker.
+The workflow assembles exactly those proven native manifests and their
+provenance/SBOM attestations into a run-specific candidate index, and uploads
+both native proofs and the immutable index. `promote_stable=false` is the
+default; only an explicit `promote_stable=true` moves `umami-stack` after both
+gates pass. Consumers adopt the resulting immutable digest separately.
 
 ## SearchAgent runtime
 
@@ -120,6 +158,37 @@ to publish amd64 and arm64 directly as the operator-managed `runtime` and
 `cul-0.5.0-v1` tags. The workflow does not attempt the nested smoke, use
 privileged mode, or mount a host engine socket.
 
+## Node and Python Git transport
+
+The Node and Bubblewrap images use the pinned official Node 24.20.0 Trixie
+index `sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0`.
+Trixie's Git-linked libcurl preserves TLS 1.3 tickets with the default TLS
+configuration. The images require no HTTP/1.1 override or TLS interception.
+The Bubblewrap image combines Node with official Python 3.12.14 Trixie index
+`sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`.
+Python 3.12 satisfies both GPTResearcher and Open Interpreter's pinned tiktoken
+wheel compatibility; distro Python 3.13 is not installed. `/usr/bin/python3`
+is created only when absent and points to the official Python interpreter.
+Both base indices are recorded in Bubblewrap's publication evidence.
+
+Each native architecture gate runs `scripts/smoke-git-transport.mjs` inside
+the exact published digest. The probe inventories Git's actual HTTPS helper
+and linked libraries, clears inherited Git, npm, proxy and loader overrides,
+and isolates Git system/global and npm user/global configuration. It requires
+anonymous HTTP/2 negotiation for default and explicitly selected HTTP/2
+`ls-remote`, clone and fetch against Soplang and GPTResearcher, followed by
+each mode's cold npm installation of a small public Git fixture. The npm lock
+must contain only that fixture and its reviewed commit; this probe never
+downloads MCPSDK. JSON evidence retains operation, negotiation and response
+status on failure without recording credentials or request headers.
+
+The Node workflow builds amd64 and arm64 natively, checks tools and transport
+by digest, then assembles only those successful members into a run-scoped
+candidate index. It always reports the immutable candidate. Dispatching with
+`promote_stable=true` additionally moves `24-trixie-tools` after those gates.
+The old Bookworm tag is never reused for a Trixie image. Consumers must be
+updated explicitly to the approved image digest.
+
 ## Bubblewrap runner publication
 
 `publish-bwrap-runner.yml` accepts only exact 40-character commits for the
@@ -128,27 +197,40 @@ The consumer SHAs are evidence-only prepublication code selections, recorded as
 `prepublication-code-only`; they do not authorize or perform manifest pinning.
 Native `ubuntu-24.04` amd64 and `ubuntu-24.04-arm` jobs each build and push one
 architecture by digest without moving the stable tag. Each job requires
-rootless Podman and runs the digest with all capabilities dropped,
+rootless Podman and runs the digest as its default UID/GID `1000:1000`, projected
+with `keep-id:uid=1000,gid=1000`, with all capabilities dropped,
 `no-new-privileges`, no host namespace options, and no unconfined profile. It
 records the image's effective UID/GID, capability and namespace state, SUID
 inventory, Bubblewrap mode/file capabilities, platform, pinned base image,
 workflow/action identity, and every exact source commit.
+Set-id and file-capability inventory covers private HOME as UID1000 and the rest
+of the image separately with a read-only filesystem as UID0, with capabilities
+dropped and no network. Neither traversal ignores errors. Actual transport,
+native policy, and provider gates always use the image's nonzero identity.
 
-The native gate has no skip path. It executes both private- and empty-proc
-production policies, the canonical healthcheck, and a representative staged
-runner task with network disabled and filesystem write confinement. Separate
+The native gate has no skip path. It requires actual empty-proc production
+execution with write, read-only-system-file, sibling/source, device, and
+environment boundary assertions. Private proc must either pass the same
+execution checks or produce canonical capability evidence that only empty proc
+is available, together with a real private-only task rejection before state or
+staged-file mutation. This matches ABI 2's `private-or-empty` default without
+claiming private execution on a host that forbids it. Fixed network files use
+private copies and `/dev` contains only four fixed devices; the policy never
+binds outer proc or relaxes container confinement. The canonical healthcheck
+and a representative staged runner task must also succeed networklessly. Separate
 consumer gates prepare Open Interpreter with installation-only network access,
 then require its networkless terminal
 `PLOINKY_OPEN_INTERPRETER_BOX_UNAVAILABLE` disposition, and perform a real
 GPTResearcher cold install in a networked container followed by import,
 UI/readiness, and lightweight task-adapter checks in a separate networkless
-container over the same persisted install. Installation egress is not
+container over the same HOME-owned persisted install; no writable `/opt` mount
+is provided. Installation egress is not
 task-time network authority.
 
 Only after both architecture jobs upload their digest and evidence artifacts
 does the assemble job create a run-scoped candidate index from exactly those
 two digests and verify exact `linux/amd64` and `linux/arm64` membership. The
-candidate digest is always reported. The `node24-python-bookworm` convenience
+candidate digest is always reported. The `node24-python-trixie` convenience
 tag moves only when dispatch explicitly sets `promote_stable=true`, and only
 after all prior gates; no behavioral check occurs after promotion. Consumer
 manifests must use the recorded `docker.io/assistos/bwrap-runner@sha256:...`
@@ -162,8 +244,9 @@ multiarchitecture digest.
 ## Ploinky Box runtime
 
 `docker.io/assistos/ploinky-box:latest` is the primary mutable release channel
-for the outer appliance. Every publication also moves `runtime` to the same
-manifest digest for compatibility with older Ploinky installations. The image
+for the outer appliance. An explicit stable promotion also moves `runtime` to
+the same manifest digest for compatibility with older Ploinky installations.
+Candidate publication leaves both channels unchanged. The image
 supports native rootless Podman only;
 it requires `/dev/fuse`, `/dev/net/tun`, the explicit unmask security option,
 and no engine socket, privilege, added capabilities, or unconfined seccomp
@@ -288,22 +371,36 @@ destroy path.
 ## Ploinky box publication
 
 Manual dispatch requires one exact 40-character Ploinky commit in `source_ref`.
-The workflow verifies that immutable source checkout and its own image-definition
-checkout are clean and at the requested revisions. It performs no behavioral,
-unit, integration, E2E, Podman, or sibling-repository test execution.
+The workflow verifies that immutable source checkout, the lock-selected MCP SDK,
+and its own image-definition checkout are clean and at the requested revisions.
+`promote_stable=false` is the default; only an explicit `true` can move `latest`
+and the `runtime` compatibility alias after candidate verification.
 
-Each native architecture job builds and pushes one image blob by immutable
-digest, validates the digest format, and uploads only that digest as publication
-evidence. The merge job requires exactly one amd64 digest and one arm64 digest,
-proves the run-scoped
-`runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused, and creates
-a staging manifest from those two exact digests. It annotates and inspects
-that manifest, requires exactly the supplied amd64 and arm64 members, records its
-immutable digest, and moves both `latest` and the `runtime` compatibility alias
-to that exact staging digest. Read-only confirmation proves both tags resolve to
-the staged digest after promotion. The staging tag is retained as provenance,
-workflow concurrency prevents competing promotion, and functional validation
-remains separate from this publication-only workflow.
+Each native architecture job preserves the Dockerfile's SDK and WebTTY build
+checks, pushes one image by immutable digest, and runs the image's own WebTTY
+`--verify` probe as UID/GID 1000 with no network, no capabilities, no new
+privileges, and a read-only rootfs. Its retained evidence includes the exact
+image configuration, probe result, sealed contract, source-probe fingerprint,
+source and workflow commits, and run/attempt identity. The selected Ploinky
+source validator must accept every PTY capability, and the image probe bytes,
+source SHA, package lock, native architecture, and sealed contract must match.
+These package capability checks do not execute the full Box lifecycle, sibling
+repository tests, or browser E2E; those acceptance gates remain separate.
+
+The merge job revalidates both native evidence sets, requires distinct amd64 and
+arm64 digests, and proves the run-scoped
+`runtime-candidate-GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT` tag is unused. It creates an
+index with exactly those two members and annotations binding the Ploinky and
+image-definition commits, run/attempt, and native digests. It verifies the index
+by immutable digest and confirms the candidate tag still has identical bytes.
+The index, candidate proof, and both complete native evidence sets are retained
+for 30 days. Failed native checks also retain their available diagnostics.
+
+A separate promotion job runs only for `promote_stable=true` after the merge job
+succeeds. It moves both release aliases to that already-verified immutable index
+and confirms both resolve to the same digest. The candidate tag is retained,
+and workflow concurrency prevents competing promotions. A candidate-only run
+never writes either release alias.
 
 ## Secrets
 
@@ -327,7 +424,7 @@ Do not store Docker Hub token values in repository files.
 ```sh
 gh workflow run publish-ploinky-node-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f image_tag=24-bookworm-tools
+  -f promote_stable=false
 
 gh workflow run publish-onlyoffice-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -348,7 +445,7 @@ gh workflow run publish-default-local-llm-image.yml \
 
 gh workflow run publish-umami-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f image_tag=umami-stack
+  -f promote_stable=false
 
 gh workflow run publish-bwrap-runner.yml \
   --repo AssistOS-AI/container-image-builds \
@@ -369,7 +466,8 @@ gh workflow run publish-soul-gateway-image.yml \
 
 gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref="$(git -C ../ploinky rev-parse HEAD)"
+  -f source_ref="$(git -C ../ploinky rev-parse HEAD)" \
+  -f promote_stable=false
 ```
 
 `latest` and its `runtime` compatibility alias are intentionally mutable, but an
@@ -382,7 +480,30 @@ a separately authorized registry release action, never a supervisor
 transaction; the channel must not point to an incompatible image. Reuse,
 status, stop, and destroy do not pull the channel.
 
-`publish-ploinky-node-image.yml` and `publish-onlyoffice-agent-image.yml` also
-run on pushes to their image
-definitions or workflow files. The other publish workflows stay manual because
-their build contexts live in separate source repositories.
+The Node, Umami, Bubblewrap, and Ploinky Box publish workflows are manually dispatched and default
+to candidate publication without stable promotion. Other workflows keep their
+own documented triggers and source inputs.
+
+## QA host Git bootstrap
+
+`build-qa-git-toolchain.yml` builds a native `linux/amd64` Git 2.55.0
+installation from the checksum-pinned official release in
+`images/qa-git/Dockerfile`. Its Ubuntu 24.04 builder selects Ubuntu's OpenSSL
+libcurl development package; the resulting HTTPS helper uses the host's
+ordinary `libcurl.so.4`, without shipping or replacing TLS libraries.
+
+The complete installation includes Git's HTTPS helpers, scripts and templates.
+`RUNTIME_PREFIX` permits relocation. A clean Ubuntu 24.04 validation stage moves
+the installation to a different prefix, checks helper linkage and templates,
+and runs the shared default/HTTP2 Git and npm download probes before the
+workflow seals its archive and provenance. The artifact is a bootstrap toolchain,
+not an agent image or a host package installation.
+
+A QA operator installs the verified archive into a versioned QA-owned directory
+outside the disposable workspace and prepends its `bin` directory only to the
+QA bootstrap/deployment process. Clear inherited `GIT_EXEC_PATH` and transport
+settings for acceptance tests, and verify helper resolution and library linkage
+on the target. Do not modify system Git, production PATH, host TLS libraries, or
+system/global Git configuration. Ubuntu maintains the dynamically linked TLS
+packages; updating this separate Git release requires a reviewed source pin and
+a new passing artifact.

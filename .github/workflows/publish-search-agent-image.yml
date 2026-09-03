@@ -2,19 +2,21 @@ name: Publish SearchAgent image
 
 on:
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: Image tag to publish
-        required: false
-        default: searxng-browser
-        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-search-agent-image
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: assistos/search-agent
+  BASE_IMAGE: docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build and prove ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -28,83 +30,207 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable base and workflow inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(sed -n '1s/^FROM //; 1s/ AS searxng-builder$//; 1p' images/search-agent/Dockerfile)" = "$BASE_IMAGE"
+          test "$(grep -cF "FROM $BASE_IMAGE" images/search-agent/Dockerfile)" = 2
+          node --test --test-name-pattern=search-agent tests/image-definitions.test.mjs tests/search-image-proof.test.mjs
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push architecture image by digest
+      - name: Build and push native architecture by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: images/search-agent
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
           provenance: false
 
-      - name: Smoke pushed digest without runtime privilege
-        run: |
-          docker run --rm --cap-drop=ALL --security-opt=no-new-privileges \
-            "docker.io/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" \
-            sh -lc 'test "$(id -u):$(id -g)" = 1000:1000 && chromium --version && /opt/search-agent/searx-pyenv/bin/python -c "import searx, flask, httpx" && node -e "require(\"puppeteer-core\")"'
-
-      - name: Export digest
+      - name: Prove SearXNG, browser, and Git transport in the exact native digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${DIGEST#sha256:}"
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="docker.io/${IMAGE_NAME}@${DIGEST}"
+          evidence="$RUNNER_TEMP/search-agent-proof-${EXPECTED_ARCH}"
+          mkdir -p "$evidence"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$EXPECTED_ARCH"
+          docker image inspect "$image" > "$evidence/image-inspect.json"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
+          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
+            --volume "$PWD/images/search-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
+            --entrypoint node "$image" /smoke-runtime.mjs \
+            2> >(tee "$evidence/runtime-diagnostics.log" >&2) \
+            | tee "$evidence/runtime.json"
+          docker run --rm --cap-drop=ALL --security-opt=no-new-privileges \
+            --volume "$PWD/scripts/smoke-git-transport.mjs:/smoke-git-transport.mjs:ro" \
+            --entrypoint node "$image" /smoke-git-transport.mjs \
+            | tee "$evidence/git-transport.json"
+          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
+          node --input-type=module <<'NODE' > "$evidence/source-evidence.json"
+          process.stdout.write(JSON.stringify({
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            architecture: process.env.EXPECTED_ARCH,
+            baseImage: process.env.BASE_IMAGE,
+            searxngCommit: "9fea41204fdfa7a5cfa15b0ebd12904c520478ce",
+            imageDigest: process.env.DIGEST,
+          }, null, 2) + '\n');
+          NODE
 
-      - name: Upload digest
-        uses: actions/upload-artifact@v4
+      - name: Upload architecture proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: search-agent-digest-${{ matrix.arch }}
-          path: /tmp/digests/*
+          name: search-agent-proof-${{ matrix.arch }}
+          path: ${{ runner.temp }}/search-agent-proof-${{ matrix.arch }}
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
-  merge:
-    name: Merge multi-architecture manifest
-    runs-on: ubuntu-24.04
+  assemble:
+    name: Assemble proven multiarchitecture candidate
     needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.candidate.outputs.digest }}
     steps:
-      - name: Download digests
-        uses: actions/download-artifact@v4
+      - name: Download native architecture proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          path: /tmp/digests
-          pattern: search-agent-digest-*
-          merge-multiple: true
+          pattern: search-agent-proof-*
+          path: /tmp/search-agent-proofs
+
+      - name: Verify both successful architecture proofs
+        id: digests
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const root = '/tmp/search-agent-proofs';
+          assert.deepEqual(fs.readdirSync(root).sort(), ['search-agent-proof-amd64', 'search-agent-proof-arm64']);
+          const digests = [];
+          for (const arch of ['amd64', 'arm64']) {
+            const directory = `${root}/search-agent-proof-${arch}`;
+            const digest = fs.readFileSync(`${directory}/digest.txt`, 'utf8').trim();
+            const source = JSON.parse(fs.readFileSync(`${directory}/source-evidence.json`));
+            const transport = JSON.parse(fs.readFileSync(`${directory}/git-transport.json`));
+            const runtime = JSON.parse(fs.readFileSync(`${directory}/runtime.json`));
+            const images = JSON.parse(fs.readFileSync(`${directory}/image-inspect.json`));
+            assert.match(digest, /^sha256:[0-9a-f]{64}$/);
+            assert.equal(source.imageDigest, digest);
+            assert.equal(source.architecture, arch);
+            assert.equal(source.workflowSha, process.env.GITHUB_SHA);
+            assert.equal(source.baseImage, process.env.BASE_IMAGE);
+            assert.equal(source.workflowRunId, process.env.GITHUB_RUN_ID);
+            assert.equal(source.workflowAttempt, process.env.GITHUB_RUN_ATTEMPT);
+            assert.equal(source.searxngCommit, '9fea41204fdfa7a5cfa15b0ebd12904c520478ce');
+            assert.equal(images.length, 1);
+            assert.equal(images[0].Architecture, arch);
+            assert.equal(images[0].Config.User, '1000:1000');
+            assert.equal(images[0].Config.Labels['org.opencontainers.image.revision'], process.env.GITHUB_SHA);
+            assert.ok(images[0].RepoDigests.includes(`docker.io/${process.env.IMAGE_NAME}@${digest}`)
+              || images[0].RepoDigests.includes(`${process.env.IMAGE_NAME}@${digest}`));
+            assert.equal(runtime.schema, 'ploinky.search-runtime/v1');
+            assert.equal(runtime.ok, true);
+            assert.equal(runtime.uid, 1000);
+            assert.equal(runtime.gid, 1000);
+            assert.equal(runtime.noNewPrivileges, true);
+            assert.equal(runtime.capabilities, '0000000000000000');
+            assert.deepEqual(runtime.networkInterfaces, ['lo']);
+            assert.equal(runtime.nodeVersion, 'v24.20.0');
+            assert.match(runtime.python.version, /^3\.13\./);
+            assert.equal(runtime.puppeteerVersion, '25.9.0');
+            assert.equal(runtime.searxng.healthStatus, 200);
+            assert.equal(runtime.searxng.indexStatus, 200);
+            assert.equal(runtime.searxng.configurationStatus, 200);
+            assert.equal(runtime.searxng.invalidSearchStatus, 400);
+            assert.equal(runtime.browser.documentStatus, 200);
+            assert.equal(runtime.browser.javascriptResult, '42');
+            assert.deepEqual(runtime.browser.errors, []);
+            assert.equal(transport.ok, true);
+            assert.equal(transport.probes.length, 14);
+            assert.ok(transport.probes.every(probe => probe.ok === true));
+            digests.push(digest);
+            console.log(`${arch}_digest=${digest}`);
+          }
+          assert.notEqual(digests[0], digests[1]);
+          NODE
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create and push manifest list
-        working-directory: /tmp/digests
+      - name: Assemble and verify only the proven native digests
+        id: candidate
         env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
+          AMD64_DIGEST: ${{ steps.digests.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.digests.outputs.arm64_digest }}
         run: |
-          docker buildx imagetools create \
-            -t "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
-            -t "docker.io/${IMAGE_NAME}:${IMAGE_TAG}-${GITHUB_SHA}" \
-            $(printf "docker.io/${IMAGE_NAME}@sha256:%s " *)
+          set -euo pipefail
+          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing staging tag: $staging" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$staging" \
+            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
+            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+          evidence="$RUNNER_TEMP/search-agent-candidate-evidence"
+          mkdir -p "$evidence"
+          docker buildx imagetools inspect --raw "$staging" > "$evidence/candidate-index.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/search-agent-candidate-evidence/candidate-index.json`));
+          assert.equal(index.manifests.length, 2);
+          const members = new Map(index.manifests.map(entry => [`${entry.platform.os}/${entry.platform.architecture}`, entry.digest]));
+          assert.deepEqual([...members.keys()].sort(), ['linux/amd64', 'linux/arm64']);
+          assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
+          assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
+          NODE
+          candidate_digest="sha256:$(sha256sum "$evidence/candidate-index.json" | cut -d ' ' -f1)"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${candidate_digest}" > "$evidence/registry-index.json"
+          cmp "$evidence/candidate-index.json" "$evidence/registry-index.json"
+          printf '%s\n' "$candidate_digest" > "$evidence/digest.txt"
+          cp -R /tmp/search-agent-proofs "$evidence/native-proofs"
+          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          printf 'Proven candidate: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Inspect manifest
-        env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          docker buildx imagetools inspect "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" | tee /tmp/search-agent-manifest.txt
-          grep -q 'linux/amd64' /tmp/search-agent-manifest.txt
-          grep -q 'linux/arm64' /tmp/search-agent-manifest.txt
+      - name: Upload assembled candidate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: search-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/search-agent-candidate-evidence
+          if-no-files-found: error
+          retention-days: 30

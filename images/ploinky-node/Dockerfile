@@ -1,5 +1,4 @@
-ARG NODE_BASE=node:24-bookworm-slim
-FROM ${NODE_BASE}
+FROM docker.io/library/node:24.20.0-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0
 
 ENV DEBIAN_FRONTEND=noninteractive
 

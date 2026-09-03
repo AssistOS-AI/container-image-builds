@@ -1,75 +1,81 @@
-FROM docker.umami.is/umami-software/umami:3.2.0@sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec
-
-ARG TARGETARCH
-
-LABEL org.opencontainers.image.base.name="docker.umami.is/umami-software/umami:3.2.0"
-LABEL org.opencontainers.image.base.digest="sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec"
-LABEL io.assistos.umami.version="3.2.0"
-LABEL io.assistos.bun.version="1.3.14"
-LABEL io.assistos.umami-mcp.revision="3ab73beda2db0ebffb0b07439b218ef562107520"
-LABEL io.assistos.umami-mcp.bun-lock.sha256="92e41e798c3593657116f461377d92e8b74dbcf605f279e6e1832dbcfd0aa46f"
+FROM docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6 AS umami-build
 
 USER root
+WORKDIR /build
+ENV NODE_ENV=development \
+    BASE_PATH=/base-agent-additional-server/umamiAgent/3000 \
+    SKIP_BUILD_GEO=1 \
+    NEXT_TELEMETRY_DISABLED=1 \
+    DATABASE_URL=postgresql://user:pass@localhost:5432/dummy
 
-ENV BUN_INSTALL=/opt/bun
-ENV UMAMI_MCP_DIR=/opt/umami-mcp
-ENV PATH=/opt/bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/umami-agent-sources.json
+COPY sources.lock.json /tmp/umami-sources.lock.json
+COPY verify-build.mjs /tmp/verify-umami-build.mjs
+COPY patch-login-query-cache.mjs patch-metadata-assets.mjs verify-login-query-cache.mjs /tmp/
 
 RUN set -eux; \
-    apk add --no-cache \
-        'bash=5.3.9-r1' \
-        'ca-certificates=20260611-r0' \
-        'curl=8.21.0-r0' \
-        'git=2.54.0-r0' \
-        'postgresql18=18.4-r0' \
-        'postgresql18-client=18.4-r0' \
-        'postgresql18-contrib=18.4-r0' \
-        'su-exec=0.3-r0' \
-        'unzip=6.0-r16'; \
-    case "${TARGETARCH:-$(apk --print-arch)}" in \
-        amd64|x86_64) \
-            bun_asset='bun-linux-x64-musl.zip'; \
-            bun_dir='bun-linux-x64-musl'; \
-            bun_sha256='14bd9aedeebf1dba67e8def9531c89bc989ecfdf1de42e5bfcaf1b8cd9294719' \
-            ;; \
-        arm64|aarch64) \
-            bun_asset='bun-linux-aarch64-musl.zip'; \
-            bun_dir='bun-linux-aarch64-musl'; \
-            bun_sha256='b98e0ad3625c5c00d1d5b5ff55605c7adddbfae151861e68ade57b2d3b8703bb' \
-            ;; \
-        *) \
-            echo "unsupported Umami Agent build architecture: ${TARGETARCH:-$(apk --print-arch)}" >&2; \
-            exit 1 \
-            ;; \
-    esac; \
-    mkdir -p "${BUN_INSTALL}/bin" /tmp/bun; \
-    curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
-        --output /tmp/bun.zip \
-        "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/${bun_asset}"; \
-    printf '%s  %s\n' "${bun_sha256}" /tmp/bun.zip | sha256sum -c -; \
-    unzip -q /tmp/bun.zip -d /tmp/bun; \
-    install -m 0755 "/tmp/bun/${bun_dir}/bun" "${BUN_INSTALL}/bin/bun"; \
+    test "$(node --version)" = 'v22.23.1'; \
     test "$(bun --version)" = '1.3.14'; \
-    git init "${UMAMI_MCP_DIR}"; \
-    git -C "${UMAMI_MCP_DIR}" remote add origin https://github.com/MadsNyl/umami-mcp.git; \
-    git -C "${UMAMI_MCP_DIR}" fetch --no-tags origin 3ab73beda2db0ebffb0b07439b218ef562107520; \
-    git -C "${UMAMI_MCP_DIR}" checkout --detach FETCH_HEAD; \
-    test "$(git -C "${UMAMI_MCP_DIR}" rev-parse HEAD)" = '3ab73beda2db0ebffb0b07439b218ef562107520'; \
-    printf '%s  %s\n' \
-        '92e41e798c3593657116f461377d92e8b74dbcf605f279e6e1832dbcfd0aa46f' \
-        "${UMAMI_MCP_DIR}/bun.lock" | sha256sum -c -; \
-    cd "${UMAMI_MCP_DIR}"; \
-    bun install --frozen-lockfile; \
-    bun run build; \
-    test -f dist/index.js; \
-    rm -rf .git /root/.bun /tmp/*
+    test "$(postgres --version | cut -d ' ' -f 3)" = '18.4'; \
+    curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+      --output /tmp/umami-source.tar.gz \
+      https://codeload.github.com/umami-software/umami/tar.gz/2f6e2b5ff256862a081d9e74bed18a42ebf795e3; \
+    printf '%s  %s\n' 'faf2071ada0aef901f29d314eb1b1b2705698c5489df786d003dfd248bb7a0bd' /tmp/umami-source.tar.gz | sha256sum -c -; \
+    tar -xzf /tmp/umami-source.tar.gz --strip-components=1 -C /build; \
+    curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+      --output /tmp/pnpm.tgz https://registry.npmjs.org/pnpm/-/pnpm-10.15.1.tgz; \
+    printf '%s  %s\n' '8c53af02ae3ec1fb0ae75377f8d4d6217c2d7cbe6f03c16350cabf7493de6eff' /tmp/pnpm.tgz | sha256sum -c -; \
+    mkdir -p /opt/umami-build-tools/pnpm; \
+    tar -xzf /tmp/pnpm.tgz --strip-components=1 -C /opt/umami-build-tools/pnpm; \
+    test "$(node /opt/umami-build-tools/pnpm/bin/pnpm.cjs --version)" = '10.15.1'; \
+    node /tmp/verify-umami-build.mjs source /build /tmp/umami-sources.lock.json; \
+    node /tmp/patch-metadata-assets.mjs /build /tmp/umami-sources.lock.json; \
+    test -s /app/geo/GeoLite2-City.mmdb; \
+    mkdir -p /build/geo; \
+    cp -a /app/geo/. /build/geo/; \
+    cp docker/proxy.ts src/proxy.ts; \
+    node /opt/umami-build-tools/pnpm/bin/pnpm.cjs install --frozen-lockfile --prod=false; \
+    node /tmp/verify-login-query-cache.mjs /build /tmp/umami-sources.lock.json; \
+    NODE_ENV=production npm run build-docker; \
+    node /opt/umami-build-tools/pnpm/bin/pnpm.cjs prune --prod; \
+    mkdir /out; \
+    cp -a .next/standalone/. /out/; \
+    rm -rf /out/node_modules /out/public /out/scripts /out/prisma /out/generated /out/geo /out/.next/static; \
+    cp -a node_modules public scripts prisma prisma.config.ts generated geo package.json pnpm-lock.yaml pnpm-workspace.yaml /out/; \
+    cp -a .next/static /out/.next/static; \
+    cp .next/required-server-files.json /out/.next/required-server-files.json; \
+    cp ploinky-umami-source-patches.json /out/; \
+    node /tmp/verify-umami-build.mjs seal /out /tmp/umami-sources.lock.json /build
 
+FROM docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6
+
+USER root
+LABEL org.opencontainers.image.base.name="docker.io/assistos/umami-agent"
+LABEL org.opencontainers.image.base.digest="sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6"
+LABEL io.assistos.umami.version="3.2.0"
+LABEL io.assistos.umami.source.revision="2f6e2b5ff256862a081d9e74bed18a42ebf795e3"
+LABEL io.assistos.umami.source.modified="true"
+LABEL io.assistos.umami.base-path="/base-agent-additional-server/umamiAgent/3000"
+LABEL io.assistos.umami.pnpm-lock.sha256="b5ba02abd9e346194926658cbfecd95fe4c0a5c765d653a745cf3deb06ec8171"
+
+ENV NODE_ENV=production \
+    BASE_PATH=/base-agent-additional-server/umamiAgent/3000 \
+    NEXT_TELEMETRY_DISABLED=1
+
+# Replace the complete application; the immutable base supplies only the retained runtime stack.
+RUN rm -rf /app && mkdir /app
+COPY --from=umami-build --chown=1000:1000 /out/ /app/
+RUN mkdir -p /usr/local/share/ploinky \
+    && chown 0:0 /usr/local/share/ploinky \
+    && chmod 0755 /usr/local/share/ploinky
+COPY --chown=0:0 --chmod=0444 sources.lock.json /usr/local/share/ploinky/umami-agent-sources.json
+COPY --chown=0:0 --chmod=0444 smoke-runtime.mjs /usr/local/share/ploinky/smoke-umami-runtime.mjs
 RUN test -f /app/server.js \
     && test -f /app/scripts/update-tracker.js \
-    && test -f "${UMAMI_MCP_DIR}/dist/index.js" \
+    && test -f /app/node_modules/.bin/prisma \
+    && test -f /opt/umami-mcp/dist/index.js \
+    && test "$(node --version)" = 'v22.23.1' \
     && test "$(bun --version)" = '1.3.14' \
-    && test "$(postgres --version | cut -d ' ' -f 3)" = '18.4'
+    && test "$(postgres --version | cut -d ' ' -f 3)" = '18.4' \
+    && su-exec 1000:1000 node -e "for (const file of ['umami-agent-sources.json', 'smoke-umami-runtime.mjs']) require('fs').readFileSync('/usr/local/share/ploinky/' + file)"
 
 WORKDIR /code
