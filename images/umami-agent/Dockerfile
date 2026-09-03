@@ -10,6 +10,7 @@ ENV NODE_ENV=development \
 
 COPY sources.lock.json /tmp/umami-sources.lock.json
 COPY verify-build.mjs /tmp/verify-umami-build.mjs
+COPY patch-login-query-cache.mjs verify-login-query-cache.mjs /tmp/
 
 RUN set -eux; \
     test "$(node --version)" = 'v22.23.1'; \
@@ -27,11 +28,13 @@ RUN set -eux; \
     tar -xzf /tmp/pnpm.tgz --strip-components=1 -C /opt/umami-build-tools/pnpm; \
     test "$(node /opt/umami-build-tools/pnpm/bin/pnpm.cjs --version)" = '10.15.1'; \
     node /tmp/verify-umami-build.mjs source /build /tmp/umami-sources.lock.json; \
+    node /tmp/patch-login-query-cache.mjs /build /tmp/umami-sources.lock.json; \
     test -s /app/geo/GeoLite2-City.mmdb; \
     mkdir -p /build/geo; \
     cp -a /app/geo/. /build/geo/; \
     cp docker/proxy.ts src/proxy.ts; \
     node /opt/umami-build-tools/pnpm/bin/pnpm.cjs install --frozen-lockfile --prod=false; \
+    node /tmp/verify-login-query-cache.mjs /build /tmp/umami-sources.lock.json; \
     NODE_ENV=production npm run build-docker; \
     node /opt/umami-build-tools/pnpm/bin/pnpm.cjs prune --prod; \
     mkdir /out; \
@@ -40,7 +43,8 @@ RUN set -eux; \
     cp -a node_modules public scripts prisma prisma.config.ts generated geo package.json pnpm-lock.yaml pnpm-workspace.yaml /out/; \
     cp -a .next/static /out/.next/static; \
     cp .next/required-server-files.json /out/.next/required-server-files.json; \
-    node /tmp/verify-umami-build.mjs seal /out /tmp/umami-sources.lock.json
+    cp ploinky-umami-source-patches.json /out/; \
+    node /tmp/verify-umami-build.mjs seal /out /tmp/umami-sources.lock.json /build
 
 FROM docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6
 
@@ -49,6 +53,7 @@ LABEL org.opencontainers.image.base.name="docker.io/assistos/umami-agent"
 LABEL org.opencontainers.image.base.digest="sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6"
 LABEL io.assistos.umami.version="3.2.0"
 LABEL io.assistos.umami.source.revision="2f6e2b5ff256862a081d9e74bed18a42ebf795e3"
+LABEL io.assistos.umami.source.modified="true"
 LABEL io.assistos.umami.base-path="/base-agent-additional-server/umamiAgent/3000"
 LABEL io.assistos.umami.pnpm-lock.sha256="b5ba02abd9e346194926658cbfecd95fe4c0a5c765d653a745cf3deb06ec8171"
 

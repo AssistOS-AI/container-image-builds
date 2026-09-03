@@ -55,7 +55,8 @@ manifests remain separate authorized operations.
 
 ## Umami agent supply chain
 
-Umami 3.2.0 is compiled from its exact upstream source with
+Umami 3.2.0 is compiled from its checksum-pinned upstream source plus the
+explicit `login-query-cache` patch with
 `BASE_PATH=/base-agent-additional-server/umamiAgent/3000`. This matches the
 existing Router publication. The UmamiAgent ingress restores that prefix after
 Router forwarding, while Next listens only on `127.0.0.1:3001` behind the agent's
@@ -69,7 +70,7 @@ override those selections.
 | Input | Immutable selection | Contract |
 | --- | --- | --- |
 | Runtime and build tools | `docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6` | Both native manifests and image configs are pinned in the lock. This retains Node 22.23.1, Bun 1.3.14, PostgreSQL 18.4, and the existing MCP installation. |
-| Umami source | `umami-software/umami` commit `2f6e2b5ff256862a081d9e74bed18a42ebf795e3` (3.2.0) | The archive SHA-256 and relevant source file hashes are verified before the upstream `build-docker` script runs. |
+| Umami source | `umami-software/umami` commit `2f6e2b5ff256862a081d9e74bed18a42ebf795e3` (3.2.0), with the recorded login cache patch | The archive and original source hashes are verified before patching. The patch script and resulting LoginForm hashes are pinned separately before the upstream `build-docker` script runs. |
 | Dependencies | pnpm 10.15.1 and upstream `pnpm-lock.yaml` SHA-256 `b5ba02abd9e346194926658cbfecd95fe4c0a5c765d653a745cf3deb06ec8171` | The package manager archive is checksum-pinned; installation is frozen. Production dependencies and Prisma are retained for the normal database migration command. |
 | `MadsNyl/umami-mcp` | Commit `3ab73beda2db0ebffb0b07439b218ef562107520` | The immutable runtime retains its frozen Bun installation; publication verifies its inherited revision and lock labels. |
 | GeoIP | Existing `/app/geo/GeoLite2-City.mmdb` from each pinned runtime manifest | Upstream `SKIP_BUILD_GEO=1` avoids a mutable download. The seal verifies the copied database matches the original bytes. |
@@ -77,10 +78,20 @@ override those selections.
 The final stage removes the old `/app` completely and installs the source-built
 standalone server, static assets, public files, scripts, Prisma artifacts, and
 production dependencies. `/app/ploinky-umami-build.json` binds the compiled
-base path, source revision, lockfile, server, tracker, and GeoIP hashes. The
+base path, upstream source revision, applied patch identity and receipt,
+lockfile, server, tracker, and GeoIP hashes. The seal also checks the actual
+patched build source. The
 image also carries the source lock at
 `/usr/local/share/ploinky/umami-agent-sources.json`. The retained runtime base
 and rebuilt application ancestry are recorded separately.
+
+The login patch cancels only an outstanding `['login']` verification and seeds
+that query with the successful login response's user before publishing the user
+or navigating. This prevents an earlier or late verification 401 from forcing
+a full login-page reload after authentication. Each native build executes the
+actual original and patched submit handlers against its frozen Query Core
+5.101.0 dependency, proving both failure cases and preservation of unrelated
+queries. The image is explicitly labeled as modified upstream source.
 
 Publication is manual and builds on native amd64 and arm64 runners. Each exact
 native digest must pass a network-isolated, UID 1000, capability-free runtime

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const [mode, directory, lockPath] = process.argv.slice(2);
+const [mode, directory, lockPath, sourceDirectory] = process.argv.slice(2);
 const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
 const sha = filename => crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
 assert.equal(lock.schemaVersion, 2);
@@ -17,6 +17,17 @@ if (mode === 'source') {
     }
 } else {
     assert.equal(mode, 'seal');
+    assert.ok(sourceDirectory, 'the seal requires the actual patched build source');
+    const patchReceipt = path.join(directory, 'ploinky-umami-source-patches.json');
+    assert.deepEqual(JSON.parse(fs.readFileSync(patchReceipt)), {
+        upstreamSourceCommit: lock.umami.commit,
+        upstreamSourceArchiveSha256: lock.umami.sourceArchive.sha256,
+        sourcePatches: lock.umami.sourcePatches,
+    });
+    assert.equal(lock.umami.sourcePatches.length, 1);
+    for (const patch of lock.umami.sourcePatches) {
+        assert.equal(sha(path.join(sourceDirectory, patch.target)), patch.patchedSha256, 'actual source compiled with the reviewed patch');
+    }
     const required = path.join(directory, '.next/required-server-files.json');
     const config = JSON.parse(fs.readFileSync(required)).config;
     assert.equal(config.basePath, lock.umami.basePath);
@@ -29,6 +40,7 @@ if (mode === 'source') {
     const metadata = {
         schema: 'ploinky.umami-build/v1', version: lock.umami.version,
         sourceCommit: lock.umami.commit, sourceArchiveSha256: lock.umami.sourceArchive.sha256,
+        sourcePatches: lock.umami.sourcePatches, sourcePatchReceiptSha256: sha(patchReceipt),
         basePath: lock.umami.basePath, runtimeBaseImage: lock.runtimeBase.image,
         pnpmVersion: lock.umami.pnpm.version, pnpmLockSha256: lock.umami.sourceFiles['pnpm-lock.yaml'],
         requiredServerFilesSha256: sha(required), standaloneServerSha256: sha(path.join(directory, 'server.js')),

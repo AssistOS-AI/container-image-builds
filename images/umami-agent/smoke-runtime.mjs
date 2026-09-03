@@ -22,6 +22,14 @@ export function verifyBuildMetadata(app, lock) {
     assert.equal(metadata.version, '3.2.0');
     assert.equal(metadata.sourceCommit, lock.umami.commit);
     assert.equal(metadata.sourceArchiveSha256, lock.umami.sourceArchive.sha256);
+    assert.deepEqual(metadata.sourcePatches, lock.umami.sourcePatches);
+    const patchReceipt = path.join(app, 'ploinky-umami-source-patches.json');
+    assert.equal(metadata.sourcePatchReceiptSha256, sha(patchReceipt));
+    assert.deepEqual(readJson(patchReceipt), {
+        upstreamSourceCommit: lock.umami.commit,
+        upstreamSourceArchiveSha256: lock.umami.sourceArchive.sha256,
+        sourcePatches: lock.umami.sourcePatches,
+    });
     assert.equal(metadata.basePath, BASE_PATH);
     assert.equal(metadata.runtimeBaseImage, lock.runtimeBase.image);
     assert.equal(metadata.pnpmVersion, lock.umami.pnpm.version);

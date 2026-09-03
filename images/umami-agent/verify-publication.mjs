@@ -59,6 +59,7 @@ export function verifyNativeProof(directory, architecture, identity, sources = l
     assert.equal(labels['org.opencontainers.image.revision'], identity.sha);
     assert.equal(labels['org.opencontainers.image.base.digest'], sources.runtimeBase.indexDigest);
     assert.equal(labels['io.assistos.umami.source.revision'], sources.umami.commit);
+    assert.equal(labels['io.assistos.umami.source.modified'], 'true');
     assert.equal(labels['io.assistos.umami.base-path'], BASE_PATH);
     assert.equal(labels['io.assistos.umami-mcp.revision'], sources.umamiMcp.commit);
     assert.equal(labels['io.assistos.umami-mcp.bun-lock.sha256'], sources.umamiMcp.bunLockSha256);
@@ -79,6 +80,8 @@ export function verifyNativeProof(directory, architecture, identity, sources = l
     assert.equal(smoke.metadata.basePath, BASE_PATH);
     assert.equal(smoke.metadata.sourceCommit, sources.umami.commit);
     assert.equal(smoke.metadata.sourceArchiveSha256, sources.umami.sourceArchive.sha256);
+    assert.deepEqual(smoke.metadata.sourcePatches, sources.umami.sourcePatches);
+    assert.match(smoke.metadata.sourcePatchReceiptSha256, /^[a-f0-9]{64}$/);
     assert.equal(smoke.metadata.pnpmLockSha256, sources.umami.sourceFiles['pnpm-lock.yaml']);
     assert.equal(smoke.metadata.runtimeBaseImage, sources.runtimeBase.image);
     const kinds = new Set();

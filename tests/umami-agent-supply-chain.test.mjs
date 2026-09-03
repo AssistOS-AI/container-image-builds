@@ -14,6 +14,7 @@ const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const dockerfile = read('images/umami-agent/Dockerfile');
 const workflow = read('.github/workflows/publish-umami-agent-image.yml');
 const sources = JSON.parse(read('images/umami-agent/sources.lock.json'));
+const originalLoginForm = read('tests/fixtures/umami-login/LoginForm.tsx');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const digest = character => 'sha256:' + character.repeat(64);
 const write = (directory, name, value) => {
@@ -116,6 +117,7 @@ function application(t) {
     const directory = temp(t);
     const lock = structuredClone(sources);
     const files = { 'package.json': '{"version":"3.2.0"}', 'pnpm-lock.yaml': 'exact-lock', 'server.js': 'standalone',
+        'src/app/login/LoginForm.tsx': originalLoginForm,
         'public/script.js': 'tracker', 'geo/GeoLite2-City.mmdb': 'retained-geo',
         '.next/required-server-files.json': JSON.stringify({ config: { basePath: BASE_PATH, assetPrefix: BASE_PATH, env: { basePath: BASE_PATH }, output: 'standalone' } }) };
     for (const [name, value] of Object.entries(files)) write(directory, name, value);
@@ -123,13 +125,16 @@ function application(t) {
     lock.umami.geo.path = path.join(directory, 'original-geo');
     write(directory, 'original-geo', 'retained-geo');
     write(directory, 'lock.json', lock);
-    const run = mode => spawnSync(process.execPath, [path.join(root, 'images/umami-agent/verify-build.mjs'), mode, directory, path.join(directory, 'lock.json')], { encoding: 'utf8' });
+    const run = mode => spawnSync(process.execPath, mode === 'patch'
+        ? [path.join(root, 'images/umami-agent/patch-login-query-cache.mjs'), directory, path.join(directory, 'lock.json')]
+        : [path.join(root, 'images/umami-agent/verify-build.mjs'), mode, directory, path.join(directory, 'lock.json'), directory], { encoding: 'utf8' });
     return { directory, lock, run };
 }
 
 test('source and artifact seals bind actual bytes and never overwrite a prior seal', t => {
     const { directory, lock, run } = application(t);
     assert.equal(run('source').status, 0);
+    assert.equal(run('patch').status, 0);
     assert.equal(run('seal').status, 0);
     verifyBuildMetadata(directory, lock);
     assert.notEqual(run('seal').status, 0);
@@ -137,18 +142,24 @@ test('source and artifact seals bind actual bytes and never overwrite a prior se
     assert.throws(() => verifyBuildMetadata(directory, lock));
     assert.notEqual(run('source').status, 0);
 });
-for (const field of ['geo', 'basePath', 'lock', 'tracker']) test(`artifact verification rejects ${field} drift`, t => {
+for (const field of ['geo', 'basePath', 'lock', 'tracker', 'patch receipt']) test(`artifact verification rejects ${field} drift`, t => {
     const { directory, lock, run } = application(t);
+    assert.equal(run('patch').status, 0);
     assert.equal(run('seal').status, 0);
     if (field === 'geo') write(directory, 'geo/GeoLite2-City.mmdb', 'changed');
     if (field === 'tracker') write(directory, 'public/script.js', 'changed');
     if (field === 'lock') write(directory, 'pnpm-lock.yaml', 'changed');
     if (field === 'basePath') write(directory, '.next/required-server-files.json', { config: { basePath: '' } });
+    if (field === 'patch receipt') {
+        fs.unlinkSync(path.join(directory, 'ploinky-umami-source-patches.json'));
+        write(directory, 'ploinky-umami-source-patches.json', { sourcePatches: [] });
+    }
     assert.throws(() => verifyBuildMetadata(directory, lock));
 });
 
 test('seal itself rejects old root-base output and replaced GeoIP', t => {
     const { directory, run } = application(t);
+    assert.equal(run('patch').status, 0);
     write(directory, 'geo/GeoLite2-City.mmdb', 'other-geo');
     assert.notEqual(run('seal').status, 0);
     write(directory, 'geo/GeoLite2-City.mmdb', 'retained-geo');
@@ -156,6 +167,36 @@ test('seal itself rejects old root-base output and replaced GeoIP', t => {
     required.config.basePath = '';
     write(directory, '.next/required-server-files.json', required);
     assert.notEqual(run('seal').status, 0);
+});
+
+test('login source patch rejects changed upstream bytes, changed patch identity, and repeat application', t => {
+    const { directory, lock, run } = application(t);
+    const target = 'src/app/login/LoginForm.tsx';
+    assert.equal(hash(originalLoginForm), sources.umami.sourceFiles[target]);
+    write(directory, target, originalLoginForm + '\n');
+    assert.notEqual(run('patch').status, 0);
+    assert.ok(!fs.existsSync(path.join(directory, 'ploinky-umami-source-patches.json')));
+    write(directory, target, originalLoginForm);
+    const changedLock = structuredClone(lock);
+    changedLock.umami.sourcePatches[0].sha256 = 'f'.repeat(64);
+    write(directory, 'lock.json', changedLock);
+    assert.notEqual(run('patch').status, 0);
+    assert.equal(fs.readFileSync(path.join(directory, target), 'utf8'), originalLoginForm);
+    write(directory, 'lock.json', lock);
+    assert.equal(run('patch').status, 0);
+    const patched = fs.readFileSync(path.join(directory, target), 'utf8');
+    assert.equal(hash(patched), lock.umami.sourcePatches[0].patchedSha256);
+    assert.notEqual(run('patch').status, 0);
+    assert.equal(fs.readFileSync(path.join(directory, target), 'utf8'), patched);
+});
+
+test('build seal refuses missing patch proof and source changed after patching', t => {
+    const { directory, run } = application(t);
+    assert.notEqual(run('seal').status, 0);
+    assert.equal(run('patch').status, 0);
+    write(directory, 'src/app/login/LoginForm.tsx', originalLoginForm);
+    assert.notEqual(run('seal').status, 0);
+    assert.ok(!fs.existsSync(path.join(directory, 'ploinky-umami-build.json')));
 });
 
 function index(arch, image = digest(arch === 'amd64' ? 'a' : 'b')) {
@@ -198,6 +239,7 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
     const inspect = [{ Architecture: 'amd64', Os: 'linux', Id: digest('e'), Config: { Labels: {
         'org.opencontainers.image.revision': identity.sha, 'org.opencontainers.image.base.digest': sources.runtimeBase.indexDigest,
         'io.assistos.umami.source.revision': sources.umami.commit, 'io.assistos.umami.base-path': BASE_PATH,
+        'io.assistos.umami.source.modified': 'true',
         'io.assistos.umami-mcp.revision': sources.umamiMcp.commit, 'io.assistos.umami-mcp.bun-lock.sha256': sources.umamiMcp.bunLockSha256,
         'io.assistos.bun.version': sources.bun.version,
     } } }];
@@ -205,6 +247,7 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
     const smoke = { schema: 'ploinky.umami-image-smoke/v1', passed: true, uid: 1000, capabilityEffective: '0', noNewPrivileges: true,
         listener: '127.0.0.1:3001', databaseMigration: true, loginHttp: 200, heartbeatHttp: 200, authLoginHttp: 200, authVerifyHttp: 200,
         trackerHttp: 200, unprefixedNextHttp: 404, metadata: { basePath: BASE_PATH, sourceCommit: sources.umami.commit,
+            sourcePatches: sources.umami.sourcePatches, sourcePatchReceiptSha256: 'f'.repeat(64),
             sourceArchiveSha256: sources.umami.sourceArchive.sha256, pnpmLockSha256: sources.umami.sourceFiles['pnpm-lock.yaml'], runtimeBaseImage: sources.runtimeBase.image },
         assets: ['script', 'css'].map(kind => ({ kind, path: BASE_PATH + '/_next/' + kind, bytes: 100, sha256: 'f'.repeat(64) })) };
     write(directory, 'runtime-smoke.json', smoke);
@@ -214,7 +257,9 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
         assert.throws(() => verifyNativeProof(directory, 'amd64', identity));
     }
     write(directory, 'source-evidence.json', source);
-    for (const change of [{ authLoginHttp: 500 }, { passed: false }, { uid: 0 }, { assets: [] }]) {
+    for (const change of [{ authLoginHttp: 500 }, { passed: false }, { uid: 0 }, { assets: [] },
+        { metadata: { ...smoke.metadata, sourcePatches: [] } },
+        { metadata: { ...smoke.metadata, sourcePatchReceiptSha256: undefined } }]) {
         write(directory, 'runtime-smoke.json', { ...smoke, ...change });
         assert.throws(() => verifyNativeProof(directory, 'amd64', identity));
     }
