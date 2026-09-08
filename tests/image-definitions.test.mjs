@@ -366,28 +366,32 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
     assert.match(gptSmoke, /"network":"none","readiness":true,"minimalTask":true/);
 });
 
-test('livekit workflow builds source checkout with centralized Dockerfile', () => {
+test('livekit workflow builds the relocated Explorer source with centralized Dockerfile', () => {
     const workflow = read('.github/workflows/publish-livekit-server-agent.yml');
     const dockerfile = read('images/livekit-server-agent/Dockerfile');
 
-    assert.match(workflow, /repository:\s*AssistOS-AI\/webmeetInfra/);
-    assert.match(workflow, /path:\s*sources\/webmeetInfra/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/AssistOSExplorer/);
+    assert.match(workflow, /path:\s*sources\/AssistOSExplorer/);
+    assert.match(workflow, /ref:\s*\$\{\{ inputs\.source_ref \}\}/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
     assert.match(workflow, /egress_image:[\s\S]*?required:\s*true/);
     assert.match(workflow, /docker\\\.io\/assistos\/livekit-egress@sha256/);
     assert.doesNotMatch(workflow, /source_ref:[\s\S]*?default:\s*['"]?main/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
-    assert.match(workflow, /refs\/heads\/ploinky-proxy/);
-    assert.doesNotMatch(workflow, /refs\/heads\/ploinky-box/);
-    assert.match(workflow, /git -C sources\/webmeetInfra rev-parse HEAD/);
-    assert.match(workflow, /context:\s*\.\/sources\/webmeetInfra\/liveKitServerAgent/);
+    assert.match(workflow, /refs\/heads\/main/);
+    assert.doesNotMatch(workflow, /webmeetInfra|ploinky-proxy|refs\/heads\/ploinky-box/);
+    assert.match(workflow, /git -C sources\/AssistOSExplorer rev-parse HEAD/);
+    assert.match(workflow, /context:\s*\.\/sources\/AssistOSExplorer\/liveKitServerAgent/);
     assert.match(workflow, /file:\s*\.\/images\/livekit-server-agent\/Dockerfile/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/livekit-server-agent/);
+    assert.match(workflow, /default: 'webmeet-infra'/);
+    assert.match(workflow, /type=raw,value=\$\{\{ env\.IMAGE_TAG \}\}-\$\{\{ steps\.source\.outputs\.sha \}\}/);
+    assert.match(workflow, /platforms: linux\/amd64,linux\/arm64/);
     assert.match(workflow, /docker\/login-action@v3/);
     assert.match(workflow, /- name: Build and push\s+id: build\s+uses: docker\/build-push-action@v6/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
     assert.match(workflow, /Smoke build local architecture/);
-    assert.match(workflow, /docker build[\s\S]*sources\/webmeetInfra\/liveKitServerAgent/);
+    assert.match(workflow, /docker build[\s\S]*sources\/AssistOSExplorer\/liveKitServerAgent/);
     assert.match(workflow, /for binary in livekit-server egress redis-server pulseaudio setpriv ps node npm git g\+\+ getent ip make curl nc tini/);
     assert.match(dockerfile, /Acquire::Retries "10"/);
     assert.match(dockerfile, /Acquire::https::Timeout "60"/);

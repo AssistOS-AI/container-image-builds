@@ -18,7 +18,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/roboteam-desktop:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-browser:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.browser` | `publish-roboteam-agent-image.yml` |
 | `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
-| `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeetInfra` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
+| `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/AssistOSExplorer` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus immutable `AssistOS-AI/ploinky` and lock-selected `AssistOS-AI/MCPSDK` commits | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
@@ -40,14 +40,23 @@ read-only runtime mount. Native architecture images are published by immutable
 digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
-current tip of `webmeetInfra/ploinky-proxy`. It builds and smoke-tests the local
-architecture before authenticating and publishing the multiarchitecture image.
+current tip of `AssistOSExplorer/main`, its default branch. The checkout lives at
+`sources/AssistOSExplorer`; both builds use its `liveKitServerAgent` directory
+with this repository's centralized Dockerfile. It builds and smoke-tests the
+local architecture before authenticating and publishing the multiarchitecture
+image.
 Its three base images are pinned by manifest-list digest, and Ubuntu package
 resolution is pinned to a dated repository snapshot with exact direct-package
 versions. The pinned `libc-bin` package and both build-time and workflow smoke
 gates guarantee that the startup script's `getent` dependency is present.
 
-The LiveKit workflow keeps its stable release tag and
+Merge the relocated `liveKitServerAgent` source into `AssistOSExplorer/main`
+and integrate this workflow change before removing the old source from
+`webmeetInfra`. Select the resulting current `AssistOSExplorer/main` SHA when
+dispatching a future build. The source move itself does not require publication
+or a change to existing consumer image digests.
+
+The LiveKit workflow keeps its stable `webmeet-infra` release tag and
 also exposes the pushed multiarchitecture manifest digest as the `publish` job's
 `digest` output. Each workflow validates that build output as an exact sha256
 digest and writes the resulting `docker.io/assistos/...@sha256:...` reference
@@ -483,9 +492,13 @@ gh workflow run publish-bwrap-runner.yml \
   -f achilles_cli_ref="$(git -C ../AchillesCLI rev-parse HEAD)" \
   -f promote_stable=false
 
+# Use an AssistOSExplorer checkout at the current origin/main tip.
+# LIVEKIT_EGRESS_IMAGE must be the verified patched Egress multiarchitecture
+# index reference: docker.io/assistos/livekit-egress@sha256:<64 lowercase hex>.
 gh workflow run publish-livekit-server-agent.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref="$(git -C ../webmeetInfra rev-parse HEAD)" \
+  -f source_ref="$(git -C ../AssistOSExplorer rev-parse HEAD)" \
+  -f egress_image="${LIVEKIT_EGRESS_IMAGE:?Set the verified patched Egress index reference}" \
   -f image_tag=webmeet-infra
 
 gh workflow run publish-soul-gateway-image.yml \

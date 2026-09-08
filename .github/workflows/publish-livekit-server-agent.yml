@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'Exact 40-character commit SHA at the tip of AssistOS-AI/webmeetInfra ploinky-proxy'
+        description: 'Exact 40-character commit SHA at the tip of AssistOS-AI/AssistOSExplorer main'
         required: true
         type: string
       egress_image:
@@ -53,25 +53,25 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout webmeetInfra source
+      - name: Checkout AssistOSExplorer source
         uses: actions/checkout@v4
         with:
-          repository: AssistOS-AI/webmeetInfra
+          repository: AssistOS-AI/AssistOSExplorer
           ref: ${{ inputs.source_ref }}
-          path: sources/webmeetInfra
+          path: sources/AssistOSExplorer
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Verify ploinky-proxy source tip
+      - name: Verify main source tip
         id: source
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
-          actual_sha="$(git -C sources/webmeetInfra rev-parse HEAD)"
-          branch_sha="$(git -C sources/webmeetInfra ls-remote --exit-code origin refs/heads/ploinky-proxy | awk '{print $1}')"
+          actual_sha="$(git -C sources/AssistOSExplorer rev-parse HEAD)"
+          branch_sha="$(git -C sources/AssistOSExplorer ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
           test "$actual_sha" = "$SOURCE_REF"
           if [ "$actual_sha" != "$branch_sha" ]; then
-            echo "source_ref must be the current tip of webmeetInfra/ploinky-proxy" >&2
+            echo "source_ref must be the current tip of AssistOSExplorer/main" >&2
             exit 1
           fi
           echo "sha=${actual_sha:0:12}" >> "$GITHUB_OUTPUT"
@@ -83,7 +83,7 @@ jobs:
             --build-arg LIVEKIT_EGRESS_IMAGE="$LIVEKIT_EGRESS_IMAGE" \
             -f images/livekit-server-agent/Dockerfile \
             -t "$IMAGE_NAME:smoke" \
-            sources/webmeetInfra/liveKitServerAgent
+            sources/AssistOSExplorer/liveKitServerAgent
           docker run --rm --entrypoint sh "$IMAGE_NAME:smoke" -c '
             set -eu
             for binary in livekit-server egress redis-server pulseaudio setpriv ps node npm git g++ getent ip make curl nc tini; do
@@ -126,7 +126,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./sources/webmeetInfra/liveKitServerAgent
+          context: ./sources/AssistOSExplorer/liveKitServerAgent
           file: ./images/livekit-server-agent/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
