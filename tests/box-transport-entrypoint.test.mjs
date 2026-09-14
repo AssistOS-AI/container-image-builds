@@ -19,6 +19,8 @@ test('ploinky-box image consumes only the canonical entrypoint and sealed runtim
         'COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint',
         'COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json',
         'COPY sources/ploinky/ploinky-box/mcp-sdk-bundle.mjs /tmp/mcp-sdk-bundle.mjs',
+        'COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json',
+        'COPY sources/ploinky/agentlib/image-bundle.mjs sources/ploinky/agentlib/contract.mjs sources/ploinky/agentlib/fingerprint.mjs sources/ploinky/agentlib/source.mjs /usr/local/share/ploinky/agentlib/',
         'COPY sources/ploinky/core-services/webtty/package.json /tmp/webtty-build/package.json',
         'COPY sources/ploinky/core-services/webtty/package-lock.json /tmp/webtty-build/package-lock.json',
         'COPY sources/ploinky/core-services/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs',

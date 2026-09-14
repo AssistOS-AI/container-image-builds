@@ -157,6 +157,31 @@ RUN node /tmp/mcp-sdk-bundle.mjs verify --source /tmp/mcp-sdk
 
 USER root
 
+# A missing workspace checkout uses this immutable, lock-selected AgentLib.
+# Its source and metadata are outside both /opt/ploinky host mounts, and the
+# build-only Git checkout is removed before any bytes enter the runtime image.
+FROM prepared-rootfs-base AS agentlib-builder
+
+COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json
+COPY sources/ploinky/agentlib/image-bundle.mjs sources/ploinky/agentlib/contract.mjs sources/ploinky/agentlib/fingerprint.mjs sources/ploinky/agentlib/source.mjs /usr/local/share/ploinky/agentlib/
+COPY sources/achillesAgentLib /opt/ploinky-agentlib
+
+RUN node /usr/local/share/ploinky/agentlib/image-bundle.mjs prepare \
+        --source /opt/ploinky-agentlib \
+        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
+        --commit "$(node -p 'require("/tmp/ploinky-box-dependencies.lock.json").repositories.achillesAgentLib.commit')" \
+    && rm -rf /opt/ploinky-agentlib/.git \
+    && chown -R 0:0 /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib \
+    && find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib -type d -exec chmod 0555 {} + \
+    && find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib -type f -exec chmod a-w {} +
+
+USER podman
+RUN node /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
+        --source /opt/ploinky-agentlib \
+        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json
+
+USER root
+
 # node-pty is compiled in the exact Fedora/Node runtime it will execute in.
 # Compiler state and the npm build workspace remain confined to this stage.
 FROM prepared-rootfs-base AS webtty-builder
@@ -213,6 +238,8 @@ FROM prepared-rootfs-base AS prepared-rootfs
 
 COPY --from=mcp-sdk-builder /tmp/mcp-sdk /usr/local/lib/ploinky/mcp-sdk
 COPY --from=mcp-sdk-builder /tmp/mcp-sdk-bundle.mjs /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs
+COPY --from=agentlib-builder /opt/ploinky-agentlib /opt/ploinky-agentlib
+COPY --from=agentlib-builder /usr/local/share/ploinky/agentlib /usr/local/share/ploinky/agentlib
 COPY --from=webtty-builder /usr/local/lib/ploinky/webtty/node_modules /usr/local/lib/ploinky/webtty/node_modules
 COPY --from=webtty-builder /usr/local/share/ploinky/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs
 COPY --from=webtty-builder /usr/local/share/ploinky/webtty/runtime-contract.json /usr/local/share/ploinky/webtty/runtime-contract.json
@@ -245,6 +272,9 @@ RUN chown -R 0:0 \
         -print -quit | grep -q . \
     && test ! -e /tmp/webtty-build \
     && test ! -e /usr/local/lib/ploinky/mcp-sdk/.git \
+    && test ! -e /opt/ploinky-agentlib/.git \
+    && ! find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib \
+        \( ! -user root -o ! -group root -o \( ! -type l -a -perm /022 \) \) -print -quit | grep -q . \
     && ! find /usr/local/lib/ploinky/mcp-sdk -type l -print -quit | grep -q . \
     && test "$(find /usr/local/lib/ploinky/webtty -type f -name '*.node' | wc -l)" -eq 1
 
@@ -252,6 +282,9 @@ USER podman
 WORKDIR /workspace
 RUN node /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs verify \
         --source /usr/local/lib/ploinky/mcp-sdk \
+    && node /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
+        --source /opt/ploinky-agentlib \
+        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
     && node /usr/local/share/ploinky/webtty/native-probe.mjs --verify
 
 USER root

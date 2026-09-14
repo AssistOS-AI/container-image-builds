@@ -23,6 +23,14 @@ async function fixture(t) {
     fs.mkdirSync(webtty, { recursive: true });
     fs.writeFileSync(path.join(webtty, 'native-probe.mjs'), '// Selected immutable source fixture.\n');
     fs.writeFileSync(path.join(webtty, 'package-lock.json'), '{}\n');
+    fs.mkdirSync(path.join(source, 'agentlib'));
+    for (const name of ['image-bundle.mjs', 'contract.mjs', 'fingerprint.mjs', 'source.mjs']) {
+        fs.writeFileSync(path.join(source, 'agentlib', name), `// Immutable ${name} fixture.\n`);
+    }
+    fs.mkdirSync(path.join(source, 'ploinky-box'));
+    writeJson(path.join(source, 'ploinky-box/dependencies.lock.json'), { repositories: {
+        achillesAgentLib: { url: 'https://github.com/AssistOS-AI/AchillesAgentLib.git', commit: '9'.repeat(40) },
+    } });
     // The selected Ploinky source owns native capability validation. This fixture
     // rejects a failed capability so publication cannot silently bypass that call.
     fs.writeFileSync(path.join(webtty, 'native-runtime.mjs'), `
@@ -56,6 +64,9 @@ async function fixture(t) {
         };
         writeJson(path.join(dir, 'native-probe.json'), probe);
         writeJson(path.join(dir, 'immutable-webtty.json'), { probeSha256: context.probeSha256, contract: probe });
+        const agentLib = { schemaVersion: 1, commit: context.agentLibCommit, fingerprint: '8'.repeat(64) };
+        writeJson(path.join(dir, 'agentlib-probe.json'), agentLib);
+        writeJson(path.join(dir, 'immutable-agentlib.json'), { moduleSha256: context.agentLibModuleSha256, contract: agentLib });
         writeJson(path.join(dir, 'native-proof.json'), verifyNativeEvidence(dir, arch, digests[arch], context));
     }
     const index = {
@@ -100,6 +111,12 @@ test('different image digest, architecture, probe bytes, source, or sealed contr
         ['immutable-webtty.json', (v) => { v.probeSha256 = '0'.repeat(64); }],
         ['immutable-webtty.json', (v) => { v.contract.nativeArtifactSha256 = '0'.repeat(64); }],
         ['native-probe.json', (v) => { v.sourceSha = '0'.repeat(40); }],
+        ['agentlib-probe.json', (v) => { v.commit = '0'.repeat(40); }],
+        ['agentlib-probe.json', (v) => { v.schemaVersion = 0; }],
+        ['agentlib-probe.json', (v) => { v.fingerprint = ''; }],
+        ['immutable-agentlib.json', (v) => { v.moduleSha256['image-bundle.mjs'] = '0'.repeat(64); }],
+        ['immutable-agentlib.json', (v) => { v.moduleSha256['source.mjs'] = '0'.repeat(64); }],
+        ['immutable-agentlib.json', (v) => { v.contract.fingerprint = '0'.repeat(64); }],
     ];
     for (const [name, change] of changes) {
         const file = path.join(f.dir, name);
@@ -155,6 +172,32 @@ function stepBody(name) {
     const step = workflow.slice(start, end < 0 ? undefined : end);
     return step.split('        run: |\n')[1].split('\n').map((line) => line.startsWith('          ') ? line.slice(10) : line).join('\n').trim();
 }
+
+test('the workflow resolves only an exact GitHub AgentLib lock pin', async (t) => {
+    const f = await fixture(t);
+    const lockFile = path.join(f.source, 'ploinky-box/dependencies.lock.json');
+    const lock = readJson(lockFile);
+    const output = path.join(f.root, 'agentlib-output');
+    const run = () => spawnSync('bash', ['-e', '-c', stepBody('Resolve immutable AgentLib input from the Ploinky lock')], {
+        cwd: f.root, env: { ...f.env, GITHUB_OUTPUT: output }, encoding: 'utf8', timeout: 15000,
+    });
+    assert.equal(run().status, 0);
+    assert.equal(fs.readFileSync(output, 'utf8'), `repository=AssistOS-AI/AchillesAgentLib\ncommit=${'9'.repeat(40)}\n`);
+    fs.rmSync(output);
+    for (const repository of [
+        null,
+        { ...lock.repositories.achillesAgentLib, commit: 'master' },
+        { ...lock.repositories.achillesAgentLib, commit: 'a'.repeat(64) },
+        { ...lock.repositories.achillesAgentLib, url: 'https://token@github.com/AssistOS-AI/AchillesAgentLib.git' },
+        { ...lock.repositories.achillesAgentLib, url: 'https://github.com/AssistOS-AI/AchillesAgentLib.git\ncommit=evil' },
+    ]) {
+        writeJson(lockFile, { repositories: { achillesAgentLib: repository } });
+        const result = run();
+        assert.notEqual(result.status, 0, `accepted ${JSON.stringify(repository)}`);
+        assert.match(result.stderr, /no valid immutable AgentLib input/);
+        assert.equal(fs.existsSync(output), false);
+    }
+});
 
 test('the actual candidate shell writes only its run-scoped tag and retains verified evidence', async (t) => {
     const f = await fixture(t);

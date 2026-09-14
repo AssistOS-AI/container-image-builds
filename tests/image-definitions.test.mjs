@@ -505,6 +505,7 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.equal(fromInstructions.at(-1)?.source.trim(), 'FROM scratch AS runtime');
     assert.match(dockerfile, /^FROM \$PODMAN_BASE AS prepared-rootfs-base$/m);
     assert.match(dockerfile, /^FROM prepared-rootfs-base AS mcp-sdk-builder$/m);
+    assert.match(dockerfile, /^FROM prepared-rootfs-base AS agentlib-builder$/m);
     assert.match(dockerfile, /^FROM prepared-rootfs-base AS webtty-builder$/m);
     assert.match(dockerfile, /^FROM prepared-rootfs-base AS prepared-rootfs$/m);
     assert.match(dockerfile, /^COPY --from=prepared-rootfs \/ \/$/m);
@@ -605,6 +606,15 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.match(dockerfile, /COPY --from=mcp-sdk-builder \/tmp\/mcp-sdk-bundle\.mjs \/usr\/local\/share\/ploinky\/mcp-sdk\/bundle-contract\.mjs/);
     assert.match(dockerfile, /test ! -e \/usr\/local\/lib\/ploinky\/mcp-sdk\/\.git/);
     assert.match(dockerfile, /mcp-sdk\/bundle-contract\.mjs verify[\s\S]*?--source \/usr\/local\/lib\/ploinky\/mcp-sdk/);
+    assert.match(dockerfile, /^COPY sources\/achillesAgentLib \/opt\/ploinky-agentlib$/m);
+    assert.match(dockerfile, /image-bundle\.mjs prepare[\s\S]*?--source \/opt\/ploinky-agentlib[\s\S]*?--metadata \/usr\/local\/share\/ploinky\/agentlib\/runtime-contract\.json[\s\S]*?repositories\.achillesAgentLib\.commit/);
+    assert.match(dockerfile, /rm -rf \/opt\/ploinky-agentlib\/\.git/);
+    assert.match(dockerfile, /chown -R 0:0 \/opt\/ploinky-agentlib \/usr\/local\/share\/ploinky\/agentlib/);
+    assert.match(dockerfile, /find \/opt\/ploinky-agentlib \/usr\/local\/share\/ploinky\/agentlib -type f -exec chmod a-w/);
+    assert.match(dockerfile, /USER podman\nRUN node \/usr\/local\/share\/ploinky\/agentlib\/image-bundle\.mjs verify/);
+    assert.match(dockerfile, /COPY --from=agentlib-builder \/opt\/ploinky-agentlib \/opt\/ploinky-agentlib/);
+    assert.match(dockerfile, /COPY --from=agentlib-builder \/usr\/local\/share\/ploinky\/agentlib \/usr\/local\/share\/ploinky\/agentlib/);
+    assert.match(dockerfile, /test ! -e \/opt\/ploinky-agentlib\/\.git/);
     assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/package\.json \/tmp\/webtty-build\/package\.json$/m);
     assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/package-lock\.json \/tmp\/webtty-build\/package-lock\.json$/m);
     assert.match(dockerfile, /^COPY sources\/ploinky\/core-services\/webtty\/native-probe\.mjs \/usr\/local\/share\/ploinky\/webtty\/native-probe\.mjs$/m);
@@ -650,6 +660,13 @@ test('ploinky-box publishes proven native candidates before explicit promotion',
     assert.match(buildJob, /repository: \$\{\{ steps\.mcp_sdk\.outputs\.repository \}\}/);
     assert.match(buildJob, /ref: \$\{\{ steps\.mcp_sdk\.outputs\.commit \}\}/);
     assert.match(buildJob, /git -C sources\/mcp-sdk rev-parse HEAD/);
+    assert.match(buildJob, /Resolve immutable AgentLib input from the Ploinky lock/);
+    assert.match(buildJob, /repository: \$\{\{ steps\.agentlib\.outputs\.repository \}\}/);
+    assert.match(buildJob, /ref: \$\{\{ steps\.agentlib\.outputs\.commit \}\}/);
+    assert.match(buildJob, /git -C sources\/achillesAgentLib rev-parse HEAD/);
+    assert.match(buildJob, /image-bundle\.mjs verify[\s\S]*?--expected-commit "\$AGENTLIB_SHA"/);
+    assert.match(buildJob, /agentlib-probe\.json/);
+    assert.match(buildJob, /immutable-agentlib\.json/);
     assert.match(buildJob, /persist-credentials: false/);
     assert.match(buildJob, /git[\s\S]*?status[\s\S]*?--porcelain=v1/);
     assert.match(read('.gitignore'), /^sources\/$/m);

@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPOSITORY = 'docker.io/assistos/ploinky-box';
 const ARCHITECTURES = ['amd64', 'arm64'];
-const RAW_FILES = ['image-inspect.json', 'immutable-webtty.json', 'native-probe.json'];
+const RAW_FILES = ['image-inspect.json', 'immutable-webtty.json', 'native-probe.json', 'agentlib-probe.json', 'immutable-agentlib.json'];
+const AGENTLIB_MODULES = ['image-bundle.mjs', 'contract.mjs', 'fingerprint.mjs', 'source.mjs'];
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
@@ -14,12 +15,17 @@ export async function publicationContext(sourceRoot, env = process.env) {
     for (const value of [env.SOURCE_SHA, env.GITHUB_SHA]) assert.match(value || '', /^[0-9a-f]{40}$/);
     for (const value of [env.GITHUB_RUN_ID, env.GITHUB_RUN_ATTEMPT]) assert.match(value || '', /^[1-9][0-9]*$/);
     const { validateNativeProbeResult } = await import(pathToFileURL(path.resolve(sourceRoot, 'core-services/webtty/native-runtime.mjs')));
+    const agentLib = readJson(path.join(sourceRoot, 'ploinky-box/dependencies.lock.json')).repositories?.achillesAgentLib;
+    assert.match(agentLib?.commit || '', /^[0-9a-f]{40}$/);
     return {
         sourceCommit: env.SOURCE_SHA,
         imageDefinitionsCommit: env.GITHUB_SHA,
         workflow: { runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT },
         probeSha256: sha256(fs.readFileSync(path.join(sourceRoot, 'core-services/webtty/native-probe.mjs'))),
         packageLockSha256: sha256(fs.readFileSync(path.join(sourceRoot, 'core-services/webtty/package-lock.json'))),
+        agentLibCommit: agentLib.commit,
+        agentLibModuleSha256: Object.fromEntries(AGENTLIB_MODULES.map((name) => [name,
+            sha256(fs.readFileSync(path.join(sourceRoot, 'agentlib', name)))])),
         verifierSha256: sha256(fs.readFileSync(fileURLToPath(import.meta.url))),
         validateNativeProbeResult,
     };
@@ -46,6 +52,13 @@ export function verifyNativeEvidence(directory, architecture, digest, context) {
     assert.deepEqual(Object.keys(immutable).sort(), ['contract', 'probeSha256']);
     assert.equal(immutable.probeSha256, context.probeSha256, 'image probe differs from selected source');
     assert.deepEqual(immutable.contract, probe, 'runtime proof differs from the sealed build contract');
+    const agentLib = readJson(path.join(directory, 'agentlib-probe.json'));
+    assert.equal(agentLib.schemaVersion, 1);
+    assert.equal(agentLib.commit, context.agentLibCommit, 'image AgentLib differs from the selected dependency lock');
+    assert.match(agentLib.fingerprint || '', /^[0-9a-f]{64}$/);
+    const immutableAgentLib = readJson(path.join(directory, 'immutable-agentlib.json'));
+    assert.deepEqual(immutableAgentLib.moduleSha256, context.agentLibModuleSha256, 'image AgentLib verifier differs from selected source');
+    assert.deepEqual(immutableAgentLib.contract, agentLib, 'AgentLib proof differs from the sealed build contract');
     const evidenceSha256 = Object.fromEntries(RAW_FILES.map((name) => [name, sha256(fs.readFileSync(path.join(directory, name)))]));
     return {
         schema: 'ploinky.box.native-publication/v1',
@@ -55,6 +68,8 @@ export function verifyNativeEvidence(directory, architecture, digest, context) {
         image: { repository: REPOSITORY, digest, configDigest: image.Id, platform: `linux/${architecture}` },
         probeSha256: context.probeSha256,
         packageLockSha256: context.packageLockSha256,
+        agentLibModuleSha256: context.agentLibModuleSha256,
+        agentLib,
         verifierSha256: context.verifierSha256,
         evidenceSha256,
         native: probe,

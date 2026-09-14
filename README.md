@@ -297,8 +297,8 @@ archive utilities, `less`, `file`, `which`, `tree`, `nano`/`vi`, and network
 diagnostics (`ss`, `ping`, `dig`, `host`, `nslookup`, `nc`, `netstat`, `lsof`).
 The Dockerfile requires every advertised command during both native builds.
 Ploinky source is mounted read-only at `/opt/ploinky`; the Dockerfile copies its
-canonical `ploinky-box/entrypoint/ploinky-box-entrypoint`, MCP SDK bundle
-contract and dependency lock, and the three exact native-package inputs
+canonical `ploinky-box/entrypoint/ploinky-box-entrypoint`, MCP SDK and AgentLib bundle
+contracts and dependency lock, and the three exact native-package inputs
 described below. It does not retain Router or application source, or a separate
 image-repository entrypoint implementation.
 
@@ -309,6 +309,23 @@ the final image re-verifies the sealed tree as the unprivileged runtime user.
 Box startup performs no MCP SDK Git or npm operation: it transactionally copies
 the verified image bundle into the workspace-backed dependency cache and
 repairs a missing, stale, or modified cache copy from those local bytes.
+
+AchillesAgentLib is packaged at `/opt/ploinky-agentlib` from the exact commit in
+the selected Ploinky source's `ploinky-box/dependencies.lock.json`. The builder
+requires a clean checkout, records its content fingerprint outside the source
+at `/usr/local/share/ploinky/agentlib/runtime-contract.json`, removes Git
+metadata, preserves license notices, and seals the source as root-owned files
+that the runtime user cannot modify. The immutable verification modules remain
+beside that metadata; they work before the host Ploinky mount exists. Both the
+builder and final image verify the bundle as the unprivileged runtime user.
+
+A valid `<workspace>/achillesAgentLib` checkout mounts read-only over the image
+bundle. If that checkout is absent, Ploinky uses the bundle directly without
+cloning on the host. An invalid local checkout remains an error. An image
+bundle that disagrees with the host Ploinky lock must be replaced with a
+compatible image; startup does not fetch another revision. See
+[`dependencies.md`](dependencies.md) for the bundle's dependency and license
+record.
 
 The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
@@ -383,7 +400,7 @@ dependency state is missing or corrupt. Outer candidate and replacement cleanup
 includes anonymous volumes only.
 
 First boot generates a mode-restricted workspace master key, validates the
-direct AgentLib mount selected by the host, and materializes the lock-pinned MCP
+selected local AgentLib mount or compatible image bundle, and materializes the lock-pinned MCP
 SDK from the image bundle without network access. The key never crosses from
 the host, is not printed, and is excluded from nested agents. It remains stable
 with the host workspace because it is stored under `/workspace/.ploinky`.
@@ -409,12 +426,12 @@ destroy path.
 ## Ploinky box publication
 
 Manual dispatch requires one exact 40-character Ploinky commit in `source_ref`.
-The workflow verifies that immutable source checkout, the lock-selected MCP SDK,
+The workflow verifies that immutable source checkout, the lock-selected MCP SDK and AgentLib,
 and its own image-definition checkout are clean and at the requested revisions.
 `promote_stable=false` is the default; only an explicit `true` can move `latest`
 and the `runtime` compatibility alias after candidate verification.
 
-Each native architecture job preserves the Dockerfile's SDK and WebTTY build
+Each native architecture job preserves the Dockerfile's SDK, AgentLib, and WebTTY build
 checks, pushes one image by immutable digest, and runs the image's own WebTTY
 `--verify` probe as UID/GID 1000 with no network, no capabilities, no new
 privileges, and a read-only rootfs. Its retained evidence includes the exact
@@ -422,6 +439,10 @@ image configuration, probe result, sealed contract, source-probe fingerprint,
 source and workflow commits, and run/attempt identity. The selected Ploinky
 source validator must accept every PTY capability, and the image probe bytes,
 source SHA, package lock, native architecture, and sealed contract must match.
+The same confined runtime verifies the AgentLib tree and lock commit, and the
+retained evidence binds its fingerprint, sealed metadata, and verification
+module hashes to the selected Ploinky source. Missing or changed AgentLib
+evidence prevents candidate publication.
 These package capability checks do not execute the full Box lifecycle, sibling
 repository tests, or browser E2E; those acceptance gates remain separate.
 

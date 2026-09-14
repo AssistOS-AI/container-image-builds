@@ -97,10 +97,38 @@ jobs:
           persist-credentials: false
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
+      - name: Resolve immutable AgentLib input from the Ploinky lock
+        id: agentlib
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const lock = JSON.parse(fs.readFileSync('sources/ploinky/ploinky-box/dependencies.lock.json'));
+          const repository = lock?.repositories?.achillesAgentLib;
+          if (!repository
+              || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(repository.url)
+              || !/^[0-9a-f]{40}$/.test(repository.commit)) {
+            throw new Error('Ploinky dependency lock has no valid immutable AgentLib input');
+          }
+          const slug = repository.url.slice('https://github.com/'.length, -'.git'.length);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `repository=${slug}\ncommit=${repository.commit}\n`);
+          NODE
+
+      - name: Checkout immutable AgentLib source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ steps.agentlib.outputs.repository }}
+          ref: ${{ steps.agentlib.outputs.commit }}
+          path: sources/achillesAgentLib
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
       - name: Verify exact clean build inputs
         env:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
           MCP_SDK_SHA: ${{ steps.mcp_sdk.outputs.commit }}
+          AGENTLIB_SHA: ${{ steps.agentlib.outputs.commit }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -109,6 +137,8 @@ jobs:
           test -z "$(git -C sources/ploinky status --porcelain=v1)"
           test "$(git -C sources/mcp-sdk rev-parse HEAD)" = "$MCP_SDK_SHA"
           test -z "$(git -C sources/mcp-sdk status --porcelain=v1)"
+          test "$(git -C sources/achillesAgentLib rev-parse HEAD)" = "$AGENTLIB_SHA"
+          test -z "$(git -C sources/achillesAgentLib status --porcelain=v1)"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -136,6 +166,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
           ARCH: ${{ matrix.arch }}
+          AGENTLIB_SHA: ${{ steps.agentlib.outputs.commit }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -151,6 +182,22 @@ jobs:
             --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/node)
           "${runtime[@]}" "$image" /usr/local/share/ploinky/webtty/native-probe.mjs --verify \
             > "$evidence/native-probe.json" 2> "$evidence/native-probe.stderr"
+          "${runtime[@]}" "$image" /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
+            --source /opt/ploinky-agentlib \
+            --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
+            --expected-commit "$AGENTLIB_SHA" \
+            > "$evidence/agentlib-probe.json" 2> "$evidence/agentlib-probe.stderr"
+          "${runtime[@]}" "$image" --input-type=module -e '
+            import fs from "node:fs";
+            import crypto from "node:crypto";
+            const root = "/usr/local/share/ploinky/agentlib/";
+            const modules = ["image-bundle.mjs", "contract.mjs", "fingerprint.mjs", "source.mjs"];
+            console.log(JSON.stringify({
+              moduleSha256: Object.fromEntries(modules.map(name => [name,
+                crypto.createHash("sha256").update(fs.readFileSync(root + name)).digest("hex")])),
+              contract: JSON.parse(fs.readFileSync(root + "runtime-contract.json")),
+            }));
+          ' > "$evidence/immutable-agentlib.json"
           "${runtime[@]}" "$image" --input-type=module -e '
             import fs from "node:fs";
             import crypto from "node:crypto";
