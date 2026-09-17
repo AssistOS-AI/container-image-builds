@@ -544,7 +544,6 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.match(dockerfile, /printf 'assistos\/ploinky-box\\n' > \/etc\/ploinky-box/);
     for (const ownedTarget of [
         '/opt/ploinky/node_modules',
-        '/workspace',
         '/run/ploinky',
         '/home/podman/.config/containers',
         '/home/podman/.local/share/containers/storage',
@@ -554,8 +553,13 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     }
     assert.match(
         dockerfile,
-        /chown -R podman:podman[\s\S]*?\/opt\/ploinky[\s\S]*?\/workspace[\s\S]*?\/run\/ploinky[\s\S]*?\/home\/podman\/\.config[\s\S]*?\/home\/podman\/\.local\/share\/containers[\s\S]*?\/home\/podman\/\.local\/share\/ploinky-images/,
+        /chown -R podman:podman[\s\S]*?\/opt\/ploinky[\s\S]*?\/run\/ploinky[\s\S]*?\/home\/podman\/\.config[\s\S]*?\/home\/podman\/\.local\/share\/containers[\s\S]*?\/home\/podman\/\.local\/share\/ploinky-images/,
     );
+    // The immutable image carries no workspace path. The supervisor supplies
+    // the selected host path as the bind destination, working directory, and
+    // PLOINKY_WORKSPACE_ROOT of each created Box.
+    assert.doesNotMatch(dockerfile, /(?:^|\s)\/workspace(?:\s|\/|$)/m);
+    assert.doesNotMatch(dockerfile, /PLOINKY_WORKSPACE_ROOT=/);
     assert.match(dockerfile, /chmod 0700 \/run\/ploinky/);
     assert.match(
         dockerfile,
@@ -586,7 +590,6 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     for (const requiredEnv of [
         'USER=podman',
         'HOME=/home/podman',
-        'PLOINKY_WORKSPACE_ROOT=/workspace',
         'PLOINKY_DISABLE_HOST_SANDBOX=1',
         'container=oci',
         '_CONTAINERS_USERNS_CONFIGURED=""',
@@ -639,7 +642,14 @@ test('ploinky-box image is a source-owned rootless Podman appliance', () => {
     assert.equal(fs.existsSync(path.join(repoRoot, 'images/ploinky-box/entrypoint.sh')), false);
     assert.doesNotMatch(dockerfile, /COPY images\/ploinky-box\/entrypoint\.sh/);
     assert.match(dockerfile, /^USER podman$/m);
-    assert.match(dockerfile, /^WORKDIR \/workspace$/m);
+    const runtimeStage = dockerfile.slice(dockerfile.indexOf('FROM scratch AS runtime'));
+    assert.match(runtimeStage, /^USER podman\nWORKDIR \/\nENTRYPOINT \["\/usr\/local\/bin\/ploinky-box-entrypoint"\]$/m);
+    const runtimeInstructions = dockerfileInstructions(runtimeStage);
+    assert.deepEqual(
+        runtimeInstructions.filter(({ keyword }) => keyword === 'WORKDIR').map(({ source }) => source.trim()),
+        ['WORKDIR /'],
+    );
+    assert.equal(instructions.some(({ keyword, source }) => keyword === 'WORKDIR' && /\/workspace\b/.test(source)), false);
     assert.match(dockerfile, /^ENTRYPOINT \["\/usr\/local\/bin\/ploinky-box-entrypoint"\]$/m);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'VOLUME').length, 0);
     assert.equal(instructions.filter(({ keyword }) => keyword === 'EXPOSE').length, 0);

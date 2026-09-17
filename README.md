@@ -362,16 +362,23 @@ clean `FROM scratch` stage. Its metadata is exact:
 | Image labels | None |
 | Marker | `/etc/ploinky-box` contains exactly `assistos/ploinky-box` followed by one newline |
 | User | `podman` |
-| Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_WORKSPACE_ROOT=/workspace`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
+| Environment | `USER=podman`, `HOME=/home/podman`, `PLOINKY_DISABLE_HOST_SANDBOX=1`, `container=oci`, `_CONTAINERS_USERNS_CONFIGURED=`, `BUILDAH_ISOLATION=chroot` |
 | `PATH` | `/opt/ploinky/bin:/usr/local/bin:/usr/bin` |
-| Working directory | `/workspace` |
+| Working directory | `/` |
 | Entrypoint | `/usr/local/bin/ploinky-box-entrypoint` |
 | Default command | Absent |
 | Declared image volumes | Absent |
 
+The image contains no workspace path. The supervisor mounts the selected host
+workspace `W` read-write at the same absolute path `W` inside the Box, and gives
+each created Box `--workdir W` and `PLOINKY_WORKSPACE_ROOT=W`. The entrypoint
+rejects a missing root, a working directory other than the root, or a root that
+does not resolve to itself before it prepares anything. Boxes and images from
+the former fixed `/workspace` layout are incompatible and must be recreated.
+
 The host workspace, reusable image content, and pinned dependencies outlive one
-outer Box. The supervisor mounts the host workspace at `/workspace` and
-bind-mounts two workspace-backed cache directories: `.ploinky/box/dependencies` at
+outer Box. Besides the workspace bind, the supervisor bind-mounts two
+workspace-backed cache directories: `.ploinky/box/dependencies` at
 `/opt/ploinky/node_modules` and `.ploinky/box/images` at
 `/home/podman/.local/share/ploinky-images`. The workspace and both cache binds
 survive stop, destroy, replacement, and recreation.
@@ -383,14 +390,14 @@ the outer Box:
 | --- | --- |
 | `/home/podman/.local/share/ploinky-images` | Workspace-backed host bind from `.ploinky/box/images`; downloaded image content only |
 | `/opt/ploinky/node_modules` | Workspace-backed host bind from `.ploinky/box/dependencies`; pinned dependency cache |
-| `/workspace` | Durable host bind; user and agent data |
+| The selected workspace path | Durable host bind at the same absolute path; user and agent data |
 | `/home/podman/.local/share/containers/storage` | Box writable layer; nested container records, writable layers, and inner named volumes |
 | `/tmp/storage-run-1000` | Box tmpfs; reset on every startup |
 
 The entrypoint renders `/home/podman/.config/containers/storage.conf` before the
 first inner Podman call, pointing `imagestore` at the durable cache while
 `graphroot` stays on the disposable writable layer with `transient_store`
-enabled. Persistent agent data therefore belongs in `/workspace` binds, never in
+enabled. Persistent agent data therefore belongs in workspace binds, never in
 inner Podman named volumes.
 
 The first mutating call from a markerless workspace creates only an empty host
@@ -403,7 +410,7 @@ First boot generates a mode-restricted workspace master key, validates the
 selected local AgentLib mount or compatible image bundle, and materializes the lock-pinned MCP
 SDK from the image bundle without network access. The key never crosses from
 the host, is not printed, and is excluded from nested agents. It remains stable
-with the host workspace because it is stored under `/workspace/.ploinky`.
+with the host workspace because it is stored under `<workspace>/.ploinky`.
 Manual key edits and in-place rotation are unsupported; a new key requires a
 distinct host workspace identity and migration of non-secret data only.
 

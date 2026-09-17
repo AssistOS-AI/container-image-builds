@@ -43,12 +43,25 @@ if (status.state !== 'running-initialized' || !box?.id || !engine?.name) {
     throw new Error(`the owned Ploinky Box must be running and initialized (current state: ${status.state})`);
 }
 
-const inBoxScript = `/workspace/${relativeRepository.split(path.sep).join('/')}/scripts/install-roboteam-local-in-box.sh`;
+// The Box mounts the selected workspace at its own absolute path, so the
+// installer runs from that path rather than a fixed in-Box location.
+// Containment is checked on canonical paths; the in-Box path keeps the
+// selected workspace spelling that the Box mounts.
+const boxWorkspaceRoot = String(status.identity?.workspaceRoot || '');
+if (!path.isAbsolute(boxWorkspaceRoot)) {
+    throw new Error('the owned Ploinky Box did not report its workspace path');
+}
+const boxRelativeRepository = path.relative(fs.realpathSync(boxWorkspaceRoot), fs.realpathSync(repositoryRoot));
+if (!boxRelativeRepository || boxRelativeRepository === '..'
+    || boxRelativeRepository.startsWith(`..${path.sep}`) || path.isAbsolute(boxRelativeRepository)) {
+    throw new Error('container-image-builds must be inside the selected Ploinky Box workspace');
+}
+const inBoxScript = path.join(boxWorkspaceRoot, boxRelativeRepository, 'scripts', 'install-roboteam-local-in-box.sh');
 const result = spawnSync(engine.name, [
     'container', 'exec',
     '--interactive',
     '--user', 'podman',
-    '--workdir', '/workspace',
+    '--workdir', boxWorkspaceRoot,
     box.id,
     '/bin/bash', inBoxScript, target,
 ], {

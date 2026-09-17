@@ -95,18 +95,20 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # .ploinky/box/dependencies. /home/podman/.local/share/containers/storage is left
 # on the container writable layer so every nested container record, writable
 # layer, and inner named volume dies with the outer Box.
+#
+# The image has no workspace directory: the supervisor binds each selected host
+# workspace at its own absolute path and supplies that path as the Box working
+# directory and PLOINKY_WORKSPACE_ROOT when it creates the container.
 RUN rm -f /home/podman/.config/containers/containers.conf \
         /home/podman/.config/containers/storage.conf \
     && mkdir -p \
         /opt/ploinky/node_modules \
-        /workspace \
         /run/ploinky \
         /home/podman/.config/containers \
         /home/podman/.local/share/containers/storage \
         /home/podman/.local/share/ploinky-images \
     && chown -R podman:podman \
         /opt/ploinky \
-        /workspace \
         /run/ploinky \
         /home/podman/.config \
         /home/podman/.local/share/containers \
@@ -279,7 +281,7 @@ RUN chown -R 0:0 \
     && test "$(find /usr/local/lib/ploinky/webtty -type f -name '*.node' | wc -l)" -eq 1
 
 USER podman
-WORKDIR /workspace
+WORKDIR /
 RUN node /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs verify \
         --source /usr/local/lib/ploinky/mcp-sdk \
     && node /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
@@ -302,12 +304,13 @@ RUN rpm --setcaps shadow-utils
 ENV PATH=/opt/ploinky/bin:/usr/local/bin:/usr/bin \
     USER=podman \
     HOME=/home/podman \
-    PLOINKY_WORKSPACE_ROOT=/workspace \
     PLOINKY_DISABLE_HOST_SANDBOX=1 \
     container=oci \
     _CONTAINERS_USERNS_CONFIGURED="" \
     BUILDAH_ISOLATION=chroot
 
+# A neutral working directory: each created Box receives --workdir and
+# PLOINKY_WORKSPACE_ROOT set to its selected host workspace path.
 USER podman
-WORKDIR /workspace
+WORKDIR /
 ENTRYPOINT ["/usr/local/bin/ploinky-box-entrypoint"]

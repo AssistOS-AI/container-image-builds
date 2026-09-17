@@ -153,6 +153,10 @@ test('local development installer builds in the owned Box and streams GUI images
     assert.match(localInstaller, /createBoxSupervisor/);
     assert.match(localInstaller, /running-initialized/);
     assert.match(localInstaller, /container', 'exec'/);
+    // The Box mounts the selected workspace at its own path: no fixed in-Box root.
+    assert.match(localInstaller, /status\.identity\?\.workspaceRoot/);
+    assert.match(localInstaller, /'--workdir', boxWorkspaceRoot/);
+    assert.doesNotMatch(localInstaller, /\/workspace\b/);
     assert.doesNotMatch(localInstaller, /--privileged|docker\.sock|podman\.sock/);
     assert.match(localInBoxInstaller, /podman build --pull=missing/);
     assert.match(localInBoxInstaller, /podman save "\$image" \| podman exec --interactive "\$outer_container" \/usr\/bin\/podman load/);
