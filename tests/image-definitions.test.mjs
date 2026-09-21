@@ -153,31 +153,28 @@ test('llm-runtime-cpu workflow builds the real CPU runtime image', () => {
     assert.match(dockerfile, /\/models\/derived/);
 });
 
-test('default-local-llm workflow publishes the Qwen2.5 Coder image as multi-arch', () => {
-    const workflow = read('.github/workflows/publish-default-local-llm-image.yml');
-    const dockerfile = read('images/default-local-llm/Dockerfile');
+test('default-local-llm image and publication workflow are retired', () => {
+    const readme = read('README.md');
+    const workflowsDir = path.join(repoRoot, '.github/workflows');
 
-    assert.match(workflow, /IMAGE_NAME:\s*assistos\/default-local-llm/);
-    assert.match(workflow, /default:\s*cpu-qwen25-coder-1\.5b/);
-    assert.match(workflow, /default:\s*bartowski\/Qwen2\.5-Coder-1\.5B-Instruct-GGUF/);
-    assert.match(workflow, /default:\s*Qwen2\.5-Coder-1\.5B-Instruct-Q4_K_M\.gguf/);
-    assert.match(workflow, /runner:\s*ubuntu-24\.04/);
-    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
-    assert.match(workflow, /push-by-digest=true/);
-    assert.match(workflow, /docker run --rm "docker\.io\/\$\{IMAGE_NAME\}@\$\{\{ steps\.build\.outputs\.digest \}\}"/);
-    assert.match(workflow, /docker buildx imagetools create/);
-    assert.match(workflow, /grep -q 'linux\/amd64'/);
-    assert.match(workflow, /grep -q 'linux\/arm64'/);
-
-    assert.match(dockerfile, /^ARG BASE_IMAGE=docker\.io\/assistos\/ploinky-node:24-bookworm-tools$/m);
-    assert.match(dockerfile, /^ARG MODEL_REPO=bartowski\/Qwen2\.5-Coder-1\.5B-Instruct-GGUF$/m);
-    assert.match(dockerfile, /^ARG MODEL_FILE=Qwen2\.5-Coder-1\.5B-Instruct-Q4_K_M\.gguf$/m);
-    assert.match(dockerfile, /GGML_NATIVE=OFF/);
-    assert.match(dockerfile, /llama-server/);
-    assert.match(dockerfile, /^USER root$/m);
-    assert.match(dockerfile, /^USER 1000:1000$/m);
-    assert.match(workflow, /test "\$\(id -u\):\$\(id -g\)" = 1000:1000/);
-    assert.match(workflow, /bwrap --version/);
+    assert.equal(fs.existsSync(path.join(repoRoot, 'images/default-local-llm')), false);
+    assert.equal(
+        fs.existsSync(path.join(workflowsDir, 'publish-default-local-llm-image.yml')),
+        false,
+    );
+    for (const name of fs.readdirSync(workflowsDir)) {
+        const workflow = read(path.join('.github/workflows', name));
+        assert.doesNotMatch(workflow, /default-local-llm/i, name);
+    }
+    assert.doesNotMatch(readme, /publish-default-local-llm-image|images\/default-local-llm/);
+    assert.doesNotMatch(readme, /assistos\/default-local-llm:/);
+    assert.match(readme, /`assistos\/llm-runtime-cpu:[^`]+`.*`publish-llm-runtime-cpu-image\.yml`/);
+    assert.match(readme, /gh workflow run publish-llm-runtime-cpu-image\.yml/);
+    assert.equal(
+        fs.existsSync(path.join(workflowsDir, 'publish-llm-runtime-cpu-image.yml')),
+        true,
+    );
+    assert.equal(fs.existsSync(path.join(repoRoot, 'images/llm-runtime-cpu/Dockerfile')), true);
 });
 
 test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivileged runtime', () => {

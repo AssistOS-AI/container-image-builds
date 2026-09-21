@@ -12,7 +12,6 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
-| `assistos/default-local-llm:cpu-qwen25-coder-1.5b` | `AssistOS-AI/proxies` | `default-local-llm` | `images/default-local-llm/Dockerfile` | `publish-default-local-llm-image.yml` |
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-desktop:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
@@ -21,6 +20,10 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/AssistOSExplorer` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus immutable `AssistOS-AI/ploinky` and lock-selected `AssistOS-AI/MCPSDK` commits | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+
+The former `assistos/default-local-llm` image is retired and no longer built
+here; already published tags are not deleted from the registry. The optional
+`llm-runtime-cpu` image remains available.
 
 The `bwrap-runner` workflow checks out exact full-SHA `basic`, `copilot-agents`,
 and `AchillesCLI` inputs under `sources/`; the latter two supply the Open
@@ -502,12 +505,6 @@ gh workflow run publish-llm-runtime-cpu-image.yml \
   -f llama_cpp_ref=b6412 \
   -f image_tag=cpu-arm64-smoke \
   -f platforms=linux/arm64
-
-gh workflow run publish-default-local-llm-image.yml \
-  --repo AssistOS-AI/container-image-builds \
-  -f image_tag=cpu-qwen25-coder-1.5b \
-  -f model_repo=bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF \
-  -f model_file=Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf
 
 gh workflow run publish-umami-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
