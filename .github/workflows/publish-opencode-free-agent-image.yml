@@ -1,0 +1,246 @@
+name: Publish OpenCode Free agent image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-opencode-free-agent-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/opencode-free-agent
+  BASE_IMAGE: docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
+
+jobs:
+  build:
+    name: Build and prove ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable base and workflow inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(sed -n '1s/^FROM //; 1p' images/opencode-free-agent/Dockerfile)" = "$BASE_IMAGE"
+          test "$(grep -c '^FROM ' images/opencode-free-agent/Dockerfile)" = 1
+          node --test --test-name-pattern=opencode-free-agent tests/image-definitions.test.mjs tests/opencode-free-image-proof.test.mjs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push native architecture by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/opencode-free-agent
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
+          provenance: false
+
+      - name: Prove the confined OpenCode CLI in the exact native digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="docker.io/${IMAGE_NAME}@${DIGEST}"
+          evidence="$RUNNER_TEMP/opencode-free-agent-proof-${EXPECTED_ARCH}"
+          mkdir -p "$evidence"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$EXPECTED_ARCH"
+          docker image inspect "$image" > "$evidence/image-inspect.json"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
+          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
+            --volume "$PWD/images/opencode-free-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
+            --entrypoint node "$image" /smoke-runtime.mjs \
+            2> >(tee "$evidence/runtime-diagnostics.log" >&2) \
+            | tee "$evidence/runtime.json"
+          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
+            --entrypoint cat "$image" /opt/opencode-free/source.contract \
+            | tee "$evidence/source.contract"
+          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
+          SOURCE_CONTRACT_FILE="$evidence/source.contract" node --input-type=module <<'NODE' > "$evidence/source-evidence.json"
+          import fs from 'node:fs';
+          const contract = Object.fromEntries(fs.readFileSync(process.env.SOURCE_CONTRACT_FILE, 'utf8').trim().split('\n')
+            .map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+          process.stdout.write(JSON.stringify({
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            architecture: process.env.EXPECTED_ARCH,
+            baseImage: process.env.BASE_IMAGE,
+            cliVersion: contract.cli_version,
+            releaseAsset: contract.release_asset,
+            releaseAssetSha256: contract.release_asset_sha256,
+            binarySha256: contract.binary_sha256,
+            imageDigest: process.env.DIGEST,
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Upload architecture proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: opencode-free-agent-proof-${{ matrix.arch }}
+          path: ${{ runner.temp }}/opencode-free-agent-proof-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble:
+    name: Assemble proven multiarchitecture candidate
+    needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.candidate.outputs.digest }}
+    steps:
+      - name: Download native architecture proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: opencode-free-agent-proof-*
+          path: /tmp/opencode-free-agent-proofs
+
+      - name: Verify both successful architecture proofs
+        id: digests
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const root = '/tmp/opencode-free-agent-proofs';
+          const releases = {
+            amd64: { asset: 'opencode-linux-x64.tar.gz',
+              assetSha256: 'e9312be75ed803b7415fc2aeabda1f4fe938912a39673762dc0c38c0e11ebde4',
+              binarySha256: 'f9dab32248695e9ebd56b16a1921798fd85112cf5a69c7dfd0cabc1e17be4a11' },
+            arm64: { asset: 'opencode-linux-arm64.tar.gz',
+              assetSha256: 'd4e332f46b227448582c0d9fc75f6f826dfe95c9f751bc2011fc4d937a042be6',
+              binarySha256: '82ab43b7e8b7d931c26ba170c90de6082a2e2af8fc84a9ce9a506357b91160d7' },
+          };
+          const expectedTools = ['bash', 'edit', 'glob', 'grep', 'invalid', 'question', 'read',
+            'skill', 'task', 'todowrite', 'webfetch', 'websearch', 'write'];
+          assert.deepEqual(fs.readdirSync(root).sort(), ['opencode-free-agent-proof-amd64', 'opencode-free-agent-proof-arm64']);
+          const digests = [];
+          for (const arch of ['amd64', 'arm64']) {
+            const directory = `${root}/opencode-free-agent-proof-${arch}`;
+            const digest = fs.readFileSync(`${directory}/digest.txt`, 'utf8').trim();
+            const source = JSON.parse(fs.readFileSync(`${directory}/source-evidence.json`));
+            const runtime = JSON.parse(fs.readFileSync(`${directory}/runtime.json`));
+            const images = JSON.parse(fs.readFileSync(`${directory}/image-inspect.json`));
+            assert.match(digest, /^sha256:[0-9a-f]{64}$/);
+            assert.equal(source.imageDigest, digest);
+            assert.equal(source.architecture, arch);
+            assert.equal(source.workflowSha, process.env.GITHUB_SHA);
+            assert.equal(source.baseImage, process.env.BASE_IMAGE);
+            assert.equal(source.workflowRunId, process.env.GITHUB_RUN_ID);
+            assert.equal(source.workflowAttempt, process.env.GITHUB_RUN_ATTEMPT);
+            assert.equal(source.cliVersion, '1.18.31');
+            assert.equal(source.releaseAsset, releases[arch].asset);
+            assert.equal(source.releaseAssetSha256, releases[arch].assetSha256);
+            assert.equal(source.binarySha256, releases[arch].binarySha256);
+            assert.equal(images.length, 1);
+            assert.equal(images[0].Architecture, arch);
+            assert.equal(images[0].Config.User, '1000:1000');
+            assert.equal(images[0].Config.Labels['org.opencontainers.image.revision'], process.env.GITHUB_SHA);
+            assert.ok(images[0].RepoDigests.includes(`docker.io/${process.env.IMAGE_NAME}@${digest}`)
+              || images[0].RepoDigests.includes(`${process.env.IMAGE_NAME}@${digest}`));
+            assert.equal(runtime.schema, 'ploinky.opencode-free-runtime/v1');
+            assert.equal(runtime.ok, true);
+            assert.equal(runtime.uid, 1000);
+            assert.equal(runtime.gid, 1000);
+            assert.equal(runtime.noNewPrivileges, true);
+            assert.equal(runtime.capabilities, '0000000000000000');
+            assert.deepEqual(runtime.networkInterfaces, ['lo']);
+            assert.equal(runtime.cliVersion, '1.18.31');
+            assert.equal(runtime.configReadOnly, true);
+            assert.equal(runtime.resolvedTools.length, 13);
+            assert.deepEqual([...runtime.resolvedTools].sort(), expectedTools);
+            assert.deepEqual(runtime.lastPermissionRule, { permission: '*', action: 'ask', pattern: '*' });
+            assert.equal(runtime.binarySha256, source.binarySha256);
+            digests.push(digest);
+            console.log(`${arch}_digest=${digest}`);
+          }
+          assert.notEqual(digests[0], digests[1]);
+          NODE
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Assemble and verify only the proven native digests
+        id: candidate
+        env:
+          AMD64_DIGEST: ${{ steps.digests.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.digests.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing staging tag: $staging" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$staging" \
+            "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}" \
+            "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+          evidence="$RUNNER_TEMP/opencode-free-agent-candidate-evidence"
+          mkdir -p "$evidence"
+          docker buildx imagetools inspect --raw "$staging" > "$evidence/candidate-index.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/opencode-free-agent-candidate-evidence/candidate-index.json`));
+          assert.equal(index.manifests.length, 2);
+          const members = new Map(index.manifests.map(entry => [`${entry.platform.os}/${entry.platform.architecture}`, entry.digest]));
+          assert.deepEqual([...members.keys()].sort(), ['linux/amd64', 'linux/arm64']);
+          assert.equal(members.get('linux/amd64'), process.env.AMD64_DIGEST);
+          assert.equal(members.get('linux/arm64'), process.env.ARM64_DIGEST);
+          NODE
+          candidate_digest="sha256:$(sha256sum "$evidence/candidate-index.json" | cut -d ' ' -f1)"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${candidate_digest}" > "$evidence/registry-index.json"
+          cmp "$evidence/candidate-index.json" "$evidence/registry-index.json"
+          printf '%s\n' "$candidate_digest" > "$evidence/digest.txt"
+          cp -R /tmp/opencode-free-agent-proofs "$evidence/native-proofs"
+          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          printf 'Proven candidate: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload assembled candidate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: opencode-free-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/opencode-free-agent-candidate-evidence
+          if-no-files-found: error
+          retention-days: 30

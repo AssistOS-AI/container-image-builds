@@ -230,6 +230,71 @@ test('search-agent image bakes SearXNG, Chromium, and Puppeteer for an unprivile
     assert.doesNotMatch(runtime, /https:\/\//);
 });
 
+test('opencode-free-agent image bakes the pinned OpenCode CLI with a read-only ask-everything configuration', () => {
+    const workflow = read('.github/workflows/publish-opencode-free-agent-image.yml');
+    const dockerfile = read('images/opencode-free-agent/Dockerfile');
+    const config = JSON.parse(read('images/opencode-free-agent/opencode.json'));
+    const runtime = read('images/opencode-free-agent/smoke-runtime.mjs');
+
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/opencode-free-agent/);
+    assert.doesNotMatch(workflow, /image_tag:|promote_stable:|IMAGE_TAG:|setup-qemu|:latest\b/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04/);
+    assert.match(workflow, /runner:\s*ubuntu-24\.04-arm/);
+    assert.match(workflow, /context: images\/opencode-free-agent/);
+    assert.match(workflow, /push-by-digest=true,name-canonical=true,push=true/);
+    assert.match(workflow, /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
+    assert.match(workflow, /opencode-free-agent\/smoke-runtime\.mjs:\/smoke-runtime\.mjs:ro/);
+    assert.match(workflow, /docker buildx imagetools create/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /cmp "\$evidence\/candidate-index\.json" "\$evidence\/registry-index\.json"/);
+    assert.match(workflow, /assert\.equal\(runtime\.schema, 'ploinky\.opencode-free-runtime\/v1'\)/);
+    assert.match(workflow, /assert\.equal\(runtime\.resolvedTools\.length, 13\)/);
+    assert.match(workflow, /assert\.deepEqual\(runtime\.lastPermissionRule, \{ permission: '\*', action: 'ask', pattern: '\*' \}\)/);
+    assert.match(workflow, /assert\.equal\(runtime\.binarySha256, source\.binarySha256\)/);
+    assert.doesNotMatch(workflow, /smoke-git-transport/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/);
+    }
+
+    const base = 'docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base}`);
+    assert.equal(dockerfile.match(/^FROM /gm)?.length, 1);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
+    assert.match(dockerfile, /^ARG TARGETARCH$/m);
+    assert.match(dockerfile, /releases\/download\/v1\.18\.31\/\$asset/);
+    assert.match(dockerfile, /amd64\) asset=opencode-linux-x64\.tar\.gz;\s+sha=e9312be75ed803b7415fc2aeabda1f4fe938912a39673762dc0c38c0e11ebde4 ;;/);
+    assert.match(dockerfile, /arm64\) asset=opencode-linux-arm64\.tar\.gz;\s+sha=d4e332f46b227448582c0d9fc75f6f826dfe95c9f751bc2011fc4d937a042be6 ;;/);
+    assert.match(dockerfile, /\| sha256sum --check --strict -;/);
+    assert.match(dockerfile, /tar -xzf \/tmp\/opencode\.tar\.gz -C \/opt\/opencode\/bin;/);
+    assert.match(dockerfile, /test "\$\(\/opt\/opencode\/bin\/opencode --version\)" = 1\.18\.31;/);
+    assert.match(dockerfile, /cli_version=1\.18\.31\\nrelease_asset=%s\\nrelease_asset_sha256=%s\\nbinary_sha256=%s\\n/);
+    assert.match(dockerfile, /> \/opt\/opencode-free\/source\.contract;/);
+    assert.match(dockerfile, /^COPY opencode\.json \/opt\/opencode-free\/config\/opencode\/opencode\.json$/m);
+    assert.match(dockerfile, /chown -R root:root \/opt\/opencode-free \/opt\/opencode;/);
+    assert.match(dockerfile, /chmod 0444 \/opt\/opencode-free\/config\/opencode\/opencode\.json \/opt\/opencode-free\/source\.contract;/);
+    assert.match(dockerfile, /chmod 0555 \/opt\/opencode-free\/config\/opencode \/opt\/opencode-free\/config \/opt\/opencode-free;/);
+    assert.match(dockerfile, /chown 1000:1000 \/var\/tmp\/opencode-free;/);
+    assert.match(dockerfile, /^USER root$/m);
+    assert.equal(dockerfile.trimEnd().split('\n').at(-1), 'USER 1000:1000');
+    assert.doesNotMatch(dockerfile, /latest/);
+
+    assert.deepEqual(config.permission, { '*': 'ask' });
+    assert.equal(config.default_agent, 'chat');
+    assert.equal(Object.hasOwn(config, 'tools'), false);
+    assert.deepEqual(config.enabled_providers, ['opencode']);
+    assert.equal(config.model, 'opencode/big-pickle');
+    assert.equal(config.small_model, 'opencode/big-pickle');
+    assert.equal(config.autoupdate, false);
+    assert.equal(config.share, 'disabled');
+    assert.deepEqual(config.agent, { chat: { mode: 'primary', description: 'Plain chat answer.',
+        prompt: "You are a helpful assistant. Answer the user's message directly in plain text." } });
+
+    assert.match(runtime, /\['debug', 'agent', 'chat', '--pure'\]/);
+    assert.match(runtime, /schema: 'ploinky\.opencode-free-runtime\/v1'/);
+    assert.match(runtime, /\/var\/tmp\/opencode-free\/proof-/);
+    assert.doesNotMatch(runtime, /API_KEY|'run'|--print-logs|https:\/\//);
+});
+
 test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
