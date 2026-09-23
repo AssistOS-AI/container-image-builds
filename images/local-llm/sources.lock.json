@@ -1,0 +1,30 @@
+{
+  "schema": "assistos.local-llm-sources/v1",
+  "architecture": "amd64",
+  "baseImage": "docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669",
+  "llamaCpp": {
+    "tag": "b11125",
+    "commit": "94256114c",
+    "cuda": "12.8",
+    "assets": [
+      {
+        "name": "llama-b11125-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11125/llama-b11125-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "sha256": "fedb8e04a0e6eb11e7f0687e02e778e848d1a2ddbf1ca835c6c6fb0a7853cf5f"
+      },
+      {
+        "name": "cudart-llama-b11125-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11125/cudart-llama-b11125-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "sha256": "038f3591191e489723bc4a0199af21b0a74ab5bdf2241f0296247967f671fcf5"
+      }
+    ]
+  },
+  "ollama": {
+    "version": "0.34.3",
+    "asset": {
+      "name": "ollama-linux-amd64.tar.zst",
+      "url": "https://github.com/ollama/ollama/releases/download/v0.34.3/ollama-linux-amd64.tar.zst",
+      "sha256": "e83a089fd0cd2f79ee2933cca2085846a2065f497adbc6467c402177c68423f9"
+    }
+  }
+}

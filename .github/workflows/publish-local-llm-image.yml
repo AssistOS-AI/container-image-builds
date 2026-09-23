@@ -1,0 +1,115 @@
+name: Publish local-llm agent image
+
+# amd64 only: the pinned llama.cpp and Ollama CUDA release builds exist only
+# for x86-64. Runs only when dispatched; publishing is an explicit decision.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-local-llm-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/local-llm
+  BASE_IMAGE: docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
+
+jobs:
+  build:
+    name: Build and prove linux/amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable base and workflow inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(sed -n '1s/^FROM //; 1p' images/local-llm/Dockerfile)" = "$BASE_IMAGE"
+          test "$(grep -c '^FROM ' images/local-llm/Dockerfile)" = 1
+          node --test --test-name-pattern=local-llm tests/image-definitions.test.mjs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push linux/amd64 by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/local-llm
+          platforms: linux/amd64
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
+          provenance: false
+
+      - name: Prove the runners, the uid and the absence of weights in the exact digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="docker.io/${IMAGE_NAME}@${DIGEST}"
+          evidence="$RUNNER_TEMP/local-llm-proof"
+          mkdir -p "$evidence"
+          docker pull "$image"
+          docker image inspect "$image" > "$evidence/image-inspect.json"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
+          run() { docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges "$@"; }
+          run "$image" sh -c 'id -u; node --version; llama-server --version 2>&1 | grep "build 11125,"; ollama --version 2>&1 | grep "version is 0.34.3"; echo "$PATH"' \
+            | tee "$evidence/runtime.txt"
+          test "$(sed -n 1p "$evidence/runtime.txt")" = 1000
+          grep -q '^/usr/local/nvidia/bin:' "$evidence/runtime.txt"
+          weights="$(run --user 0 "$image" sh -c 'find / -xdev -type f \( -name "*.gguf" -o -name "*.safetensors" -o -path "*/blobs/sha256-*" \) | wc -l')"
+          test "$weights" = 0
+          run "$image" sh -c '
+            set -eu
+            missing() { ldd "$1" | grep "not found" | grep -v "libcuda.so.1" || true; }
+            test -z "$(LD_LIBRARY_PATH=/usr/local/nvidia/lib64 missing /opt/llama.cpp/libggml-cuda.so)"
+            for v in cuda_v12 cuda_v13; do
+              test -z "$(LD_LIBRARY_PATH=/opt/ollama/lib/ollama/$v:/opt/ollama/lib/ollama missing /opt/ollama/lib/ollama/$v/libggml-cuda.so)"
+            done
+            cat /opt/local-llm/source.contract' | tee "$evidence/source.contract"
+          grep -qx 'llama_cpp=b11125' "$evidence/source.contract"
+          grep -qx 'ollama=0.34.3' "$evidence/source.contract"
+          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
+
+      - name: Tag the proven digest as a candidate
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing staging tag: $staging" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$staging" "docker.io/${IMAGE_NAME}@${DIGEST}"
+          printf 'Proven candidate: `docker.io/%s@%s` (%s)\n' "$IMAGE_NAME" "$DIGEST" "$staging" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: local-llm-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/local-llm-proof
+          if-no-files-found: error
+          retention-days: 30

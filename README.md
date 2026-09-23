@@ -12,6 +12,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
+| `assistos/local-llm` (digest-pinned candidates, amd64 only) | this repo | `images/local-llm` | `images/local-llm/Dockerfile` | `publish-local-llm-image.yml` |
 | `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
 | `assistos/opencode-free-agent` (digest-pinned candidates) | `AssistOS-AI/proxies` | `opencode-free` | `images/opencode-free-agent/Dockerfile` | `publish-opencode-free-agent-image.yml` |
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |

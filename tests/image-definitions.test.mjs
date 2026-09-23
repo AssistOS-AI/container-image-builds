@@ -295,6 +295,53 @@ test('opencode-free-agent image bakes the pinned OpenCode CLI with a read-only a
     assert.doesNotMatch(runtime, /API_KEY|'run'|--print-logs|https:\/\//);
 });
 
+test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with no weights', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const dockerfile = read('images/local-llm/Dockerfile');
+    const lock = JSON.parse(read('images/local-llm/sources.lock.json'));
+
+    const base = 'docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669';
+    assert.equal(dockerfile.split('\n')[0], `FROM ${base}`);
+    assert.equal(dockerfile.match(/^FROM /gm)?.length, 1);
+    assert.equal(lock.baseImage, base);
+    assert.equal(lock.architecture, 'amd64');
+    assert.match(dockerfile, /test "\$\{TARGETARCH:-amd64\}" = amd64;/);
+    assert.match(dockerfile, /llama=b11125; ollama=0\.34\.3;/);
+    assert.equal(lock.llamaCpp.tag, 'b11125');
+    assert.equal(lock.ollama.version, '0.34.3');
+    // Every downloaded asset is checked against the lock's sha256.
+    for (const asset of [...lock.llamaCpp.assets, lock.ollama.asset]) {
+        assert.match(asset.sha256, /^[0-9a-f]{64}$/);
+        assert.ok(dockerfile.includes(asset.sha256), asset.name);
+        assert.ok(asset.url.startsWith('https://github.com/'), asset.name);
+    }
+    assert.match(dockerfile, /sha256sum --check --strict -;/);
+    assert.match(dockerfile, /grep -q "build 11125,"/);
+    assert.match(dockerfile, /grep -q "version is \$ollama"/);
+    assert.match(dockerfile, /createZstdDecompress/);
+    // The granted driver libraries and nvidia-smi come from the Box at runtime.
+    assert.match(dockerfile, /^ENV PATH=\/usr\/local\/nvidia\/bin:\/opt\/llama\.cpp:\/opt\/ollama\/bin:/m);
+    assert.match(dockerfile, /^ENV LD_LIBRARY_PATH=\/usr\/local\/nvidia\/lib64$/m);
+    assert.match(dockerfile, /^ENTRYPOINT \[\]$/m);
+    assert.equal(dockerfile.trimEnd().split('\n').at(-1), 'USER 1000:1000');
+    assert.doesNotMatch(dockerfile, /\.gguf|safetensors|ollama pull|huggingface|:latest/);
+
+    assert.match(workflow, /^on:\n {2}workflow_dispatch:\n/m);
+    assert.match(workflow, /IMAGE_NAME:\s*assistos\/local-llm/);
+    assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
+    assert.match(workflow, /platforms: linux\/amd64$/m);
+    assert.doesNotMatch(workflow, /arm64|setup-qemu|:latest\b|promote/);
+    assert.match(workflow, /push-by-digest=true,name-canonical=true,push=true/);
+    assert.match(workflow, /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
+    assert.match(workflow, /-path "\*\/blobs\/sha256-\*"/);
+    assert.match(workflow, /test "\$weights" = 0/);
+    assert.match(workflow, /grep -v "libcuda\.so\.1"/);
+    assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
+        assert.match(use[1], /^[0-9a-f]{40}$/);
+    }
+});
+
 test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
