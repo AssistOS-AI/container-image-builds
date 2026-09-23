@@ -74,15 +74,21 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
           run() { docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges "$@"; }
-          run "$image" sh -c 'id -u; node --version; llama-server --version 2>&1 | grep "build 11125,"; ollama --version 2>&1 | grep "version is 0.34.3"; echo "$PATH"' \
+          run "$image" sh -c 'set -eu; id -u; node --version; llama-server --version 2>&1 | grep "build 11125,"; ollama --version 2>&1 | grep "version is 0.34.3"; echo "$PATH"' \
             | tee "$evidence/runtime.txt"
           test "$(sed -n 1p "$evidence/runtime.txt")" = 1000
+          grep -q 'build 11125,' "$evidence/runtime.txt"
+          grep -q 'version is 0.34.3' "$evidence/runtime.txt"
           grep -q '^/usr/local/nvidia/bin:' "$evidence/runtime.txt"
-          weights="$(run --user 0 "$image" sh -c 'find / -xdev -type f \( -name "*.gguf" -o -name "*.safetensors" -o -path "*/blobs/sha256-*" \) | wc -l')"
+          # Root with read-search over every directory, uid 1000's home and
+          # Ollama store included; a find error fails the proof.
+          scan_errors="$evidence/weight-scan-errors.txt"
+          weights="$(run --user 0 --cap-add=DAC_READ_SEARCH "$image" sh -c 'set -eu; find / -xdev -type f \( -name "*.gguf" -o -name "*.safetensors" -o -path "*/blobs/sha256-*" \) > /tmp/weights; wc -l < /tmp/weights' 2>"$scan_errors")"
+          test ! -s "$scan_errors"
           test "$weights" = 0
           run "$image" sh -c '
             set -eu
-            missing() { ldd "$1" | grep "not found" | grep -v "libcuda.so.1" || true; }
+            missing() { test -f "$1" || { echo "missing file: $1"; return 0; }; ldd "$1" | grep "not found" | grep -v "libcuda.so.1" || true; }
             test -z "$(LD_LIBRARY_PATH=/usr/local/nvidia/lib64 missing /opt/llama.cpp/libggml-cuda.so)"
             for v in cuda_v12 cuda_v13; do
               test -z "$(LD_LIBRARY_PATH=/opt/ollama/lib/ollama/$v:/opt/ollama/lib/ollama missing /opt/ollama/lib/ollama/$v/libggml-cuda.so)"

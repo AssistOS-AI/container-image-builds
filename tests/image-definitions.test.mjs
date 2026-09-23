@@ -342,6 +342,23 @@ test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with 
     }
 });
 
+test('local-llm workflow proof steps fail closed', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    // The weight scan runs as root with read-search over every directory
+    // (uid 1000's Ollama store included), and any find error fails the step.
+    const scan = workflow.split('\n').find((line) => line.includes('weights="$(run --user 0'));
+    assert.ok(scan, 'weight scan');
+    assert.match(scan, /--cap-add=DAC_READ_SEARCH/);
+    assert.match(workflow, /2>"\$scan_errors"/);
+    assert.match(workflow, /test ! -s "\$scan_errors"/);
+    // The runtime versions gate the step from the outer shell as well.
+    assert.match(workflow, /run "\$image" sh -c 'set -eu; id -u;/);
+    assert.match(workflow, /grep -q 'build 11125,' "\$evidence\/runtime\.txt"/);
+    assert.match(workflow, /grep -q 'version is 0\.34\.3' "\$evidence\/runtime\.txt"/);
+    // A missing library fails the closure check instead of passing it.
+    assert.match(workflow, /missing\(\) \{ test -f "\$1" \|\| \{ echo "missing file: \$1"; return 0; \};/);
+});
+
 test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
