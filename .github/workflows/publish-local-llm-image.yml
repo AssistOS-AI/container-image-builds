@@ -1,7 +1,9 @@
 name: Publish local-llm agent image
 
 # amd64 only: the pinned llama.cpp and Ollama CUDA release builds exist only
-# for x86-64. Runs only when dispatched; publishing is an explicit decision.
+# for x86-64, and ik_llama.cpp is built for x86-64 from a pinned commit in the
+# Dockerfile's builder stage. Runs only when dispatched; publishing is an
+# explicit decision.
 on:
   workflow_dispatch:
 
@@ -34,9 +36,20 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1)"
-          test "$(sed -n '1s/^FROM //; 1p' images/local-llm/Dockerfile)" = "$BASE_IMAGE"
-          test "$(grep -c '^FROM ' images/local-llm/Dockerfile)" = 1
+          # A digest-pinned ik_llama.cpp builder stage, then the runtime stage on the pinned base.
+          test "$(grep -c '^FROM ' images/local-llm/Dockerfile)" = 2
+          test "$(grep '^FROM ' images/local-llm/Dockerfile | tail -n 1)" = "FROM $BASE_IMAGE"
+          grep '^FROM ' images/local-llm/Dockerfile | head -n 1 | grep -Eq '^FROM docker\.io/nvidia/cuda@sha256:[0-9a-f]{64} AS ik-builder$'
           node --test --test-name-pattern=local-llm tests/image-definitions.test.mjs
+
+      - name: Free runner disk
+        # The CUDA devel builder stage is about 5 GB compressed; the runner's
+        # preinstalled SDKs are not needed here.
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -74,11 +87,11 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
           run() { docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges "$@"; }
-          run "$image" sh -c 'set -eu; id -u; node --version; llama-server --version 2>&1 | grep "build 11125,"; ollama --version 2>&1 | grep "version is 0.34.3"; echo "$PATH"' \
+          run "$image" sh -c 'set -eu; id -u; node --version; llama-server --version 2>&1 | grep "build 11159,"; ollama --version 2>&1 | grep "version is 0.34.4"; echo "$PATH"' \
             | tee "$evidence/runtime.txt"
           test "$(sed -n 1p "$evidence/runtime.txt")" = 1000
-          grep -q 'build 11125,' "$evidence/runtime.txt"
-          grep -q 'version is 0.34.3' "$evidence/runtime.txt"
+          grep -q 'build 11159,' "$evidence/runtime.txt"
+          grep -q 'version is 0.34.4' "$evidence/runtime.txt"
           grep -q '^/usr/local/nvidia/bin:' "$evidence/runtime.txt"
           # Root with read-search over every directory, uid 1000's home and
           # Ollama store included; a find error fails the proof.
@@ -93,9 +106,21 @@ jobs:
             for v in cuda_v12 cuda_v13; do
               test -z "$(LD_LIBRARY_PATH=/opt/ollama/lib/ollama/$v:/opt/ollama/lib/ollama missing /opt/ollama/lib/ollama/$v/libggml-cuda.so)"
             done
+            # ik_llama.cpp links libcuda.so.1 directly, so it cannot print its
+            # version without the granted driver: prove its closure and its
+            # build commit instead (the builder stage ran --version on a stub).
+            test -z "$(LD_LIBRARY_PATH=/usr/local/nvidia/lib64 missing /opt/ik_llama.cpp/llama-server)"
+            closure="$(LD_LIBRARY_PATH=/usr/local/nvidia/lib64 ldd /opt/ik_llama.cpp/llama-server)"
+            test "$(printf "%s\n" "$closure" | grep -cE "lib(ggml|llama|mtmd)\.so => /opt/ik_llama\.cpp/lib")" = 3
+            test "$(printf "%s\n" "$closure" | grep -cE "lib(cudart|cublas|cublasLt)\.so\.12 => /opt/ik_llama\.cpp/\.\./llama\.cpp/")" = 3
+            for lib in /opt/ik_llama.cpp/*.so; do
+              test -z "$(LD_LIBRARY_PATH=/usr/local/nvidia/lib64 missing "$lib")"
+            done
+            grep -aq "20f7a72" /opt/ik_llama.cpp/llama-server
             cat /opt/local-llm/source.contract' | tee "$evidence/source.contract"
-          grep -qx 'llama_cpp=b11125' "$evidence/source.contract"
-          grep -qx 'ollama=0.34.3' "$evidence/source.contract"
+          grep -qx 'llama_cpp=b11159' "$evidence/source.contract"
+          grep -qx 'ollama=0.34.4' "$evidence/source.contract"
+          grep -qx 'ik_llama_cpp=20f7a72edd7049fe5a87eef2b5e9a50ae109ca4b' "$evidence/source.contract"
           printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
 
       - name: Tag the proven digest as a candidate

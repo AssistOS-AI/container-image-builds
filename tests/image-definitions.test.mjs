@@ -301,14 +301,18 @@ test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with 
     const lock = JSON.parse(read('images/local-llm/sources.lock.json'));
 
     const base = 'docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669';
-    assert.equal(dockerfile.split('\n')[0], `FROM ${base}`);
-    assert.equal(dockerfile.match(/^FROM /gm)?.length, 1);
+    // A digest-pinned builder stage for ik_llama.cpp, then the runtime stage on the pinned base.
+    const froms = dockerfile.match(/^FROM .*$/gm);
+    assert.equal(froms.length, 2);
+    assert.equal(froms[0], `FROM ${lock.ikLlamaCpp.builderImage} AS ik-builder`);
+    assert.match(lock.ikLlamaCpp.builderImage, /^docker\.io\/nvidia\/cuda@sha256:[0-9a-f]{64}$/);
+    assert.equal(froms[1], `FROM ${base}`);
     assert.equal(lock.baseImage, base);
     assert.equal(lock.architecture, 'amd64');
     assert.match(dockerfile, /test "\$\{TARGETARCH:-amd64\}" = amd64;/);
-    assert.match(dockerfile, /llama=b11125; ollama=0\.34\.3;/);
-    assert.equal(lock.llamaCpp.tag, 'b11125');
-    assert.equal(lock.ollama.version, '0.34.3');
+    assert.match(dockerfile, /llama=b11159; ollama=0\.34\.4;/);
+    assert.equal(lock.llamaCpp.tag, 'b11159');
+    assert.equal(lock.ollama.version, '0.34.4');
     // Every downloaded asset is checked against the lock's sha256.
     for (const asset of [...lock.llamaCpp.assets, lock.ollama.asset]) {
         assert.match(asset.sha256, /^[0-9a-f]{64}$/);
@@ -316,11 +320,12 @@ test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with 
         assert.ok(asset.url.startsWith('https://github.com/'), asset.name);
     }
     assert.match(dockerfile, /sha256sum --check --strict -;/);
-    assert.match(dockerfile, /grep -q "build 11125,"/);
+    assert.match(dockerfile, /grep -q "build 11159,"/);
     assert.match(dockerfile, /grep -q "version is \$ollama"/);
     assert.match(dockerfile, /createZstdDecompress/);
     // The granted driver libraries and nvidia-smi come from the Box at runtime.
     assert.match(dockerfile, /^ENV PATH=\/usr\/local\/nvidia\/bin:\/opt\/llama\.cpp:\/opt\/ollama\/bin:/m);
+    assert.doesNotMatch(dockerfile.match(/^ENV PATH=.*$/m)[0], /ik_llama/, 'both servers are named llama-server; ik stays off PATH');
     assert.match(dockerfile, /^ENV LD_LIBRARY_PATH=\/usr\/local\/nvidia\/lib64$/m);
     assert.match(dockerfile, /^ENTRYPOINT \[\]$/m);
     assert.equal(dockerfile.trimEnd().split('\n').at(-1), 'USER 1000:1000');
@@ -337,9 +342,42 @@ test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with 
     assert.match(workflow, /test "\$weights" = 0/);
     assert.match(workflow, /grep -v "libcuda\.so\.1"/);
     assert.match(workflow, /candidate-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/);
+    assert.match(workflow, /timeout-minutes: 90$/m);
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/);
     }
+});
+
+test('local-llm image builds ik_llama.cpp from a pinned commit for this machine family, off PATH', () => {
+    const dockerfile = read('images/local-llm/Dockerfile');
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const lock = JSON.parse(read('images/local-llm/sources.lock.json'));
+    const ik = lock.ikLlamaCpp;
+    assert.equal(ik.repository, 'https://github.com/ikawrakow/ik_llama.cpp.git');
+    assert.match(ik.commit, /^[0-9a-f]{40}$/);
+    assert.equal(ik.cudaArchitectures, '86-real;89-real');
+    assert.ok(dockerfile.includes(`ARG IK_COMMIT=${ik.commit}`));
+    assert.ok(dockerfile.includes(`ARG IK_CUDA_ARCHITECTURES=${ik.cudaArchitectures}`));
+    // The source is the exact commit, not a branch or a tarball.
+    assert.match(dockerfile, /git fetch --depth 1 origin "\$IK_COMMIT"/);
+    assert.match(dockerfile, /test "\$\(git rev-parse HEAD\)" = "\$IK_COMMIT"/);
+    // Portable CPU code (no -march=native), no NCCL, and libraries found next to the binary.
+    for (const flag of ['-DGGML_NATIVE=OFF', '-DGGML_AVX2=ON', '-DGGML_FMA=ON', '-DGGML_F16C=ON', '-DGGML_NCCL=OFF',
+        '-DGGML_CUDA=ON', '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON', '--target llama-server',
+        '-DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined']) {
+        assert.ok(dockerfile.includes(flag), flag);
+    }
+    assert.ok(dockerfile.includes("-DCMAKE_INSTALL_RPATH='$ORIGIN:$ORIGIN/../llama.cpp'"));
+    assert.match(dockerfile, /^COPY --from=ik-builder \/out\/ \/opt\/ik_llama\.cpp\/$/m);
+    assert.match(dockerfile, /printf '[^']*ik_llama_cpp=%s\\n[^']*'[^\n]*"\$ik"/);
+    // The workflow proves the ik build, its library closure and its commit in the published digest.
+    assert.match(workflow, /LD_LIBRARY_PATH=\/usr\/local\/nvidia\/lib64 missing \/opt\/ik_llama\.cpp\/llama-server/);
+    // ik's own libraries must resolve next to it, never to llama.cpp's same-named copies,
+    // and the CUDA runtime from /opt/llama.cpp.
+    assert.ok(workflow.includes('test "$(printf "%s\\n" "$closure" | grep -cE "lib(ggml|llama|mtmd)\\.so => /opt/ik_llama\\.cpp/lib")" = 3'));
+    assert.ok(workflow.includes('test "$(printf "%s\\n" "$closure" | grep -cE "lib(cudart|cublas|cublasLt)\\.so\\.12 => /opt/ik_llama\\.cpp/\\.\\./llama\\.cpp/")" = 3'));
+    assert.ok(workflow.includes(`grep -qx 'ik_llama_cpp=${ik.commit}'`));
+    assert.match(workflow, /Free runner disk/);
 });
 
 test('local-llm workflow proof steps fail closed', () => {
@@ -353,8 +391,8 @@ test('local-llm workflow proof steps fail closed', () => {
     assert.match(workflow, /test ! -s "\$scan_errors"/);
     // The runtime versions gate the step from the outer shell as well.
     assert.match(workflow, /run "\$image" sh -c 'set -eu; id -u;/);
-    assert.match(workflow, /grep -q 'build 11125,' "\$evidence\/runtime\.txt"/);
-    assert.match(workflow, /grep -q 'version is 0\.34\.3' "\$evidence\/runtime\.txt"/);
+    assert.match(workflow, /grep -q 'build 11159,' "\$evidence\/runtime\.txt"/);
+    assert.match(workflow, /grep -q 'version is 0\.34\.4' "\$evidence\/runtime\.txt"/);
     // A missing library fails the closure check instead of passing it.
     assert.match(workflow, /missing\(\) \{ test -f "\$1" \|\| \{ echo "missing file: \$1"; return 0; \};/);
 });
