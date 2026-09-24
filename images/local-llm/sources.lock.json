@@ -33,5 +33,13 @@
     "cudaArchitectures": "86-real;89-real",
     "builderImage": "docker.io/nvidia/cuda@sha256:38ce689230907646c84d57c37653259f8a021ba8c1b1525fa2a0d9654cc895e0",
     "builderTag": "12.8.2-devel-ubuntu24.04, linux/amd64 manifest"
+  },
+  "uv": {
+    "version": "0.12.18",
+    "asset": {
+      "name": "uv-x86_64-unknown-linux-gnu.tar.gz",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.12.18/uv-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "89eadd7c76fc063887959510d5ba0ab1264dfd5f1143b925ddb73021a40acf16"
+    }
   }
 }

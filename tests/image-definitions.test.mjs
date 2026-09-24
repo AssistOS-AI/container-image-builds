@@ -397,6 +397,52 @@ test('local-llm workflow proof steps fail closed', () => {
     assert.match(workflow, /missing\(\) \{ test -f "\$1" \|\| \{ echo "missing file: \$1"; return 0; \};/);
 });
 
+test('local-llm image ships the runner lock, a pinned uv and a runner directory for uid 1000, and CI installs every lock entry', () => {
+    const dockerfile = read('images/local-llm/Dockerfile');
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const sources = JSON.parse(read('images/local-llm/sources.lock.json'));
+    const runners = JSON.parse(read('images/local-llm/runners.lock.json'));
+    assert.equal(runners.schema, 'local-llm.runners-lock/v1');
+    const hosts = ['files.pythonhosted.org', 'github.com', 'codeload.github.com', 'download.pytorch.org'];
+    for (const [id, entry] of Object.entries(runners.runners)) {
+        assert.ok(['python', 'archive'].includes(entry.kind), id);
+        assert.ok(entry.files.length > 0, id);
+        for (const file of entry.files) {
+            const url = new URL(file.url);
+            assert.equal(url.protocol, 'https:', file.name);
+            assert.ok(hosts.includes(url.hostname), `${file.name} on ${url.hostname}`);
+            assert.match(file.sha256, /^[0-9a-f]{64}$/, file.name);
+            assert.ok(Number.isSafeInteger(file.size) && file.size > 0, file.name);
+        }
+    }
+    // TabbyAPI is AGPL-3.0: installed from upstream only after an admin accepts the notice.
+    assert.equal(runners.runners.tabbyapi.licence.name, 'AGPL-3.0');
+    assert.equal(runners.runners.tabbyapi.licence.requiresAcceptance, true);
+    // The lock is read-only in the image; admins pick a runner id, never a URL.
+    assert.match(dockerfile, /^COPY --chmod=0444 runners\.lock\.json \/opt\/local-llm\/runners\.lock\.json$/m);
+    // uv is pinned by version and sha256 like every other download.
+    assert.match(sources.uv.version, /^\d+\.\d+\.\d+$/);
+    assert.match(sources.uv.asset.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(sources.uv.asset.url.startsWith('https://github.com/astral-sh/uv/releases/download/'));
+    assert.ok(dockerfile.includes(sources.uv.asset.sha256));
+    assert.ok(dockerfile.includes(`uv=${sources.uv.version};`));
+    assert.match(dockerfile, /\/usr\/local\/bin\/uv --version 2>&1 \| grep -q "uv \$uv"/);
+    // Triton compiles its C launcher at run time.
+    assert.match(dockerfile, /apt-get install -y --no-install-recommends gcc libc6-dev libpython3\.13-dev;/);
+    // The runnable copies are built in the container's own filesystem, by uid 1000.
+    assert.match(dockerfile, /install -d -o 1000 -g 1000 -m 0755 \/opt\/runners;/);
+    assert.ok(workflow.includes(`grep -qx 'uv=${sources.uv.version}'`));
+    // CI installs each lock entry in the published image, in its own job after the build.
+    assert.match(workflow, /^ {2}install-check:\n {4}name: [^\n]+\n {4}needs: build$/m);
+    assert.match(workflow, /LOCAL_LLMS_COMMIT: [0-9a-f]{40}$/m);
+    // A real, pushed local-llms commit, never a placeholder.
+    assert.doesNotMatch(workflow, /LOCAL_LLMS_COMMIT: 0{40}$/m);
+    assert.match(workflow, /cmp images\/local-llm\/runners\.lock\.json "\$evidence\/runners\.lock\.json"/);
+    assert.match(workflow, /node \/code\/local-llm\/tools\/runner_install_check\.mjs "\$runner"/);
+    assert.match(workflow, /for runner in \$\(node -e/);
+    assert.match(workflow.split('\n  install-check:\n')[1] || '', /--cap-drop=ALL --security-opt=no-new-privileges/);
+});
+
 test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');

@@ -81,6 +81,34 @@ RUN set -eu; \
     /opt/ollama/bin/ollama --version 2>&1 | grep -q "version is $ollama"; \
     printf 'llama_cpp=%s\nllama_cpp_cuda=12.8\nollama=%s\nik_llama_cpp=%s\nik_llama_cpp_cuda=12.8\n' "$llama" "$ollama" "$ik" > /opt/local-llm/source.contract; \
     chmod 0444 /opt/local-llm/source.contract
+# On-demand runners (runners plan §5.2): the pinned uv that rebuilds each
+# runner's environment offline from its verified cache, and /opt/runners, where
+# uid 1000 builds the runnable copies in the container's own filesystem. Triton,
+# which vLLM and ExLlamaV3 load, compiles a small C launcher at run time, so the
+# image carries a C compiler and the Python headers. PyTorch and the runners
+# themselves never enter the image.
+RUN set -eu; \
+    uv=0.12.18; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gcc libc6-dev libpython3.13-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    name="uv-x86_64-unknown-linux-gnu.tar.gz"; \
+    url="https://github.com/astral-sh/uv/releases/download/$uv/$name"; \
+    if [ -n "$RELEASE_MIRROR" ]; then url="$RELEASE_MIRROR/$name"; fi; \
+    curl -fsSL --retry 5 --retry-all-errors -o "/tmp/$name" "$url"; \
+    printf '%s  %s\n' 89eadd7c76fc063887959510d5ba0ab1264dfd5f1143b925ddb73021a40acf16 "/tmp/$name" | sha256sum --check --strict -; \
+    tar -xzf "/tmp/$name" -C /usr/local/bin --strip-components=1 --no-same-owner uv-x86_64-unknown-linux-gnu/uv; \
+    rm -f "/tmp/$name"; \
+    chown root:root /usr/local/bin/uv; \
+    chmod 0755 /usr/local/bin/uv; \
+    /usr/local/bin/uv --version 2>&1 | grep -q "uv $uv"; \
+    install -d -o 1000 -g 1000 -m 0755 /opt/runners; \
+    chmod u+w /opt/local-llm/source.contract; \
+    printf 'uv=%s\n' "$uv" >> /opt/local-llm/source.contract; \
+    chmod 0444 /opt/local-llm/source.contract
+# The only runners that can be installed on demand, and the only files they may
+# download: admins choose a runner id, never a URL.
+COPY --chmod=0444 runners.lock.json /opt/local-llm/runners.lock.json
 # llama.cpp and its CUDA backend find their own libraries through RUNPATH
 # $ORIGIN, ik_llama.cpp through RUNPATH $ORIGIN and /opt/llama.cpp, and Ollama
 # points its runner at its own library directories, so the shared library path
