@@ -166,7 +166,7 @@ jobs:
       # The agent code that installs the runners (runners plan §5.2): a pushed
       # local-llms commit, fetched by its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: 15606445cdd2e684c35d36cb44a8a04453ee6094
+      LOCAL_LLMS_COMMIT: 7d4ae04dc43d8a63d4c621ab75bb38c045b20e5f
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

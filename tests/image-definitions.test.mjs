@@ -403,7 +403,7 @@ test('local-llm image ships the runner lock, a pinned uv and a runner directory 
     const sources = JSON.parse(read('images/local-llm/sources.lock.json'));
     const runners = JSON.parse(read('images/local-llm/runners.lock.json'));
     assert.equal(runners.schema, 'local-llm.runners-lock/v1');
-    const hosts = ['files.pythonhosted.org', 'github.com', 'codeload.github.com', 'download.pytorch.org'];
+    const hosts = ['files.pythonhosted.org', 'github.com', 'codeload.github.com', 'download.pytorch.org', 'openaipublic.blob.core.windows.net'];
     for (const [id, entry] of Object.entries(runners.runners)) {
         assert.ok(['python', 'archive'].includes(entry.kind), id);
         assert.ok(entry.files.length > 0, id);
@@ -415,6 +415,15 @@ test('local-llm image ships the runner lock, a pinned uv and a runner directory 
             assert.ok(Number.isSafeInteger(file.size) && file.size > 0, file.name);
         }
     }
+    // gpt-oss's tokenizer vocabulary is pinned for vLLM, so nothing is fetched
+    // at run time; the sha256 is the one tiktoken and openai_harmony check.
+    assert.deepEqual(runners.runners.vllm.files.find((file) => file.name === 'o200k_base.tiktoken'), {
+        name: 'o200k_base.tiktoken',
+        url: 'https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken',
+        size: 3613922,
+        sha256: '446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d',
+        into: 'tiktoken',
+    });
     // TabbyAPI is AGPL-3.0: installed from upstream only after an admin accepts the notice.
     assert.equal(runners.runners.tabbyapi.licence.name, 'AGPL-3.0');
     assert.equal(runners.runners.tabbyapi.licence.requiresAcceptance, true);
