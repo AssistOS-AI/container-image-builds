@@ -106,6 +106,39 @@ RUN set -eu; \
     chmod u+w /opt/local-llm/source.contract; \
     printf 'uv=%s\n' "$uv" >> /opt/local-llm/source.contract; \
     chmod 0444 /opt/local-llm/source.contract
+# LM Studio's MIT SDK (@lmstudio/sdk) and its dependencies (MIT, ISC and
+# Apache-2.0), which the LM Studio runner uses to load a model with every
+# memory flag set (runners plan §5.7). Each npm tarball is pinned by sha512;
+# the image's npm is not used. LM Studio itself is proprietary and is never
+# part of the image: an admin installs it on demand after accepting its terms.
+RUN set -eu; \
+    sdk=/opt/local-llm/lmstudio-sdk; sdk_version=2.0.0; \
+    npm_pkg() { \
+        name=$1; version=$2; sha=$3; base=${name##*/}; \
+        curl -fsSL --retry 5 --retry-all-errors -o "/tmp/$base.tgz" "https://registry.npmjs.org/$name/-/$base-$version.tgz"; \
+        printf '%s  %s\n' "$sha" "/tmp/$base.tgz" | sha512sum --check --strict -; \
+        mkdir -p "$sdk/node_modules/$name"; \
+        tar -xzf "/tmp/$base.tgz" -C "$sdk/node_modules/$name" --strip-components=1 --no-same-owner; \
+        rm -f "/tmp/$base.tgz"; \
+    }; \
+    npm_pkg @lmstudio/lms-isomorphic 0.5.0 3ee9f22102f4bec88e94d1e22c950470d9f038aa9498215c36b4e4ec6c07d2fd8d0b3291e8f72d1694edbe21cb150cab5f24b80fa68b4e1cea6c2e180818ae42; \
+    npm_pkg @lmstudio/sdk 2.0.0 8740d8f8e41576fd2827585e6d5f7b67a7913d2f08ec78e8e506823a9dd7367b9c7f235181afec9aef268a2818a76f781e03044af1493baf6f85da5c9d10f9bd; \
+    npm_pkg ansi-styles 4.3.0 cdb07dac22404f5adb8e25436f686a2851cd60bc60b64f0d511c59dc86700f717a36dc5b5d94029e74a2d4b931f880e885d3e5169db6db05402c885e64941212; \
+    npm_pkg chalk 4.1.2 a0a9db845c91217a54b9ecfc881326c846b89db8f820e432ba173fc32f6463bfd654f73020ef5503aebc3eef1190eefed06efa48b44e7b2c3d0a9434eb58b898; \
+    npm_pkg color-convert 2.0.1 4511023ec8fb8aeff16f9a0a61cb051d2a6914d9ec8ffe763954d129be333f9a275f0545df3566993a0d70e7c60be0910e97cafd4e7ce1f320dfc64709a12529; \
+    npm_pkg color-name 1.1.4 74ecbedc0b96ddadb035b64722e319a537208c6b8b53fb812ffb9b71917d3976c3a3c7dfe0ef32569e417f479f4bcb84a18a39ab8171edd63d3a04065e002c40; \
+    npm_pkg has-flag 4.0.0 1329094ff4352a34d672da698080207d23b4b4a56e6548e180caf5ee4a93ba6325e807efdc421295e53ba99533a170c54c01d30c2e0d3a81bf67153712f94c3d; \
+    npm_pkg jsonschema 1.5.0 2be03d861a9b9f47f7a495f5ed0ffb1fac907c3ff939781dad1e54135da03170a237d0f95eada8e6675d576404717fdb8e56bdf404ac000414c8c08245600487; \
+    npm_pkg supports-color 7.2.0 aa9080bd197db2db8e1ef78ab27ec79dc251befe74d6a21a70acd094effe2f0c5cf7ed2adb02f2bf80dfbedf34fc33e7da9a8e06c25d0e2a205c647df8ebf047; \
+    npm_pkg ws 8.21.3 db4d5367f90f5b1a0faff38a5a3aae651d5258a5dcbf1747f9ed71af1f3d6f761b9b32cc1422df9da1b51c52205b324e11667b32fa4afbea1d66e7e0611e7447; \
+    npm_pkg zod 3.25.76 83352dfeab7cd675ec14628815c0b76277c4031e4d92e9c27e70e5bee0524854b4d9b717bb82e679ad001485306cb5b158fc7777da7c4b94286ae8ca70d43171; \
+    npm_pkg zod-to-json-schema 3.25.2 3bf3e07e7a53d712920de4184827d12391b2de13dff7598a543b982d41d924c883169b6f3f8d4c4a75a87e6f1d9c29b4db9e9935f64833b0d2cee48c0059e31c; \
+    chown -R root:root "$sdk"; \
+    chmod -R go-w "$sdk"; \
+    node -e 'const r = require("node:module").createRequire(process.argv[1] + "/"); if (typeof r("@lmstudio/sdk").LMStudioClient !== "function") process.exit(1); if (JSON.parse(require("node:fs").readFileSync(process.argv[1] + "/node_modules/@lmstudio/sdk/package.json", "utf8")).version !== process.argv[2]) process.exit(1);' "$sdk" "$sdk_version"; \
+    chmod u+w /opt/local-llm/source.contract; \
+    printf 'lmstudio_sdk=%s\n' "$sdk_version" >> /opt/local-llm/source.contract; \
+    chmod 0444 /opt/local-llm/source.contract
 # The only runners that can be installed on demand, and the only files they may
 # download: admins choose a runner id, never a URL.
 COPY --chmod=0444 runners.lock.json /opt/local-llm/runners.lock.json

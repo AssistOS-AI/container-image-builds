@@ -99,6 +99,11 @@ jobs:
           weights="$(run --user 0 --cap-add=DAC_READ_SEARCH "$image" sh -c 'set -eu; find / -xdev -type f \( -name "*.gguf" -o -name "*.safetensors" -o -path "*/blobs/sha256-*" \) > /tmp/weights; wc -l < /tmp/weights' 2>"$scan_errors")"
           test ! -s "$scan_errors"
           test "$weights" = 0
+          # LM Studio is proprietary and is never part of the image; an
+          # admin installs it on demand after accepting its terms.
+          lmstudio_files="$(run --user 0 --cap-add=DAC_READ_SEARCH "$image" sh -c 'set -eu; find / -xdev \( -iname "*llmster*" -o -iname "*liblmstudio*" -o -iname ".lmstudio*" -o -iname "*lm-studio*" \) > /tmp/lmstudio; cat /tmp/lmstudio >&2; wc -l < /tmp/lmstudio' 2>"$scan_errors")"
+          test ! -s "$scan_errors"
+          test "$lmstudio_files" = 0
           run "$image" sh -c '
             set -eu
             missing() { test -f "$1" || { echo "missing file: $1"; return 0; }; ldd "$1" | grep "not found" | grep -v "libcuda.so.1" || true; }
@@ -124,11 +129,14 @@ jobs:
             test -w /opt/runners
             command -v gcc > /dev/null
             test -f /usr/include/python3.13/Python.h
+            # The MIT LM Studio SDK imports from its pinned directory; LM Studio itself is absent.
+            node -e "const r = require(\"node:module\").createRequire(\"/opt/local-llm/lmstudio-sdk/\"); if (typeof r(\"@lmstudio/sdk\").LMStudioClient !== \"function\") process.exit(1); console.log(\"lmstudio sdk \" + JSON.parse(require(\"node:fs\").readFileSync(\"/opt/local-llm/lmstudio-sdk/node_modules/@lmstudio/sdk/package.json\", \"utf8\")).version);" >&2
             cat /opt/local-llm/source.contract' | tee "$evidence/source.contract"
           grep -qx 'llama_cpp=b11159' "$evidence/source.contract"
           grep -qx 'ollama=0.34.4' "$evidence/source.contract"
           grep -qx 'ik_llama_cpp=20f7a72edd7049fe5a87eef2b5e9a50ae109ca4b' "$evidence/source.contract"
           grep -qx 'uv=0.12.18' "$evidence/source.contract"
+          grep -qx 'lmstudio_sdk=2.0.0' "$evidence/source.contract"
           # The image carries exactly the committed runner lock.
           run "$image" cat /opt/local-llm/runners.lock.json > "$evidence/runners.lock.json"
           cmp images/local-llm/runners.lock.json "$evidence/runners.lock.json"
@@ -166,7 +174,7 @@ jobs:
       # The agent code that installs the runners (runners plan §5.2): a pushed
       # local-llms commit, fetched by its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: 7d4ae04dc43d8a63d4c621ab75bb38c045b20e5f
+      LOCAL_LLMS_COMMIT: 171b2eba85e8d5e03499f36c82b1eef3b8579a06
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -206,10 +214,19 @@ jobs:
           status=0
           for runner in $(node -e 'for (const id of Object.keys(require("./images/local-llm/runners.lock.json").runners)) console.log(id)'); do
             df -h / >> "$evidence/disk.txt"
-            if docker run --rm --cap-drop=ALL --security-opt=no-new-privileges \
+            # A proprietary entry (LM Studio) is never downloaded here: that
+            # would accept its terms on behalf of whoever runs CI. It is
+            # validated from the lock with no network; the live install on a
+            # deployment whose admin accepted them is its install proof.
+            net=(); mode=()
+            if node -e 'process.exit(require("./images/local-llm/runners.lock.json").runners[process.argv[1]].licence.proprietary === true ? 0 : 1)' "$runner"; then
+              net=(--network=none); mode=(--validate-only)
+            fi
+            if docker run --rm "${net[@]}" --cap-drop=ALL --security-opt=no-new-privileges \
                 -v "$RUNNER_TEMP/local-llms:/code:ro" "$image" \
-                node /code/local-llm/tools/runner_install_check.mjs "$runner" > "$evidence/$runner.json"; then
-              echo "$runner: passed"
+                node /code/local-llm/tools/runner_install_check.mjs "$runner" "${mode[@]}" > "$evidence/$runner.json" \
+                && { [ "${#mode[@]}" -eq 0 ] || grep -q '"downloaded": false' "$evidence/$runner.json"; }; then
+              echo "$runner: passed${mode[*]:+ (validated, not downloaded)}"
             else
               echo "$runner: failed"
               status=1

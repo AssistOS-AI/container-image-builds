@@ -403,7 +403,7 @@ test('local-llm image ships the runner lock, a pinned uv and a runner directory 
     const sources = JSON.parse(read('images/local-llm/sources.lock.json'));
     const runners = JSON.parse(read('images/local-llm/runners.lock.json'));
     assert.equal(runners.schema, 'local-llm.runners-lock/v1');
-    const hosts = ['files.pythonhosted.org', 'github.com', 'codeload.github.com', 'download.pytorch.org', 'openaipublic.blob.core.windows.net'];
+    const hosts = ['files.pythonhosted.org', 'github.com', 'codeload.github.com', 'download.pytorch.org', 'openaipublic.blob.core.windows.net', 'llmster.lmstudio.ai'];
     for (const [id, entry] of Object.entries(runners.runners)) {
         assert.ok(['python', 'archive'].includes(entry.kind), id);
         assert.ok(entry.files.length > 0, id);
@@ -450,6 +450,81 @@ test('local-llm image ships the runner lock, a pinned uv and a runner directory 
     assert.match(workflow, /node \/code\/local-llm\/tools\/runner_install_check\.mjs "\$runner"/);
     assert.match(workflow, /for runner in \$\(node -e/);
     assert.match(workflow.split('\n  install-check:\n')[1] || '', /--cap-drop=ALL --security-opt=no-new-privileges/);
+});
+
+// LM Studio (runners plan §5.7, handoff decision L3): proprietary, so it is
+// never part of the image, and CI never downloads it, which would accept its
+// Terms on behalf of whoever runs CI. Its lock entry is validated offline.
+test('local-llm pins LM Studio as a proprietary lock entry that CI validates without downloading and the image never contains', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const dockerfile = read('images/local-llm/Dockerfile');
+    const runners = JSON.parse(read('images/local-llm/runners.lock.json'));
+    const lmstudio = runners.runners.lmstudio;
+    assert.equal(lmstudio.version, '0.0.25-1');
+    assert.equal(lmstudio.kind, 'archive');
+    assert.deepEqual(lmstudio.files, [{
+        name: '0.0.25-1-linux-x64.full+cuda12.tar.gz',
+        url: 'https://llmster.lmstudio.ai/download/0.0.25-1-linux-x64.full%2Bcuda12.tar.gz',
+        size: 1105623572,
+        sha256: '46778639487e1f6def9a722d3a4e0c5ce8960f4cd290be79832a36d7f95a1e6a',
+        // llmster and .bundle/ sit at the tarball's root.
+        strip: 0,
+    }]);
+    assert.equal(lmstudio.licence.url, 'https://lmstudio.ai/app-terms');
+    assert.match(lmstudio.licence.name, /August 23, 2026/);
+    assert.equal(lmstudio.licence.proprietary, true);
+    assert.equal(lmstudio.licence.requiresAcceptance, true);
+    for (const clause of [/internal business purposes/, /software-as-a-service/, /published interfaces/, /internal use only/i]) {
+        assert.match(lmstudio.licence.notice, clause);
+    }
+    // Only LM Studio is proprietary.
+    assert.deepEqual(Object.keys(runners.runners).filter((id) => runners.runners[id].licence.proprietary), ['lmstudio']);
+    // Nothing in the Dockerfile fetches it.
+    assert.doesNotMatch(dockerfile, /lmstudio\.ai|llmster/);
+    const install = workflow.split('\n  install-check:\n')[1] || '';
+    // A proprietary entry runs the check in validate-only mode with no network.
+    assert.match(install, /licence\.proprietary === true/);
+    assert.match(install, /net=\(--network=none\); mode=\(--validate-only\)/);
+    assert.match(install, /docker run --rm "\$\{net\[@\]\}" --cap-drop=ALL --security-opt=no-new-privileges/);
+    assert.match(install, /runner_install_check\.mjs "\$runner" "\$\{mode\[@\]\}"/);
+    assert.match(install, /grep -q '"downloaded": false' "\$evidence\/\$runner\.json"/);
+    // The publish proof scans the image for LM Studio files, as root, failing closed.
+    const scan = workflow.split('\n').find((line) => line.includes('lmstudio_files="$(run --user 0'));
+    assert.ok(scan, 'LM Studio file scan');
+    assert.match(scan, /--cap-add=DAC_READ_SEARCH/);
+    assert.match(scan, /-iname "\*llmster\*"/);
+    assert.match(workflow, /test "\$lmstudio_files" = 0/);
+});
+
+// The LM Studio runner loads models through LM Studio's MIT SDK, which sets
+// every memory flag (runners plan §5.7, handoff decision L9). The SDK and its
+// dependencies are MIT, ISC or Apache-2.0 and go in the image, each pinned by
+// its npm sha512; LM Studio itself never does.
+test('local-llm image carries the pinned LM Studio SDK closure, fetched by sha512, and proves it imports', () => {
+    const dockerfile = read('images/local-llm/Dockerfile');
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const sources = JSON.parse(read('images/local-llm/sources.lock.json'));
+    const sdk = sources.lmstudioSdk;
+    assert.equal(sdk.version, '2.0.0');
+    assert.equal(sdk.directory, '/opt/local-llm/lmstudio-sdk');
+    assert.deepEqual(sdk.packages.map((pkg) => pkg.name).sort(), [
+        '@lmstudio/lms-isomorphic', '@lmstudio/sdk', 'ansi-styles', 'chalk', 'color-convert', 'color-name',
+        'has-flag', 'jsonschema', 'supports-color', 'ws', 'zod', 'zod-to-json-schema',
+    ]);
+    for (const pkg of sdk.packages) {
+        assert.ok(['MIT', 'ISC', 'Apache-2.0'].includes(pkg.license), pkg.name);
+        const base = pkg.name.split('/').pop();
+        assert.equal(pkg.url, `https://registry.npmjs.org/${pkg.name}/-/${base}-${pkg.version}.tgz`, pkg.name);
+        assert.match(pkg.sha512, /^[0-9a-f]{128}$/, pkg.name);
+        // Every package is fetched and checked by its pinned hash.
+        assert.ok(dockerfile.includes(`npm_pkg ${pkg.name} ${pkg.version} ${pkg.sha512}`), pkg.name);
+    }
+    assert.match(dockerfile, /sha512sum --check --strict -/);
+    assert.match(dockerfile, /tar -xzf "\/tmp\/\$base\.tgz" -C "\$sdk\/node_modules\/\$name" --strip-components=1 --no-same-owner;/);
+    assert.match(dockerfile, /printf 'lmstudio_sdk=%s\\n' "\$sdk_version" >> \/opt\/local-llm\/source\.contract;/);
+    // The proof imports it from the exact digest and checks its version.
+    assert.ok(workflow.includes(`grep -qx 'lmstudio_sdk=${sdk.version}'`));
+    assert.match(workflow, /createRequire\(\\"\/opt\/local-llm\/lmstudio-sdk\/\\"\)/);
 });
 
 test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
