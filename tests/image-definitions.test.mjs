@@ -295,7 +295,7 @@ test('opencode-free-agent image bakes the pinned OpenCode CLI with a read-only a
     assert.doesNotMatch(runtime, /API_KEY|'run'|--print-logs|https:\/\//);
 });
 
-test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with no weights', () => {
+test('local-llm amd64 image pins llama.cpp and Ollama CUDA releases, with no weights', () => {
     const workflow = read('.github/workflows/publish-local-llm-image.yml');
     const dockerfile = read('images/local-llm/Dockerfile');
     const lock = JSON.parse(read('images/local-llm/sources.lock.json'));
@@ -334,8 +334,13 @@ test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with 
     assert.match(workflow, /^on:\n {2}workflow_dispatch:\n/m);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/local-llm/);
     assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
-    assert.match(workflow, /platforms: linux\/amd64$/m);
-    assert.doesNotMatch(workflow, /arm64|setup-qemu|:latest\b|promote/);
+    // amd64 is not rebuilt: the published digest is reused and proven again (B1).
+    assert.doesNotMatch(workflow, /platforms: linux\/amd64/);
+    assert.match(workflow, /^ {2}AMD64_DIGEST: sha256:b6c79af2aad08b542339346f4a985c84d5cbcacc31e8c6df45f951da7ba0fbf7$/m);
+    assert.match(workflow, /^ {2}AMD64_REVISION: 95ba10a2be4eb1aeb0d9612186c746ae9d7b9efe$/m);
+    assert.match(workflow, /= "\$AMD64_REVISION"/);
+    // Only arm64 is built, natively, and nothing is emulated or promoted.
+    assert.doesNotMatch(workflow, /setup-qemu|:latest\b|promote/);
     assert.match(workflow, /push-by-digest=true,name-canonical=true,push=true/);
     assert.match(workflow, /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
     assert.match(workflow, /-path "\*\/blobs\/sha256-\*"/);
@@ -346,6 +351,83 @@ test('local-llm image pins llama.cpp and Ollama CUDA releases, amd64 only, with 
     for (const use of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) {
         assert.match(use[1], /^[0-9a-f]{40}$/);
     }
+});
+
+test('local-llm arm64 image: llama.cpp for NVIDIA GB10 from pinned release assets, same layout, no other runner', () => {
+    const dockerfile = read('images/local-llm/Dockerfile.arm64');
+    const amd64 = read('images/local-llm/Dockerfile');
+    const lock = JSON.parse(read('images/local-llm/sources.lock.arm64.json'));
+    const runners = JSON.parse(read('images/local-llm/runners.lock.arm64.json'));
+    const base = 'docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669';
+    assert.deepEqual(dockerfile.match(/^FROM .*$/gm), [`FROM ${base}`]);
+    assert.equal(lock.baseImage, base);
+    assert.equal(lock.architecture, 'arm64');
+    assert.match(dockerfile, /test "\$\{TARGETARCH:-arm64\}" = arm64;/);
+    assert.match(dockerfile, /test "\$\(uname -m\)" = aarch64;/);
+    // L1 (decision 1): ggml-org's CUDA 13.4 arm64 release pair, pinned by sha256.
+    assert.equal(lock.llamaCpp.tag, 'b11159');
+    assert.equal(lock.llamaCpp.cuda, '13.4');
+    assert.deepEqual(lock.llamaCpp.gpuComputeCapabilities, ['12.1']);
+    assert.deepEqual(lock.llamaCpp.assets.map((asset) => asset.sha256), [
+        '258c9dc7c6c02fd2d805ebf9511876ab7b9d7b2d3f0c2166454d682ccae7644b',
+        '34d8602d0084b2498dbf0c436fe2d1d4e54ba577b8d5567eb56990e8fff11bfa',
+    ]);
+    for (const asset of [...lock.llamaCpp.assets, lock.uv.asset]) {
+        assert.ok(dockerfile.includes(asset.sha256), asset.name);
+        assert.ok(asset.url.startsWith('https://github.com/'), asset.name);
+        assert.match(asset.name, /arm64|aarch64/, asset.name);
+    }
+    assert.match(dockerfile, /sha256sum --check --strict -;/);
+    assert.match(dockerfile, /grep -q "build 11159,"/);
+    // source.contract names the platform and the GPUs the CUDA runner was built for (DS005).
+    for (const line of ['architecture=arm64', 'llama_cpp=%s', 'llama_cpp_cuda=13.4', 'llama_cpp_build=release', 'gpu_compute_capabilities=12.1']) {
+        assert.ok(dockerfile.includes(line), line);
+    }
+    // No other runner, and nothing proprietary: decision 2 (no Ollama), LM Studio amd64-only.
+    // (Comments explain the absence, and PATH keeps amd64's /opt/ollama/bin entry; the instructions fetch none of them.)
+    const instructions = dockerfile.split('\n').filter((line) => !/^\s*#/.test(line) && !/^ENV PATH=/.test(line)).join('\n');
+    assert.doesNotMatch(instructions, /ollama|ik_llama|lmstudio|llmster|\.gguf|safetensors|huggingface|:latest/i);
+    // The first arm64 runner lock is empty (vLLM comes with Phase 4).
+    assert.deepEqual(runners, { schema: 'local-llm.runners-lock/v1', runners: {} });
+    assert.match(dockerfile, /^COPY --chmod=0444 runners\.lock\.arm64\.json \/opt\/local-llm\/runners\.lock\.json$/m);
+    // The same PATH, library path, entrypoint and user as amd64, so the JavaScript never branches on the architecture.
+    for (const pattern of [/^ENV PATH=.*$/m, /^ENV LD_LIBRARY_PATH=.*$/m, /^ENTRYPOINT \[\]$/m]) {
+        assert.equal(dockerfile.match(pattern)[0], amd64.match(pattern)[0]);
+    }
+    assert.equal(dockerfile.trimEnd().split('\n').at(-1), 'USER 1000:1000');
+    assert.match(dockerfile, /install -d -o 1000 -g 1000 -m 0755 \/opt\/runners;/);
+});
+
+test('local-llm arm64 proof and the index fail closed on the exact digests', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const arm64 = workflow.split('\n  arm64:\n')[1].split('\n  install-check:\n')[0];
+    assert.match(arm64, /runs-on: ubuntu-24\.04-arm$/m);
+    assert.match(arm64, /file: images\/local-llm\/Dockerfile\.arm64$/m);
+    assert.match(arm64, /platforms: linux\/arm64$/m);
+    assert.match(arm64, /provenance: false$/m);
+    assert.match(arm64, /\.Architecture\}\}' "\$image"\)" = arm64/);
+    assert.match(arm64, /= "\$GITHUB_SHA"/);
+    // The amd64 proof rules that apply: uid, version, weight scan, LM Studio absence, closure, lock bytes, contract.
+    for (const rule of ['test "$(sed -n 1p "$evidence/runtime.txt")" = 1000', "grep -q 'build 11159,'", 'test "$weights" = 0',
+        'test "$lmstudio_files" = 0', 'grep -v "libcuda.so.1"', 'cmp images/local-llm/runners.lock.arm64.json "$evidence/runners.lock.json"',
+        "grep -qx 'gpu_compute_capabilities=12.1'", "grep -qx 'architecture=arm64'"]) {
+        assert.ok(arm64.includes(rule), rule);
+    }
+    // Native GB10 code, checked without a GPU from the pinned CUDA image.
+    assert.match(workflow, /^ {2}CUOBJDUMP_IMAGE: docker\.io\/nvidia\/cuda@sha256:[0-9a-f]{64}$/m);
+    assert.match(arm64, /cuobjdump --list-elf \/proof\/libggml-cuda\.so/);
+    assert.match(arm64, /grep -q 'sm_121a' "\$evidence\/cuobjdump\.txt"/);
+    // Each architecture's install check reads its own lock.
+    assert.match(workflow, /lock: images\/local-llm\/runners\.lock\.json$/m);
+    assert.match(workflow, /lock: images\/local-llm\/runners\.lock\.arm64\.json$/m);
+    assert.match(workflow, /cmp "\$LOCK" -/);
+    // The index comes only after both proofs and both install checks, from the exact digests, and is verified.
+    const index = workflow.split('\n  index:\n')[1];
+    assert.match(index, /needs: \[amd64, arm64, install-check\]$/m);
+    assert.match(index, /test "\$AMD64" = "\$AMD64_DIGEST"/);
+    assert.match(index, /imagetools create --tag "\$staging" \\\n\s+"docker\.io\/\$\{IMAGE_NAME\}@\$\{AMD64\}" "docker\.io\/\$\{IMAGE_NAME\}@\$\{ARM64\}"/);
+    assert.match(index, /index\.manifests\.length !== 2/);
+    assert.match(index, /Refusing to overwrite existing staging tag/);
 });
 
 test('local-llm image builds ik_llama.cpp from a pinned commit for this machine family, off PATH', () => {
@@ -442,7 +524,7 @@ test('local-llm image ships the runner lock, a pinned uv and a runner directory 
     assert.match(dockerfile, /install -d -o 1000 -g 1000 -m 0755 \/opt\/runners;/);
     assert.ok(workflow.includes(`grep -qx 'uv=${sources.uv.version}'`));
     // CI installs each lock entry in the published image, in its own job after the build.
-    assert.match(workflow, /^ {2}install-check:\n {4}name: [^\n]+\n {4}needs: build$/m);
+    assert.match(workflow, /^ {2}install-check:\n {4}name: [^\n]+\n {4}needs: \[amd64, arm64\]$/m);
     assert.match(workflow, /LOCAL_LLMS_COMMIT: [0-9a-f]{40}$/m);
     // A real, pushed local-llms commit, never a placeholder.
     assert.doesNotMatch(workflow, /LOCAL_LLMS_COMMIT: 0{40}$/m);

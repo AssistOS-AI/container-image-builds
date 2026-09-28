@@ -1,9 +1,17 @@
 name: Publish local-llm agent image
 
-# amd64 only: the pinned llama.cpp and Ollama CUDA release builds exist only
-# for x86-64, and ik_llama.cpp is built for x86-64 from a pinned commit in the
-# Dockerfile's builder stage. Runs only when dispatched; publishing is an
-# explicit decision.
+# One multi-arch index, as ploinky-node is published:
+# - linux/amd64: the already published image, reused by its pinned digest and
+#   proven again with the expectations it was built with (its revision label,
+#   ik_llama.cpp, CUDA 12 libraries, the LM Studio SDK, the amd64 runner lock).
+#   images/local-llm/Dockerfile and its locks stay byte-identical until an
+#   amd64 rebuild.
+# - linux/arm64: built here from images/local-llm/Dockerfile.arm64 on a native
+#   arm64 runner, for NVIDIA GB10 (DGX Spark): llama.cpp only, with native
+#   sm_121a code.
+# The index is assembled only after both proofs and both install checks pass,
+# then its exact children are verified. Runs only when dispatched; publishing
+# is an explicit decision.
 on:
   workflow_dispatch:
 
@@ -17,14 +25,21 @@ concurrency:
 env:
   IMAGE_NAME: assistos/local-llm
   BASE_IMAGE: docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
+  # The reused amd64 image: the digest local-llm's manifest pinned before the
+  # index, and the container-image-builds commit it was built from.
+  AMD64_DIGEST: sha256:b6c79af2aad08b542339346f4a985c84d5cbcacc31e8c6df45f951da7ba0fbf7
+  AMD64_REVISION: 95ba10a2be4eb1aeb0d9612186c746ae9d7b9efe
+  # The CUDA 13.0.2 devel image (arm64 manifest) whose cuobjdump lists the GPU
+  # code in the arm64 llama.cpp build; no GPU is needed for that.
+  CUOBJDUMP_IMAGE: docker.io/nvidia/cuda@sha256:450d11555d20ac8ebbbc13ebf17589c2bd42869171a90179ce7098b4a5e64c6a
 
 jobs:
-  build:
-    name: Build and prove linux/amd64
+  amd64:
+    name: Reuse and prove linux/amd64
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.reuse.outputs.digest }}
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -42,39 +57,19 @@ jobs:
           grep '^FROM ' images/local-llm/Dockerfile | head -n 1 | grep -Eq '^FROM docker\.io/nvidia/cuda@sha256:[0-9a-f]{64} AS ik-builder$'
           node --test --test-name-pattern=local-llm tests/image-definitions.test.mjs
 
-      - name: Free runner disk
-        # The CUDA devel builder stage is about 5 GB compressed; the runner's
-        # preinstalled SDKs are not needed here.
+      - name: Resolve the reused digest
+        id: reuse
+        # The pinned digest must be a single linux/amd64 image manifest.
         run: |
           set -euo pipefail
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          df -h /
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: assistos
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push linux/amd64 by digest
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: images/local-llm
-          platforms: linux/amd64
-          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
-          provenance: false
+          [[ "$AMD64_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          raw="$(docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${AMD64_DIGEST}")"
+          node -e 'const m = JSON.parse(process.argv[1]); if (!/image\.manifest|distribution\.manifest/.test(m.mediaType)) { console.error(`not an image manifest: ${m.mediaType}`); process.exit(1); }' "$raw"
+          echo "digest=$AMD64_DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Prove the runners, the uid and the absence of weights in the exact digest
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.reuse.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -85,7 +80,8 @@ jobs:
           docker image inspect "$image" > "$evidence/image-inspect.json"
           test "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
+          # The reused image carries the revision it was built from, not this run's.
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$AMD64_REVISION"
           run() { docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges "$@"; }
           run "$image" sh -c 'set -eu; id -u; node --version; llama-server --version 2>&1 | grep "build 11159,"; ollama --version 2>&1 | grep "version is 0.34.4"; echo "$PATH"' \
             | tee "$evidence/runtime.txt"
@@ -142,39 +138,155 @@ jobs:
           cmp images/local-llm/runners.lock.json "$evidence/runners.lock.json"
           printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
 
-      - name: Tag the proven digest as a candidate
+      - name: Upload proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: local-llm-proof-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/local-llm-proof
+          if-no-files-found: error
+          retention-days: 30
+
+  arm64:
+    name: Build and prove linux/arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable base and workflow inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(uname -m)" = aarch64
+          # One stage on the pinned multi-arch base; no builder stage.
+          test "$(grep -c '^FROM ' images/local-llm/Dockerfile.arm64)" = 1
+          test "$(grep '^FROM ' images/local-llm/Dockerfile.arm64)" = "FROM $BASE_IMAGE"
+          node --test --test-name-pattern=local-llm tests/image-definitions.test.mjs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push linux/arm64 by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/local-llm
+          file: images/local-llm/Dockerfile.arm64
+          platforms: linux/arm64
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
+          provenance: false
+
+      - name: Prove the runner, its GPU code, the uid and the absence of weights in the exact digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
-            echo "Refusing to overwrite existing staging tag: $staging" >&2
-            exit 1
-          fi
-          docker buildx imagetools create --tag "$staging" "docker.io/${IMAGE_NAME}@${DIGEST}"
-          printf 'Proven candidate: `docker.io/%s@%s` (%s)\n' "$IMAGE_NAME" "$DIGEST" "$staging" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="docker.io/${IMAGE_NAME}@${DIGEST}"
+          evidence="$RUNNER_TEMP/local-llm-proof"
+          mkdir -p "$evidence"
+          docker pull "$image"
+          docker image inspect "$image" > "$evidence/image-inspect.json"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = arm64
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
+          run() { docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges "$@"; }
+          run "$image" sh -c 'set -eu; id -u; node --version; llama-server --version 2>&1 | grep "build 11159,"; echo "$PATH"; echo "$LD_LIBRARY_PATH"' \
+            | tee "$evidence/runtime.txt"
+          test "$(sed -n 1p "$evidence/runtime.txt")" = 1000
+          grep -q 'build 11159,' "$evidence/runtime.txt"
+          grep -q '^/usr/local/nvidia/bin:' "$evidence/runtime.txt"
+          test "$(tail -n 1 "$evidence/runtime.txt")" = /usr/local/nvidia/lib64
+          # Root with read-search over every directory; a find error fails the proof.
+          scan_errors="$evidence/weight-scan-errors.txt"
+          weights="$(run --user 0 --cap-add=DAC_READ_SEARCH "$image" sh -c 'set -eu; find / -xdev -type f \( -name "*.gguf" -o -name "*.safetensors" -o -path "*/blobs/sha256-*" \) > /tmp/weights; wc -l < /tmp/weights' 2>"$scan_errors")"
+          test ! -s "$scan_errors"
+          test "$weights" = 0
+          # LM Studio is proprietary and is never part of the image.
+          lmstudio_files="$(run --user 0 --cap-add=DAC_READ_SEARCH "$image" sh -c 'set -eu; find / -xdev \( -iname "*llmster*" -o -iname "*liblmstudio*" -o -iname ".lmstudio*" -o -iname "*lm-studio*" \) > /tmp/lmstudio; cat /tmp/lmstudio >&2; wc -l < /tmp/lmstudio' 2>"$scan_errors")"
+          test ! -s "$scan_errors"
+          test "$lmstudio_files" = 0
+          run "$image" sh -c '
+            set -eu
+            missing() { test -f "$1" || { echo "missing file: $1"; return 0; }; ldd "$1" | grep "not found" | grep -v "libcuda.so.1" || true; }
+            # Every binary and backend resolves from its own directory (RUNPATH $ORIGIN); only the driver is missing.
+            for f in /opt/llama.cpp/llama-server /opt/llama.cpp/*.so*; do
+              test -z "$(LD_LIBRARY_PATH=/usr/local/nvidia/lib64 missing "$f")"
+            done
+            test -f /opt/llama.cpp/libggml-cpu-armv8.6_2.so
+            # Nothing that is not on arm64: no ik_llama.cpp, no Ollama, no LM Studio SDK.
+            test ! -e /opt/ik_llama.cpp
+            test ! -e /opt/ollama
+            test ! -e /opt/local-llm/lmstudio-sdk
+            /usr/local/bin/uv --version 2>&1 | grep -q "uv 0.12.18"
+            test "$(stat -c %u:%g:%a /opt/runners)" = 1000:1000:755
+            test -w /opt/runners
+            cat /opt/local-llm/source.contract' | tee "$evidence/source.contract"
+          grep -qx 'architecture=arm64' "$evidence/source.contract"
+          grep -qx 'llama_cpp=b11159' "$evidence/source.contract"
+          grep -qx 'llama_cpp_cuda=13.4' "$evidence/source.contract"
+          grep -qx 'gpu_compute_capabilities=12.1' "$evidence/source.contract"
+          grep -qx 'uv=0.12.18' "$evidence/source.contract"
+          # The image carries exactly the committed arm64 runner lock.
+          run "$image" cat /opt/local-llm/runners.lock.json > "$evidence/runners.lock.json"
+          cmp images/local-llm/runners.lock.arm64.json "$evidence/runners.lock.json"
+          # Native code for GB10 (compute capability 12.1): cuobjdump from the pinned CUDA devel image, no GPU needed.
+          cid="$(docker create "$image")"
+          docker cp "$cid:/opt/llama.cpp/libggml-cuda.so" "$evidence/libggml-cuda.so"
+          docker rm "$cid" > /dev/null
+          docker run --rm --network=none -v "$evidence:/proof:ro" "$CUOBJDUMP_IMAGE" cuobjdump --list-elf /proof/libggml-cuda.so > "$evidence/cuobjdump.txt"
+          grep -q 'sm_121a' "$evidence/cuobjdump.txt"
+          rm "$evidence/libggml-cuda.so"
+          printf '%s\n' "$DIGEST" > "$evidence/digest.txt"
 
       - name: Upload proof
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: local-llm-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          name: local-llm-proof-arm64-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/local-llm-proof
           if-no-files-found: error
           retention-days: 30
 
   install-check:
-    name: Install every runner lock entry in the published image
-    needs: build
-    runs-on: ubuntu-24.04
+    name: Install every runner lock entry in the ${{ matrix.arch }} image
+    needs: [amd64, arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-24.04
+            lock: images/local-llm/runners.lock.json
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+            lock: images/local-llm/runners.lock.arm64.json
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 90
     env:
-      DIGEST: ${{ needs.build.outputs.digest }}
+      DIGEST: ${{ matrix.arch == 'amd64' && needs.amd64.outputs.digest || needs.arm64.outputs.digest }}
+      LOCK: ${{ matrix.lock }}
       # The agent code that installs the runners (runners plan §5.2): a pushed
-      # local-llms commit, fetched by its full hash.
+      # local-llms commit that carries the hardware-profile changes, fetched by
+      # its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: 171b2eba85e8d5e03499f36c82b1eef3b8579a06
+      LOCAL_LLMS_COMMIT: 28aa001baed7ddb11fd52ad0e6ff8e3254264738
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -204,6 +316,8 @@ jobs:
         # Downloads, verifies and rebuilds each runner exactly as the agent
         # does, then checks versions, imports without a GPU and library links.
         # Each runner is installed in its own container, removed afterwards.
+        # The first arm64 lock has no entries: the image's lock is still read
+        # and must match the committed one.
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -211,15 +325,16 @@ jobs:
           evidence="$RUNNER_TEMP/runner-install-check"
           mkdir -p "$evidence"
           docker pull -q "$image"
+          docker run --rm --network=none "$image" cat /opt/local-llm/runners.lock.json | cmp "$LOCK" -
           status=0
-          for runner in $(node -e 'for (const id of Object.keys(require("./images/local-llm/runners.lock.json").runners)) console.log(id)'); do
+          for runner in $(node -e 'for (const id of Object.keys(require(process.argv[1]).runners)) console.log(id)' "$PWD/$LOCK"); do
             df -h / >> "$evidence/disk.txt"
             # A proprietary entry (LM Studio) is never downloaded here: that
             # would accept its terms on behalf of whoever runs CI. It is
             # validated from the lock with no network; the live install on a
             # deployment whose admin accepted them is its install proof.
             net=(); mode=()
-            if node -e 'process.exit(require("./images/local-llm/runners.lock.json").runners[process.argv[1]].licence.proprietary === true ? 0 : 1)' "$runner"; then
+            if node -e 'process.exit(require(process.argv[2]).runners[process.argv[1]].licence.proprietary === true ? 0 : 1)' "$runner" "$PWD/$LOCK"; then
               net=(--network=none); mode=(--validate-only)
             fi
             if docker run --rm "${net[@]}" --cap-drop=ALL --security-opt=no-new-privileges \
@@ -240,7 +355,53 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: local-llm-runner-install-check-${{ github.run_id }}-${{ github.run_attempt }}
+          name: local-llm-runner-install-check-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/runner-install-check
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 30
+
+  index:
+    name: Assemble and verify the multi-arch candidate index
+    needs: [amd64, arm64, install-check]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AMD64: ${{ needs.amd64.outputs.digest }}
+      ARM64: ${{ needs.arm64.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create the candidate index from the two proven digests
+        run: |
+          set -euo pipefail
+          [[ "$AMD64" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ARM64" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$AMD64" = "$AMD64_DIGEST"
+          staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing staging tag: $staging" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$staging" \
+            "docker.io/${IMAGE_NAME}@${AMD64}" "docker.io/${IMAGE_NAME}@${ARM64}"
+          # Exactly the two proven children, one per platform, and nothing else.
+          raw="$(docker buildx imagetools inspect --raw "$staging")"
+          node -e '
+            const index = JSON.parse(process.argv[1]);
+            const want = { "linux/amd64": process.argv[2], "linux/arm64": process.argv[3] };
+            const got = Object.fromEntries(index.manifests.map((m) => [`${m.platform.os}/${m.platform.architecture}`, m.digest]));
+            if (!/index/.test(index.mediaType) || index.manifests.length !== 2 || JSON.stringify(got) !== JSON.stringify(want)) {
+              console.error(JSON.stringify({ mediaType: index.mediaType, got, want }));
+              process.exit(1);
+            }' "$raw" "$AMD64" "$ARM64"
+          index_digest="$(docker buildx imagetools inspect "$staging" --format '{{json .Manifest}}' | node -e 'let s = ""; process.stdin.on("data", (d) => s += d).on("end", () => console.log(JSON.parse(s).digest))')"
+          [[ "$index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'Proven candidate index: `docker.io/%s@%s` (%s)\n- linux/amd64 `%s` (reused)\n- linux/arm64 `%s`\n' \
+            "$IMAGE_NAME" "$index_digest" "$staging" "$AMD64" "$ARM64" >> "$GITHUB_STEP_SUMMARY"
