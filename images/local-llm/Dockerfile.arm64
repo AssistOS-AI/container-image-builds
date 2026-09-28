@@ -1,0 +1,76 @@
+FROM docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
+# local-llm agent runtime for arm64 hosts with an NVIDIA GB10 GPU (DGX Spark,
+# compute capability 12.1): ggml-org's pinned llama.cpp CUDA 13.4 arm64 release
+# build, which carries native sm_121a code and runs on the R580 driver under
+# CUDA minor-version compatibility. Same base, /opt layout, PATH and library
+# path as the amd64 image (Dockerfile), so the agent's JavaScript does not
+# branch on CPU architecture. No ik_llama.cpp, TabbyAPI, Ollama or LM Studio:
+# the agent reports them as not available on this platform. The NVIDIA driver
+# libraries and nvidia-smi are not part of the image: a Ploinky Box GPU grant
+# binds them read-only under /usr/local/nvidia at runtime. No model weights are
+# ever part of the image.
+ARG TARGETARCH
+# Optional plain-HTTP mirror of the exact release assets (for local builds on a
+# slow link). The sha256 checks pin the bytes whatever the source.
+ARG RELEASE_MIRROR=
+USER root
+RUN set -eu; \
+    test "${TARGETARCH:-arm64}" = arm64; \
+    test "$(uname -m)" = aarch64; \
+    llama=b11159; \
+    fetch() { \
+        name=$1; url=$2; sha=$3; \
+        if [ -n "$RELEASE_MIRROR" ]; then url="$RELEASE_MIRROR/$name"; fi; \
+        curl -fsSL --retry 5 --retry-all-errors -o "/tmp/$name" "$url"; \
+        printf '%s  %s\n' "$sha" "/tmp/$name" | sha256sum --check --strict -; \
+    }; \
+    fetch "llama-$llama-bin-ubuntu-cuda-13.4-arm64.tar.gz" \
+        "https://github.com/ggml-org/llama.cpp/releases/download/$llama/llama-$llama-bin-ubuntu-cuda-13.4-arm64.tar.gz" \
+        258c9dc7c6c02fd2d805ebf9511876ab7b9d7b2d3f0c2166454d682ccae7644b; \
+    fetch "cudart-llama-$llama-bin-ubuntu-cuda-13.4-arm64.tar.gz" \
+        "https://github.com/ggml-org/llama.cpp/releases/download/$llama/cudart-llama-$llama-bin-ubuntu-cuda-13.4-arm64.tar.gz" \
+        34d8602d0084b2498dbf0c436fe2d1d4e54ba577b8d5567eb56990e8fff11bfa; \
+    mkdir -p /opt/llama.cpp /opt/local-llm; \
+    tar -xzf "/tmp/llama-$llama-bin-ubuntu-cuda-13.4-arm64.tar.gz" -C /opt/llama.cpp --strip-components=1 --no-same-owner; \
+    tar -xzf "/tmp/cudart-llama-$llama-bin-ubuntu-cuda-13.4-arm64.tar.gz" -C /opt/llama.cpp --strip-components=1 --no-same-owner; \
+    rm -f /tmp/*.tar.gz; \
+    chown -R root:root /opt/llama.cpp /opt/local-llm; \
+    chmod -R go-w /opt/llama.cpp; \
+    /opt/llama.cpp/llama-server --version 2>&1 | grep -q "build 11159,"; \
+    printf 'architecture=arm64\nllama_cpp=%s\nllama_cpp_cuda=13.4\nllama_cpp_build=release\ngpu_compute_capabilities=12.1\n' "$llama" > /opt/local-llm/source.contract; \
+    chmod 0444 /opt/local-llm/source.contract
+# On-demand runners (runners plan §5.2): the pinned uv that rebuilds each
+# runner's environment offline from its verified cache, and /opt/runners, where
+# uid 1000 builds the runnable copies in the container's own filesystem. The C
+# compiler and Python headers are for Triton's launcher when vLLM arrives in
+# this image's lock (plan Phase 4); the first arm64 lock has no runners.
+RUN set -eu; \
+    uv=0.12.18; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gcc libc6-dev libpython3.13-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    name="uv-aarch64-unknown-linux-gnu.tar.gz"; \
+    url="https://github.com/astral-sh/uv/releases/download/$uv/$name"; \
+    if [ -n "$RELEASE_MIRROR" ]; then url="$RELEASE_MIRROR/$name"; fi; \
+    curl -fsSL --retry 5 --retry-all-errors -o "/tmp/$name" "$url"; \
+    printf '%s  %s\n' afb6291f3f0a6b4521fc67b947822506c41dde5b60d2189dd8f3695b2ac8c9e7 "/tmp/$name" | sha256sum --check --strict -; \
+    tar -xzf "/tmp/$name" -C /usr/local/bin --strip-components=1 --no-same-owner uv-aarch64-unknown-linux-gnu/uv; \
+    rm -f "/tmp/$name"; \
+    chown root:root /usr/local/bin/uv; \
+    chmod 0755 /usr/local/bin/uv; \
+    /usr/local/bin/uv --version 2>&1 | grep -q "uv $uv"; \
+    install -d -o 1000 -g 1000 -m 0755 /opt/runners; \
+    chmod u+w /opt/local-llm/source.contract; \
+    printf 'uv=%s\n' "$uv" >> /opt/local-llm/source.contract; \
+    chmod 0444 /opt/local-llm/source.contract
+# The only runners that can be installed on demand, and the only files they may
+# download: admins choose a runner id, never a URL. The first arm64 lock is empty.
+COPY --chmod=0444 runners.lock.arm64.json /opt/local-llm/runners.lock.json
+# llama.cpp and its CUDA backend find their own libraries through RUNPATH
+# $ORIGIN, so the shared library path holds only the granted driver libraries.
+ENV PATH=/usr/local/nvidia/bin:/opt/llama.cpp:/opt/ollama/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64
+# Ploinky prefixes the image entrypoint to the agent command; keep it neutral.
+ENTRYPOINT []
+CMD ["node"]
+USER 1000:1000
