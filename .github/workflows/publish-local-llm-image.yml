@@ -286,7 +286,7 @@ jobs:
       # local-llms commit that carries the hardware-profile changes, fetched by
       # its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: 50f39385e1a47a0126e9c8819a01a40538ab8d57
+      LOCAL_LLMS_COMMIT: b70f5f40a69f75280edfcb1854267fc37c35c6e4
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -317,9 +317,9 @@ jobs:
         # does, then checks versions, imports without a GPU and library links.
         # Each runner is installed in its own container, removed afterwards.
         # The image's lock is read first and must match the committed one; the
-        # arm64 lock's vLLM entry is its aarch64 closure. The complete check of
-        # every installed distribution needs a LOCAL_LLMS_COMMIT whose install
-        # check has it (repinned only to a verified, pushed source).
+        # arm64 lock's vLLM entry is its aarch64 closure. The pinned agent code
+        # also checks every installed distribution against the lock's wheels:
+        # none extra, none missing, exact versions, no name installed twice.
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
