@@ -399,9 +399,22 @@ test('local-llm arm64 image: llama.cpp for NVIDIA GB10 from pinned release asset
     const distributions = (files) => wheels(files).map((file) => file.name.split('-').slice(0, 2).join('==').replace(/[-_.]+(?=[^=]*==)/g, '-').toLowerCase()).sort();
     assert.equal(wheels(vllm.files).length, 196);
     assert.deepEqual(distributions(vllm.files), distributions(amdVllm.files));
+    // Installable by the image's CPython 3.13 on aarch64 with glibc 2.41 (Debian trixie): at least one tag triple
+    // of the (possibly compressed) wheel tags is cp313-cp313, cp3X-abi3 with X <= 13, or py3-none, on
+    // manylinux_2_Y_aarch64 with Y <= 41, manylinux2014_aarch64 or any. musllinux, free-threaded cp313t and
+    // bare linux_aarch64 never qualify.
+    const installable = (name) => {
+        const [py, abi, plat] = name.slice(0, -'.whl'.length).split('-').slice(-3).map((tags) => tags.split('.'));
+        const interpreter = (p, a) => (p === 'cp313' && a === 'cp313')
+            || (/^cp3\d+$/.test(p) && Number(p.slice(3)) <= 13 && a === 'abi3')
+            || (/^py3(\d+)?$/.test(p) && Number(p.slice(3) || 0) <= 13 && a === 'none');
+        const platform = (pl) => pl === 'any' || pl === 'manylinux2014_aarch64'
+            || (/^manylinux_2_(\d+)_aarch64$/.test(pl) && Number(/^manylinux_2_(\d+)_/.exec(pl)[1]) <= 41);
+        return py.some((p) => abi.some((a) => interpreter(p, a))) && plat.some(platform);
+    };
     for (const file of wheels(vllm.files)) {
-        assert.match(file.name, /-(any|[a-z0-9_.]*aarch64)\.whl$/, file.name);
-        assert.doesNotMatch(file.name, /x86_64/, file.name);
+        assert.ok(installable(file.name), `${file.name} is not installable by CPython 3.13 on aarch64 with glibc 2.41`);
+        assert.doesNotMatch(file.name, /x86_64|musllinux|cp313t|-linux_aarch64/, file.name);
         assert.match(file.url, new RegExp(`^https://files\\.pythonhosted\\.org/packages/[0-9a-f/]+/${file.name.replace(/[.+]/g, '\\$&')}$`), file.name);
         assert.match(file.sha256, /^[0-9a-f]{64}$/, file.name);
         assert.ok(Number.isInteger(file.size) && file.size > 0, file.name);
