@@ -7,6 +7,16 @@ on:
         description: Exact 40-character AssistOS-AI/ploinky commit SHA
         required: true
         type: string
+      agentlib_commit:
+        description: Optional exact 40-character AchillesAgentLib commit; empty selects the remote default branch HEAD
+        required: false
+        type: string
+        default: ''
+      mcp_sdk_commit:
+        description: Optional exact 40-character MCP SDK commit; empty selects the remote default branch HEAD
+        required: false
+        type: string
+        default: ''
       promote_stable:
         description: Move latest and runtime only after both native proofs and candidate verification
         required: true
@@ -27,11 +37,24 @@ env:
 
 jobs:
   resolve-source:
-    name: Resolve immutable input
+    name: Resolve immutable inputs
     runs-on: ubuntu-24.04
     outputs:
       source_sha: ${{ steps.input.outputs.source_sha }}
+      agentlib_repository: ${{ steps.libraries.outputs.agentlib_repository }}
+      agentlib_url: ${{ steps.libraries.outputs.agentlib_url }}
+      agentlib_branch: ${{ steps.libraries.outputs.agentlib_branch }}
+      agentlib_commit: ${{ steps.libraries.outputs.agentlib_commit }}
+      mcp_sdk_repository: ${{ steps.libraries.outputs.mcp_sdk_repository }}
+      mcp_sdk_url: ${{ steps.libraries.outputs.mcp_sdk_url }}
+      mcp_sdk_branch: ${{ steps.libraries.outputs.mcp_sdk_branch }}
+      mcp_sdk_commit: ${{ steps.libraries.outputs.mcp_sdk_commit }}
     steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
       - name: Require an exact immutable Ploinky source SHA
         id: input
         env:
@@ -40,6 +63,24 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Freeze the AgentLib and MCP SDK selections once
+        id: libraries
+        env:
+          AGENTLIB_COMMIT: ${{ inputs.agentlib_commit }}
+          MCP_SDK_COMMIT: ${{ inputs.mcp_sdk_commit }}
+          SOURCE_REPO_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+          LIBRARY_INPUTS_FILE: ${{ runner.temp }}/library-inputs.json
+        run: node images/ploinky-box/resolve-libraries.mjs
+
+      - name: Upload frozen library inputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-box-library-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/library-inputs.json
+          if-no-files-found: warn
+          retention-days: 30
 
   build:
     name: Build ${{ matrix.platform }}
@@ -70,55 +111,21 @@ jobs:
           submodules: true
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Resolve immutable MCP SDK input from the Ploinky lock
-        id: mcp_sdk
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const lock = JSON.parse(fs.readFileSync('sources/ploinky/ploinky-box/dependencies.lock.json'));
-          const repository = lock?.repositories?.['mcp-sdk'];
-          if (!repository
-              || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(repository.url)
-              || !/^[0-9a-f]{40}$/.test(repository.commit)) {
-            throw new Error('Ploinky dependency lock has no valid immutable MCP SDK input');
-          }
-          const slug = repository.url.slice('https://github.com/'.length, -'.git'.length);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `repository=${slug}\ncommit=${repository.commit}\n`);
-          NODE
-
       - name: Checkout immutable MCP SDK source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: ${{ steps.mcp_sdk.outputs.repository }}
-          ref: ${{ steps.mcp_sdk.outputs.commit }}
+          repository: ${{ needs.resolve-source.outputs.mcp_sdk_repository }}
+          ref: ${{ needs.resolve-source.outputs.mcp_sdk_commit }}
           path: sources/mcp-sdk
           fetch-depth: 1
           persist-credentials: false
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Resolve immutable AgentLib input from the Ploinky lock
-        id: agentlib
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const lock = JSON.parse(fs.readFileSync('sources/ploinky/ploinky-box/dependencies.lock.json'));
-          const repository = lock?.repositories?.achillesAgentLib;
-          if (!repository
-              || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(repository.url)
-              || !/^[0-9a-f]{40}$/.test(repository.commit)) {
-            throw new Error('Ploinky dependency lock has no valid immutable AgentLib input');
-          }
-          const slug = repository.url.slice('https://github.com/'.length, -'.git'.length);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `repository=${slug}\ncommit=${repository.commit}\n`);
-          NODE
-
       - name: Checkout immutable AgentLib source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: ${{ steps.agentlib.outputs.repository }}
-          ref: ${{ steps.agentlib.outputs.commit }}
+          repository: ${{ needs.resolve-source.outputs.agentlib_repository }}
+          ref: ${{ needs.resolve-source.outputs.agentlib_commit }}
           path: sources/achillesAgentLib
           fetch-depth: 1
           persist-credentials: false
@@ -127,10 +134,13 @@ jobs:
       - name: Verify exact clean build inputs
         env:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
-          MCP_SDK_SHA: ${{ steps.mcp_sdk.outputs.commit }}
-          AGENTLIB_SHA: ${{ steps.agentlib.outputs.commit }}
+          MCP_SDK_SHA: ${{ needs.resolve-source.outputs.mcp_sdk_commit }}
+          AGENTLIB_SHA: ${{ needs.resolve-source.outputs.agentlib_commit }}
         run: |
           set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$MCP_SDK_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$AGENTLIB_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1)"
           test "$(git -C sources/ploinky rev-parse HEAD)" = "$SOURCE_SHA"
@@ -158,6 +168,12 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             PLOINKY_SOURCE_SHA=${{ needs.resolve-source.outputs.source_sha }}
+            AGENTLIB_REPOSITORY=${{ needs.resolve-source.outputs.agentlib_url }}
+            AGENTLIB_BRANCH=${{ needs.resolve-source.outputs.agentlib_branch }}
+            AGENTLIB_COMMIT=${{ needs.resolve-source.outputs.agentlib_commit }}
+            MCP_SDK_REPOSITORY=${{ needs.resolve-source.outputs.mcp_sdk_url }}
+            MCP_SDK_BRANCH=${{ needs.resolve-source.outputs.mcp_sdk_branch }}
+            MCP_SDK_COMMIT=${{ needs.resolve-source.outputs.mcp_sdk_commit }}
           outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
 
@@ -166,7 +182,12 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
           ARCH: ${{ matrix.arch }}
-          AGENTLIB_SHA: ${{ steps.agentlib.outputs.commit }}
+          AGENTLIB_REPOSITORY: ${{ needs.resolve-source.outputs.agentlib_url }}
+          AGENTLIB_BRANCH: ${{ needs.resolve-source.outputs.agentlib_branch }}
+          AGENTLIB_COMMIT: ${{ needs.resolve-source.outputs.agentlib_commit }}
+          MCP_SDK_REPOSITORY: ${{ needs.resolve-source.outputs.mcp_sdk_url }}
+          MCP_SDK_BRANCH: ${{ needs.resolve-source.outputs.mcp_sdk_branch }}
+          MCP_SDK_COMMIT: ${{ needs.resolve-source.outputs.mcp_sdk_commit }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -182,22 +203,18 @@ jobs:
             --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/node)
           "${runtime[@]}" "$image" /usr/local/share/ploinky/webtty/native-probe.mjs --verify \
             > "$evidence/native-probe.json" 2> "$evidence/native-probe.stderr"
-          "${runtime[@]}" "$image" /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
-            --source /opt/ploinky-agentlib \
-            --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
-            --expected-commit "$AGENTLIB_SHA" \
-            > "$evidence/agentlib-probe.json" 2> "$evidence/agentlib-probe.stderr"
+          "${runtime[@]}" "$image" /usr/local/share/ploinky/smoke-libraries.mjs smoke \
+            > "$evidence/library-smoke.json" 2> "$evidence/library-smoke.stderr"
+          "${runtime[@]}" "$image" /usr/local/share/ploinky/smoke-libraries.mjs self-test \
+            > "$evidence/library-self-test.json" 2> "$evidence/library-self-test.stderr"
           "${runtime[@]}" "$image" --input-type=module -e '
             import fs from "node:fs";
-            import crypto from "node:crypto";
-            const root = "/usr/local/share/ploinky/agentlib/";
-            const modules = ["image-bundle.mjs", "contract.mjs", "fingerprint.mjs", "source.mjs"];
+            const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
             console.log(JSON.stringify({
-              moduleSha256: Object.fromEntries(modules.map(name => [name,
-                crypto.createHash("sha256").update(fs.readFileSync(root + name)).digest("hex")])),
-              contract: JSON.parse(fs.readFileSync(root + "runtime-contract.json")),
+              achillesAgentLib: read("/usr/local/share/ploinky/agentlib/runtime-contract.json"),
+              "mcp-sdk": read("/usr/local/lib/ploinky/mcp-sdk/.ploinky-box-mcp-sdk.json"),
             }));
-          ' > "$evidence/immutable-agentlib.json"
+          ' > "$evidence/library-provenance.json"
           "${runtime[@]}" "$image" --input-type=module -e '
             import fs from "node:fs";
             import crypto from "node:crypto";
@@ -250,6 +267,12 @@ jobs:
         id: digests
         env:
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          AGENTLIB_REPOSITORY: ${{ needs.resolve-source.outputs.agentlib_url }}
+          AGENTLIB_BRANCH: ${{ needs.resolve-source.outputs.agentlib_branch }}
+          AGENTLIB_COMMIT: ${{ needs.resolve-source.outputs.agentlib_commit }}
+          MCP_SDK_REPOSITORY: ${{ needs.resolve-source.outputs.mcp_sdk_url }}
+          MCP_SDK_BRANCH: ${{ needs.resolve-source.outputs.mcp_sdk_branch }}
+          MCP_SDK_COMMIT: ${{ needs.resolve-source.outputs.mcp_sdk_commit }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -283,6 +306,12 @@ jobs:
           AMD64_DIGEST: ${{ steps.digests.outputs.amd64_digest }}
           ARM64_DIGEST: ${{ steps.digests.outputs.arm64_digest }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          AGENTLIB_REPOSITORY: ${{ needs.resolve-source.outputs.agentlib_url }}
+          AGENTLIB_BRANCH: ${{ needs.resolve-source.outputs.agentlib_branch }}
+          AGENTLIB_COMMIT: ${{ needs.resolve-source.outputs.agentlib_commit }}
+          MCP_SDK_REPOSITORY: ${{ needs.resolve-source.outputs.mcp_sdk_url }}
+          MCP_SDK_BRANCH: ${{ needs.resolve-source.outputs.mcp_sdk_branch }}
+          MCP_SDK_COMMIT: ${{ needs.resolve-source.outputs.mcp_sdk_commit }}
         run: |
           set -euo pipefail
           docker buildx imagetools create \
@@ -312,6 +341,14 @@ jobs:
           cp -R /tmp/ploinky-box-proofs "$evidence/native-proofs"
           echo "digest=$staging_digest" >> "$GITHUB_OUTPUT"
           printf 'Verified candidate: `docker.io/%s@%s`\n' "$IMAGE_NAME" "$staging_digest" >> "$GITHUB_STEP_SUMMARY"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const proof = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            for (const [name, library] of Object.entries(proof.libraries)) {
+              console.log("Library " + name + ": " + library.packageName + " " + library.packageVersion + " from "
+                + library.repository + " " + (library.branch ?? "(explicit commit)") + " at " + library.commit);
+            }
+          ' "$evidence/candidate-proof.json" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload immutable candidate evidence
         if: always()

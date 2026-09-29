@@ -7,6 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { publicationContext, verifyNativeEvidence, verifyNativeProofs, verifyCandidate } from '../images/ploinky-box/verify-publication.mjs';
+import { LIBRARIES } from '../images/ploinky-box/resolve-libraries.mjs';
+import {
+    ACHILLES_PACKAGE_NAME, ACHILLES_REQUIRED_ENTRIES, LIBRARY_METADATA_SCHEMA, MCP_SDK_MEMBERS,
+    MCP_SDK_PACKAGE_NAME, SELF_TEST_CASES,
+} from '../images/ploinky-box/smoke-libraries.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ARCHES = ['amd64', 'arm64'];
@@ -14,6 +19,42 @@ const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/publish-ploinky-box-image.yml'), 'utf8');
+// The frozen selections the prerequisite job hands to the verifier; one branch is
+// a resolved default, the other an explicit commit.
+const SELECTIONS = {
+    achillesAgentLib: { repository: LIBRARIES.achillesAgentLib.repository, branch: 'master', commit: '9'.repeat(40), packageVersion: '0.1.0' },
+    'mcp-sdk': { repository: LIBRARIES['mcp-sdk'].repository, branch: null, commit: '7'.repeat(40), packageVersion: '1.19.1' },
+};
+const LIBRARY_ENV = {
+    AGENTLIB_REPOSITORY: SELECTIONS.achillesAgentLib.repository, AGENTLIB_BRANCH: 'master', AGENTLIB_COMMIT: '9'.repeat(40),
+    MCP_SDK_REPOSITORY: SELECTIONS['mcp-sdk'].repository, MCP_SDK_BRANCH: '', MCP_SDK_COMMIT: '7'.repeat(40),
+};
+const PACKAGE_NAMES = { achillesAgentLib: ACHILLES_PACKAGE_NAME, 'mcp-sdk': MCP_SDK_PACKAGE_NAME };
+
+function libraryEvidence() {
+    const provenance = Object.fromEntries(Object.entries(SELECTIONS).map(([library, selection]) => [library, {
+        schema: LIBRARY_METADATA_SCHEMA, library, packageName: PACKAGE_NAMES[library],
+        packageVersion: selection.packageVersion, repository: selection.repository, branch: selection.branch, commit: selection.commit,
+    }]));
+    const smoke = {
+        schema: 'ploinky.box.library-smoke/v1', ok: true, protectedLayout: true,
+        libraries: {
+            achillesAgentLib: {
+                packageName: ACHILLES_PACKAGE_NAME, packageVersion: '0.1.0', requiredEntries: [...ACHILLES_REQUIRED_ENTRIES],
+                checks: ['imports', 'exports', 'isOptOutModel', 'jwt-round-trip'],
+            },
+            'mcp-sdk': {
+                packageName: MCP_SDK_PACKAGE_NAME, packageVersion: '1.19.1', entry: './index.mjs',
+                members: MCP_SDK_MEMBERS.map(({ member }) => member), checks: ['imports', 'exports', 'zod-schema', 'loopback-tool-call'],
+            },
+        },
+    };
+    const selfTest = {
+        schema: 'ploinky.box.library-self-test/v1', ok: true, control: { accepted: true },
+        cases: SELF_TEST_CASES.map(({ name, expected }) => ({ name, expected, rejected: true })),
+    };
+    return { provenance, smoke, selfTest };
+}
 
 async function fixture(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'box-publication-'));
@@ -23,14 +64,10 @@ async function fixture(t) {
     fs.mkdirSync(webtty, { recursive: true });
     fs.writeFileSync(path.join(webtty, 'native-probe.mjs'), '// Selected immutable source fixture.\n');
     fs.writeFileSync(path.join(webtty, 'package-lock.json'), '{}\n');
+    // The stand-in for Ploinky's dependency-free contract module lists the full AgentLib entry set.
     fs.mkdirSync(path.join(source, 'agentlib'));
-    for (const name of ['image-bundle.mjs', 'contract.mjs', 'fingerprint.mjs', 'source.mjs']) {
-        fs.writeFileSync(path.join(source, 'agentlib', name), `// Immutable ${name} fixture.\n`);
-    }
-    fs.mkdirSync(path.join(source, 'ploinky-box'));
-    writeJson(path.join(source, 'ploinky-box/dependencies.lock.json'), { repositories: {
-        achillesAgentLib: { url: 'https://github.com/AssistOS-AI/AchillesAgentLib.git', commit: '9'.repeat(40) },
-    } });
+    fs.writeFileSync(path.join(source, 'agentlib/contract.mjs'),
+        `export const AGENTLIB_REQUIRED_ENTRYPOINTS = Object.freeze(${JSON.stringify(ACHILLES_REQUIRED_ENTRIES)});\n`);
     // The selected Ploinky source owns native capability validation. This fixture
     // rejects a failed capability so publication cannot silently bypass that call.
     fs.writeFileSync(path.join(webtty, 'native-runtime.mjs'), `
@@ -41,7 +78,7 @@ async function fixture(t) {
         for (const key of ['import', 'input', 'output', 'resize', 'exit', 'reap', 'identity']) assert.equal(probe.pty[key], true);
       }
     `);
-    const env = { ...process.env, SOURCE_SHA: 'a'.repeat(40), GITHUB_SHA: 'b'.repeat(40), GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' };
+    const env = { ...process.env, ...LIBRARY_ENV, SOURCE_SHA: 'a'.repeat(40), GITHUB_SHA: 'b'.repeat(40), GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' };
     const context = await publicationContext(source, env);
     const proofs = path.join(root, 'proofs');
     fs.mkdirSync(proofs);
@@ -64,9 +101,10 @@ async function fixture(t) {
         };
         writeJson(path.join(dir, 'native-probe.json'), probe);
         writeJson(path.join(dir, 'immutable-webtty.json'), { probeSha256: context.probeSha256, contract: probe });
-        const agentLib = { schemaVersion: 1, commit: context.agentLibCommit, fingerprint: '8'.repeat(64) };
-        writeJson(path.join(dir, 'agentlib-probe.json'), agentLib);
-        writeJson(path.join(dir, 'immutable-agentlib.json'), { moduleSha256: context.agentLibModuleSha256, contract: agentLib });
+        const evidence = libraryEvidence();
+        writeJson(path.join(dir, 'library-provenance.json'), evidence.provenance);
+        writeJson(path.join(dir, 'library-smoke.json'), evidence.smoke);
+        writeJson(path.join(dir, 'library-self-test.json'), evidence.selfTest);
         writeJson(path.join(dir, 'native-proof.json'), verifyNativeEvidence(dir, arch, digests[arch], context));
     }
     const index = {
@@ -111,12 +149,6 @@ test('different image digest, architecture, probe bytes, source, or sealed contr
         ['immutable-webtty.json', (v) => { v.probeSha256 = '0'.repeat(64); }],
         ['immutable-webtty.json', (v) => { v.contract.nativeArtifactSha256 = '0'.repeat(64); }],
         ['native-probe.json', (v) => { v.sourceSha = '0'.repeat(40); }],
-        ['agentlib-probe.json', (v) => { v.commit = '0'.repeat(40); }],
-        ['agentlib-probe.json', (v) => { v.schemaVersion = 0; }],
-        ['agentlib-probe.json', (v) => { v.fingerprint = ''; }],
-        ['immutable-agentlib.json', (v) => { v.moduleSha256['image-bundle.mjs'] = '0'.repeat(64); }],
-        ['immutable-agentlib.json', (v) => { v.moduleSha256['source.mjs'] = '0'.repeat(64); }],
-        ['immutable-agentlib.json', (v) => { v.contract.fingerprint = '0'.repeat(64); }],
     ];
     for (const [name, change] of changes) {
         const file = path.join(f.dir, name);
@@ -173,30 +205,92 @@ function stepBody(name) {
     return step.split('        run: |\n')[1].split('\n').map((line) => line.startsWith('          ') ? line.slice(10) : line).join('\n').trim();
 }
 
-test('the workflow resolves only an exact GitHub AgentLib lock pin', async (t) => {
+test('publication evidence binds both libraries to the frozen selections and their functional checks', async (t) => {
     const f = await fixture(t);
-    const lockFile = path.join(f.source, 'ploinky-box/dependencies.lock.json');
-    const lock = readJson(lockFile);
-    const output = path.join(f.root, 'agentlib-output');
-    const run = () => spawnSync('bash', ['-e', '-c', stepBody('Resolve immutable AgentLib input from the Ploinky lock')], {
-        cwd: f.root, env: { ...f.env, GITHUB_OUTPUT: output }, encoding: 'utf8', timeout: 15000,
-    });
-    assert.equal(run().status, 0);
-    assert.equal(fs.readFileSync(output, 'utf8'), `repository=AssistOS-AI/AchillesAgentLib\ncommit=${'9'.repeat(40)}\n`);
-    fs.rmSync(output);
-    for (const repository of [
-        null,
-        { ...lock.repositories.achillesAgentLib, commit: 'master' },
-        { ...lock.repositories.achillesAgentLib, commit: 'a'.repeat(64) },
-        { ...lock.repositories.achillesAgentLib, url: 'https://token@github.com/AssistOS-AI/AchillesAgentLib.git' },
-        { ...lock.repositories.achillesAgentLib, url: 'https://github.com/AssistOS-AI/AchillesAgentLib.git\ncommit=evil' },
-    ]) {
-        writeJson(lockFile, { repositories: { achillesAgentLib: repository } });
-        const result = run();
-        assert.notEqual(result.status, 0, `accepted ${JSON.stringify(repository)}`);
-        assert.match(result.stderr, /no valid immutable AgentLib input/);
-        assert.equal(fs.existsSync(output), false);
+    const proofs = verifyNativeProofs(f.proofs, f.context);
+    for (const arch of ARCHES) {
+        assert.deepEqual(proofs[arch].libraries, {
+            achillesAgentLib: { ...SELECTIONS.achillesAgentLib, packageName: ACHILLES_PACKAGE_NAME },
+            'mcp-sdk': { ...SELECTIONS['mcp-sdk'], packageName: MCP_SDK_PACKAGE_NAME },
+        });
+        assert.equal(proofs[arch].libraryChecks.smoke.ok, true);
+        assert.equal(proofs[arch].libraryChecks.selfTest.ok, true);
     }
+    const candidate = verifyCandidate(f.proofs, f.indexFile, f.context);
+    assert.deepEqual(candidate.libraries, proofs.amd64.libraries);
+    assert.deepEqual(candidate.libraryChecks, { amd64: { smoke: true, selfTest: true }, arm64: { smoke: true, selfTest: true } });
+    assert.deepEqual(Object.keys(proofs.amd64.evidenceSha256).sort(), [
+        'image-inspect.json', 'immutable-webtty.json', 'library-provenance.json', 'library-self-test.json', 'library-smoke.json', 'native-probe.json',
+    ]);
+});
+
+test('library provenance, smoke, and self-test evidence that differs from the frozen inputs is rejected', async (t) => {
+    const f = await fixture(t);
+    const other = 'f'.repeat(40);
+    const changes = [
+        ['library-provenance.json', (v) => { v.achillesAgentLib.commit = other; }],
+        ['library-provenance.json', (v) => { v['mcp-sdk'].commit = other; }],
+        ['library-provenance.json', (v) => { v.achillesAgentLib.branch = 'main'; }],
+        ['library-provenance.json', (v) => { v['mcp-sdk'].branch = 'main'; }],
+        ['library-provenance.json', (v) => { v.achillesAgentLib.repository = 'https://github.com/AssistOS-AI/MCPSDK.git'; }],
+        ['library-provenance.json', (v) => { v.achillesAgentLib.packageName = MCP_SDK_PACKAGE_NAME; }],
+        ['library-provenance.json', (v) => { v.achillesAgentLib.packageVersion = ''; }],
+        ['library-provenance.json', (v) => { v.achillesAgentLib.schema = 'ploinky.box.library/v0'; }],
+        ['library-provenance.json', (v) => { v.achillesAgentLib.fingerprint = '0'.repeat(64); }],
+        ['library-provenance.json', (v) => { delete v['mcp-sdk']; }],
+        ['library-smoke.json', (v) => { v.ok = false; }],
+        ['library-smoke.json', (v) => { v.protectedLayout = false; }],
+        ['library-smoke.json', (v) => { delete v.protectedLayout; }],
+        ['library-smoke.json', (v) => { v.libraries.achillesAgentLib.packageVersion = '9.9.9'; }],
+        ['library-smoke.json', (v) => { v.libraries['mcp-sdk'].packageName = ACHILLES_PACKAGE_NAME; }],
+        ['library-smoke.json', (v) => { v.libraries.achillesAgentLib.requiredEntries = v.libraries.achillesAgentLib.requiredEntries.filter((entry) => !entry.includes('openAiAgenticResponder')); }],
+        ['library-smoke.json', (v) => { v.libraries['mcp-sdk'].members = v.libraries['mcp-sdk'].members.slice(1); }],
+        ['library-self-test.json', (v) => { v.ok = false; }],
+        ['library-self-test.json', (v) => { v.cases.pop(); }],
+        ['library-self-test.json', (v) => { v.cases[0].rejected = false; }],
+        ['library-self-test.json', (v) => { v.control.accepted = false; }],
+    ];
+    for (const [name, change] of changes) {
+        const file = path.join(f.dir, name);
+        const original = fs.readFileSync(file);
+        const value = JSON.parse(original); change(value); writeJson(file, value);
+        assert.throws(() => verifyNativeProofs(f.proofs, f.context), `accepted altered ${name}: ${change}`);
+        fs.writeFileSync(file, original);
+    }
+});
+
+test('the smoke must cover every AgentLib entry the selected Ploinky source consumes', async (t) => {
+    const f = await fixture(t);
+    // A distinct source root: a module URL is imported once per process.
+    const extended = path.join(f.root, 'sources/ploinky-extended');
+    fs.cpSync(f.source, extended, { recursive: true });
+    fs.writeFileSync(path.join(extended, 'agentlib/contract.mjs'),
+        `export const AGENTLIB_REQUIRED_ENTRYPOINTS = ${JSON.stringify([...ACHILLES_REQUIRED_ENTRIES, 'utils/newConsumer.mjs'])};\n`);
+    const context = await publicationContext(extended, f.env);
+    assert.throws(() => verifyNativeProofs(f.proofs, context), /does not cover AgentLib entry utils\/newConsumer\.mjs/);
+    assert.doesNotThrow(() => verifyNativeProofs(f.proofs, f.context));
+});
+
+test('mismatched architecture library inputs and frozen selections are rejected', async (t) => {
+    const f = await fixture(t);
+    const arm64 = path.join(f.proofs, 'ploinky-box-native-arm64');
+    const file = path.join(arm64, 'library-provenance.json');
+    const original = readJson(file);
+    const proof = path.join(arm64, 'native-proof.json');
+    // An arm64 image built from a different commit than the frozen pair cannot enter a candidate.
+    writeJson(file, { ...original, 'mcp-sdk': { ...original['mcp-sdk'], commit: 'e'.repeat(40) } });
+    assert.throws(() => verifyNativeProofs(f.proofs, f.context));
+    writeJson(file, original);
+    // Frozen selections must be exact commits of the selected repositories.
+    for (const change of [
+        { AGENTLIB_COMMIT: 'master' }, { MCP_SDK_COMMIT: 'a'.repeat(64) }, { AGENTLIB_COMMIT: '' },
+        { AGENTLIB_REPOSITORY: 'https://github.com/AssistOS-AI/MCPSDK.git' },
+        { MCP_SDK_REPOSITORY: 'https://token@github.com/AssistOS-AI/MCPSDK.git' },
+        { AGENTLIB_BRANCH: 'main\ncommit=evil' }, { MCP_SDK_BRANCH: 'a b' },
+    ]) {
+        await assert.rejects(publicationContext(f.source, { ...f.env, ...change }), JSON.stringify(change));
+    }
+    assert.ok(fs.existsSync(proof));
 });
 
 test('the actual candidate shell writes only its run-scoped tag and retains verified evidence', async (t) => {
@@ -228,5 +322,10 @@ test('the actual candidate shell writes only its run-scoped tag and retains veri
     assert.ok(!operations.flat().some((arg) => /:(latest|runtime)$/.test(arg)));
     const candidate = path.join(runner, 'ploinky-box-candidate-evidence');
     assert.equal(readJson(path.join(candidate, 'candidate-proof.json')).image.digest, `sha256:${hash(fs.readFileSync(f.indexFile))}`);
+    // The candidate proof and the publication summary name both libraries, their resolved branch or explicit commit, and versions.
+    assert.deepEqual(readJson(path.join(candidate, 'candidate-proof.json')).libraries, verifyCandidate(f.proofs, f.indexFile, f.context).libraries);
+    const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8');
+    assert.match(summary, new RegExp(`Library achillesAgentLib: ploinky-agent-lib 0\\.1\\.0 from ${LIBRARIES.achillesAgentLib.repository.replaceAll('.', '\\.')} master at ${'9'.repeat(40)}`));
+    assert.match(summary, new RegExp(`Library mcp-sdk: @modelcontextprotocol/sdk 1\\.19\\.1 from [^\\n]* \\(explicit commit\\) at ${'7'.repeat(40)}`));
     for (const arch of ARCHES) assert.deepEqual(fs.readFileSync(path.join(candidate, 'native-proofs', `ploinky-box-native-${arch}`, 'native-proof.json')), fs.readFileSync(path.join(f.proofs, `ploinky-box-native-${arch}`, 'native-proof.json')));
 });

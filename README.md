@@ -21,7 +21,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/AssistOSExplorer` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo plus immutable `AssistOS-AI/ploinky` and lock-selected `AssistOS-AI/MCPSDK` commits | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo, an immutable `AssistOS-AI/ploinky` commit, and the `AssistOS-AI/AchillesAgentLib` and `AssistOS-AI/MCPSDK` commits frozen once per publication | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled AchillesAgentLib and MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
 
 The former `assistos/default-local-llm` image is retired and no longer built
 here; already published tags are not deleted from the registry. The optional
@@ -36,13 +36,14 @@ references. The workflow neither requires nor creates the later digest-pin and
 privilege-removal commits, so publication remains the input to those consumer
 changes rather than depending on them. The `livekit-server-agent`
 workflow also checks out its source repository under `sources/`. The
-`ploinky-box` workflow checks out Ploinky at an exact commit, resolves the MCP
-SDK commit from Ploinky's dependency lock, and checks out that exact source
-without persisted credentials. The image consumes the canonical Box
-entrypoint, sealed MCP SDK bundle contract, and exact WebTTY native package,
-lockfile, and self-contained probe; Router and application source remain on the
-read-only runtime mount. Native architecture images are published by immutable
-digest.
+`ploinky-box` workflow checks out Ploinky at an exact commit. Its prerequisite
+job freezes the AchillesAgentLib and MCP SDK selections once (see
+[Ploinky box publication](#ploinky-box-publication)), and each native build
+checks out exactly those commits without persisted credentials. The image
+consumes the canonical Box entrypoint and the exact WebTTY native package,
+lockfile, and self-contained probe from Ploinky; it packages both libraries with
+its own tools. Router and application source remain on the read-only runtime
+mount. Native architecture images are published by immutable digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
 current tip of `AssistOSExplorer/main`, its default branch. The checkout lives at
@@ -302,35 +303,62 @@ archive utilities, `less`, `file`, `which`, `tree`, `nano`/`vi`, and network
 diagnostics (`ss`, `ping`, `dig`, `host`, `nslookup`, `nc`, `netstat`, `lsof`).
 The Dockerfile requires every advertised command during both native builds.
 Ploinky source is mounted read-only at `/opt/ploinky`; the Dockerfile copies its
-canonical `ploinky-box/entrypoint/ploinky-box-entrypoint`, MCP SDK and AgentLib bundle
-contracts and dependency lock, and the three exact native-package inputs
-described below. It does not retain Router or application source, or a separate
-image-repository entrypoint implementation.
+canonical `ploinky-box/entrypoint/ploinky-box-entrypoint` and the three exact
+native-package inputs described below. It copies no Ploinky library, lock, or
+verifier module, and it does not retain Router or application source, or a
+separate image-repository entrypoint implementation.
 
-The MCP SDK is packaged at `/usr/local/lib/ploinky/mcp-sdk`. Its builder input
-must be the exact commit selected by Ploinky's lock, clean, dependency-free, and
-free of symlinks. The builder strips `.git`, records a content fingerprint, and
-the final image re-verifies the sealed tree as the unprivileged runtime user.
-Box startup performs no MCP SDK Git or npm operation: it transactionally copies
-the verified image bundle into the workspace-backed dependency cache and
-repairs a missing, stale, or modified cache copy from those local bytes.
+The image owns both libraries. `images/ploinky-box/prepare-libraries.mjs` is the
+builder-stage packaging tool. It requires each Git checkout to be exactly the
+selected commit and clean, accepts only a package that ships without an install
+step (no runtime, optional, or peer dependencies), and requires every file
+Ploinky consumes. It then removes only `.git`, keeps every license and notice
+file, and writes a build-generated provenance record, `ploinky.box.library/v1`,
+with the library, package name and version, repository, resolved default branch
+(`null` for an explicit commit), and commit. The image carries no content
+hash of either library, no expected-revision policy, and no image label for
+them; the provenance is informational. The image's own digest is never embedded.
 
-AchillesAgentLib is packaged at `/opt/ploinky-agentlib` from the exact commit in
-the selected Ploinky source's `ploinky-box/dependencies.lock.json`. The builder
-requires a clean checkout, records its content fingerprint outside the source
-at `/usr/local/share/ploinky/agentlib/runtime-contract.json`, removes Git
-metadata, preserves license notices, and seals the source as root-owned files
-that the runtime user cannot modify. The immutable verification modules remain
-beside that metadata; they work before the host Ploinky mount exists. Both the
-builder and final image verify the bundle as the unprivileged runtime user.
+The MCP SDK is packaged at `/usr/local/lib/ploinky/mcp-sdk` (package
+`@modelcontextprotocol/sdk`, entry `exports["."]`, imported by Ploinky as
+`mcp-sdk`) with its provenance at `.ploinky-box-mcp-sdk.json` in the package
+root. Box startup performs no MCP SDK Git or npm operation: it transactionally
+copies the packaged library into the workspace-backed dependency cache and
+repairs a missing or partial cache copy from those local bytes.
+
+AchillesAgentLib is packaged at `/opt/ploinky-agentlib`, with its provenance at
+`/usr/local/share/ploinky/agentlib/runtime-contract.json`, outside the source.
+Both trees are sealed as root-owned files that the runtime user cannot modify.
+
+The image's own smoke, `/usr/local/share/ploinky/smoke-libraries.mjs`, runs as
+the unprivileged runtime user with three commands. `inspect achillesAgentLib`
+and `smoke` first prove the protected package layout and every consumed entry
+without importing anything, so no library code runs from a package with a wrong
+layout, owner, permission, identity, or missing entry. `inspect` then imports the
+consumed modules to check their exports and reports the package version and,
+when present, its provenance. `smoke` imports every module and export Ploinky
+consumes, including `LLMAgents/openAiAgenticResponder.mjs` (`isOptOutModel`,
+`runOpenAiAgenticResponse`), the JWT signing and verification exports, and every
+MCP SDK member; it then runs an offline HS256 JWT round trip and one loopback
+MCP tool call over `StreamableHTTPServerTransport` and
+`StreamableHTTPClientTransport`. The protected layout is root-owned, not
+group- or other-writable, without Git metadata, and without symlinks, except
+that AchillesAgentLib may keep symlinks whose targets stay inside its package.
+`self-test` builds disposable broken copies (no responder module, each missing
+responder export, an SDK entry without `StreamableHTTPClientTransport`) and
+proves `smoke` rejects each with the exact missing-entry or missing-export
+error, not merely any failure that mentions the name. The Dockerfile runs `smoke` and
+`self-test` in the final rootfs, and publication requires both on each native
+architecture.
 
 A valid `<workspace>/achillesAgentLib` checkout mounts read-only over the image
-bundle. If that checkout is absent, Ploinky uses the bundle directly without
-cloning on the host. An invalid local checkout remains an error. An image
-bundle that disagrees with the host Ploinky lock must be replaced with a
-compatible image; startup does not fetch another revision. See
-[`dependencies.md`](dependencies.md) for the bundle's dependency and license
-record.
+copy and takes precedence, including its uncommitted changes; the MCP SDK still
+comes from the image. If that checkout is absent, Ploinky uses the image copy
+without cloning on the host. An invalid local checkout remains an error.
+Ploinky does not compare the image's library commits with any revision of its
+own; the supplying image identity, not a commit, identifies the libraries, so
+a different image is the way to change them. See [`dependencies.md`](dependencies.md)
+for the libraries' dependency and license record.
 
 The Podman base is pinned to the immutable multiarchitecture Quay OCI index
 `quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a8228db17b282d2029a482d4d47e36964`.
@@ -412,8 +440,8 @@ dependency state is missing or corrupt. Outer candidate and replacement cleanup
 includes anonymous volumes only.
 
 First boot generates a mode-restricted workspace master key, validates the
-selected local AgentLib mount or compatible image bundle, and materializes the lock-pinned MCP
-SDK from the image bundle without network access. The key never crosses from
+selected local AgentLib mount or the image's AgentLib, and materializes the image's MCP
+SDK into the dependency cache without network access. The key never crosses from
 the host, is not printed, and is excluded from nested agents. It remains stable
 with the host workspace because it is stored under `<workspace>/.ploinky`.
 Manual key edits and in-place rotation are unsupported; a new key requires a
@@ -438,23 +466,42 @@ destroy path.
 ## Ploinky box publication
 
 Manual dispatch requires one exact 40-character Ploinky commit in `source_ref`.
-The workflow verifies that immutable source checkout, the lock-selected MCP SDK and AgentLib,
-and its own image-definition checkout are clean and at the requested revisions.
+`agentlib_commit` and `mcp_sdk_commit` are optional exact 40-character commits.
+The prerequisite job resolves each library that has no commit input from its
+remote symbolic default branch with one `git ls-remote --symref` query, run
+outside any checkout with only its own repository credential, and
+freezes repository, branch, and commit for both libraries as job outputs, kept
+as build-input evidence (`library-inputs.json`). Neither default branch is
+assumed to be `main`, a missing or malformed symbolic `HEAD` fails the run, and
+an explicit commit skips resolution for that library and records no branch.
+Both native builds check out only the frozen commits, so a default branch that
+moves after the prerequisite job cannot split the two architectures. This
+reproduces the source selection of a publication, not its bytes. The workflow
+verifies that the immutable Ploinky checkout, both library checkouts, and its own
+image-definition checkout are clean and at the requested revisions.
 `promote_stable=false` is the default; only an explicit `true` can move `latest`
 and the `runtime` compatibility alias after candidate verification.
 
-Each native architecture job preserves the Dockerfile's SDK, AgentLib, and WebTTY build
-checks, pushes one image by immutable digest, and runs the image's own WebTTY
-`--verify` probe as UID/GID 1000 with no network, no capabilities, no new
-privileges, and a read-only rootfs. Its retained evidence includes the exact
+Each native architecture job builds the frozen pair by immutable digest, pushes one image,
+and runs the image's own WebTTY `--verify` probe as UID/GID 1000 with no network, no
+capabilities, no new privileges, and a read-only rootfs. Its retained evidence includes the exact
 image configuration, probe result, sealed contract, source-probe fingerprint,
 source and workflow commits, and run/attempt identity. The selected Ploinky
 source validator must accept every PTY capability, and the image probe bytes,
 source SHA, package lock, native architecture, and sealed contract must match.
-The same confined runtime verifies the AgentLib tree and lock commit, and the
-retained evidence binds its fingerprint, sealed metadata, and verification
-module hashes to the selected Ploinky source. Missing or changed AgentLib
-evidence prevents candidate publication.
+The same confined runtime runs the library `smoke` and `self-test` and reads
+both provenance records, retained as `library-smoke.json`,
+`library-self-test.json`, and `library-provenance.json`. Publication requires
+passing smoke and self-test results, a smoke that checked the protected package
+layout rather than relaxing it, provenance equal to the frozen selections
+(repository, branch, commit) with a package name and version, and a smoke whose
+required entries cover every `AGENTLIB_REQUIRED_ENTRYPOINTS` entry of the
+selected Ploinky source, so a new Ploinky consumer cannot ship without smoke
+coverage. Both architectures must report the same libraries. The native and
+candidate proofs, the uploaded evidence, and the workflow summary record
+repository, branch, commit, and package version for both libraries next to the
+externally observed image digests. Missing or failing library evidence prevents
+candidate publication.
 These package capability checks do not execute the full Box lifecycle, sibling
 repository tests, or browser E2E; those acceptance gates remain separate.
 
@@ -537,6 +584,7 @@ gh workflow run publish-ploinky-box-image.yml \
   --repo AssistOS-AI/container-image-builds \
   -f source_ref="$(git -C ../ploinky rev-parse HEAD)" \
   -f promote_stable=false
+# Optional exact library commits: -f agentlib_commit=<40-hex> -f mcp_sdk_commit=<40-hex>
 ```
 
 `latest` and its `runtime` compatibility alias are intentionally mutable, but an

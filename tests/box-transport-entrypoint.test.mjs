@@ -17,20 +17,25 @@ test('ploinky-box image consumes only the canonical entrypoint and sealed runtim
     const sourceCopies = dockerfile.match(/^COPY sources\/ploinky\/.*$/gm) || [];
     assert.deepEqual(sourceCopies, [
         'COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint',
-        'COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json',
-        'COPY sources/ploinky/ploinky-box/mcp-sdk-bundle.mjs /tmp/mcp-sdk-bundle.mjs',
-        'COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json',
-        'COPY sources/ploinky/agentlib/image-bundle.mjs sources/ploinky/agentlib/contract.mjs sources/ploinky/agentlib/fingerprint.mjs sources/ploinky/agentlib/source.mjs /usr/local/share/ploinky/agentlib/',
         'COPY sources/ploinky/core-services/webtty/package.json /tmp/webtty-build/package.json',
         'COPY sources/ploinky/core-services/webtty/package-lock.json /tmp/webtty-build/package-lock.json',
         'COPY sources/ploinky/core-services/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs',
     ]);
-    assert.doesNotMatch(dockerfile, /COPY sources\/ploinky\/(?:cli|core-services\/(?!webtty\/)|node_modules|package\.json)/);
+    assert.doesNotMatch(dockerfile, /COPY sources\/ploinky\/(?:cli|core-services\/(?!webtty\/)|node_modules|package\.json|agentlib|ploinky-box\/(?!entrypoint\/))/);
+    // Library selection, packaging, and checks are image-owned; no Ploinky lock or library helper is consumed.
+    assert.deepEqual(dockerfile.match(/^COPY images\/.*$/gm), [
+        'COPY images/ploinky-box/prepare-libraries.mjs images/ploinky-box/resolve-libraries.mjs images/ploinky-box/smoke-libraries.mjs /tmp/library-tools/',
+        'COPY images/ploinky-box/prepare-libraries.mjs images/ploinky-box/resolve-libraries.mjs images/ploinky-box/smoke-libraries.mjs /tmp/library-tools/',
+        'COPY images/ploinky-box/smoke-libraries.mjs /usr/local/share/ploinky/smoke-libraries.mjs',
+    ]);
+    assert.doesNotMatch(dockerfile, /dependencies\.lock|image-bundle\.mjs|mcp-sdk-bundle\.mjs|bundle-contract\.mjs|expected-commit|--lock\b/);
     assert.equal(fs.existsSync(path.join(ROOT, 'images/ploinky-box/entrypoint.sh')), false);
     assert.match(workflow, /Checkout immutable Ploinky source/);
     assert.match(workflow, /path:\s*sources\/ploinky/);
-    assert.match(workflow, /Resolve immutable MCP SDK input from the Ploinky lock/);
+    assert.match(workflow, /Checkout immutable MCP SDK source/);
     assert.match(workflow, /path:\s*sources\/mcp-sdk/);
+    assert.match(workflow, /path:\s*sources\/achillesAgentLib/);
+    assert.doesNotMatch(workflow, /dependencies\.lock|Ploinky lock|agentlib-probe|immutable-agentlib|image-bundle\.mjs|--expected-commit/);
     assert.match(workflow, /persist-credentials:\s*false/);
     assert.match(workflow, /PLOINKY_SOURCE_SHA=\$\{\{ needs\.resolve-source\.outputs\.source_sha \}\}/);
 });
@@ -41,6 +46,8 @@ test('publication verifies immutable native capability without running full grap
     assert.doesNotMatch(workflow, /\bnode --test\b/);
     assert.doesNotMatch(workflow, /tests\/(?:unit|integration|e2e)\//);
     assert.match(workflow, /native-probe\.mjs --verify/);
+    assert.match(workflow, /smoke-libraries\.mjs smoke/);
+    assert.match(workflow, /smoke-libraries\.mjs self-test/);
     assert.match(workflow, /verify-publication\.mjs native/);
     assert.doesNotMatch(workflow, /podman run/);
     assert.doesNotMatch(workflow, /SMOKE_GRAPH_|PLOINKY_RELAY_TEST_IMAGE|PLOINKY_BOX_PROXY_TRACE/);

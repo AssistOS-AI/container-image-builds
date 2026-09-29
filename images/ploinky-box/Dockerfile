@@ -4,6 +4,16 @@ ARG PODMAN_BASE=quay.io/podman/stable@sha256:663e0dbf407987b7db3f20d3588c283a822
 ARG NODE_RUNTIME_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
 ARG CLOUDFLARED_IMAGE=docker.io/cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
 ARG PLOINKY_SOURCE_SHA
+# The publication workflow freezes both library selections once, before the
+# native builds fan out. They enter the image only as build arguments used for
+# the generated provenance records, never as image labels. An empty branch means
+# the library was selected by an explicit commit.
+ARG AGENTLIB_REPOSITORY
+ARG AGENTLIB_BRANCH
+ARG AGENTLIB_COMMIT
+ARG MCP_SDK_REPOSITORY
+ARG MCP_SDK_BRANCH
+ARG MCP_SDK_COMMIT
 
 FROM $CLOUDFLARED_IMAGE AS cloudflared
 
@@ -125,64 +135,72 @@ RUN test "$(awk -F: '$1 == "podman" { total += $3 } END { print total + 0 }' /et
 COPY sources/ploinky/ploinky-box/entrypoint/ploinky-box-entrypoint /usr/local/bin/ploinky-box-entrypoint
 RUN chmod 0755 /usr/local/bin/ploinky-box-entrypoint
 
-# The exact MCP SDK lock pin is resolved by the publication workflow. Its Git
-# checkout exists only in this builder stage; the sealed bundle copied into the
-# runtime image contains no repository metadata or persisted credentials.
+# Both library sources are selected once by the publication workflow and packaged
+# by the image's own preparation tool. Each Git checkout exists only in its
+# builder stage; the sealed copy that enters the runtime image contains no
+# repository metadata or persisted credentials.
 FROM prepared-rootfs-base AS mcp-sdk-builder
 
-COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json
-COPY sources/ploinky/ploinky-box/mcp-sdk-bundle.mjs /tmp/mcp-sdk-bundle.mjs
+ARG MCP_SDK_REPOSITORY
+ARG MCP_SDK_BRANCH
+ARG MCP_SDK_COMMIT
+
+COPY images/ploinky-box/prepare-libraries.mjs images/ploinky-box/resolve-libraries.mjs images/ploinky-box/smoke-libraries.mjs /tmp/library-tools/
 COPY sources/mcp-sdk /tmp/mcp-sdk
 
-RUN mkdir -p /tmp/ploinky-mcp-sdk-build-home \
+RUN mkdir -p /tmp/ploinky-library-build-home \
     && chown -R podman:podman \
         /tmp/mcp-sdk \
-        /tmp/mcp-sdk-bundle.mjs \
-        /tmp/ploinky-box-dependencies.lock.json \
-        /tmp/ploinky-mcp-sdk-build-home
+        /tmp/library-tools \
+        /tmp/ploinky-library-build-home
 
 USER podman
-RUN node /tmp/mcp-sdk-bundle.mjs prepare \
+RUN HOME=/tmp/ploinky-library-build-home node /tmp/library-tools/prepare-libraries.mjs prepare mcp-sdk \
         --source /tmp/mcp-sdk \
-        --lock /tmp/ploinky-box-dependencies.lock.json
+        --metadata /tmp/mcp-sdk/.ploinky-box-mcp-sdk.json \
+        --repository "$MCP_SDK_REPOSITORY" \
+        --branch "$MCP_SDK_BRANCH" \
+        --commit "$MCP_SDK_COMMIT"
 
 USER root
-RUN chown -R 0:0 /tmp/mcp-sdk /tmp/mcp-sdk-bundle.mjs \
-    && chmod 0555 /tmp/mcp-sdk-bundle.mjs \
+RUN chown -R 0:0 /tmp/mcp-sdk \
     && find /tmp/mcp-sdk -type d -exec chmod 0555 {} + \
     && find /tmp/mcp-sdk -type f -exec chmod 0444 {} + \
     && test ! -e /tmp/mcp-sdk/.git \
     && ! find /tmp/mcp-sdk -type l -print -quit | grep -q .
 
-USER podman
-RUN node /tmp/mcp-sdk-bundle.mjs verify --source /tmp/mcp-sdk
-
-USER root
-
-# A missing workspace checkout uses this immutable, lock-selected AgentLib.
-# Its source and metadata are outside both /opt/ploinky host mounts, and the
+# A missing workspace checkout uses this immutable AgentLib. Its source and
+# provenance record are outside both /opt/ploinky host mounts, and the
 # build-only Git checkout is removed before any bytes enter the runtime image.
 FROM prepared-rootfs-base AS agentlib-builder
 
-COPY sources/ploinky/ploinky-box/dependencies.lock.json /tmp/ploinky-box-dependencies.lock.json
-COPY sources/ploinky/agentlib/image-bundle.mjs sources/ploinky/agentlib/contract.mjs sources/ploinky/agentlib/fingerprint.mjs sources/ploinky/agentlib/source.mjs /usr/local/share/ploinky/agentlib/
+ARG AGENTLIB_REPOSITORY
+ARG AGENTLIB_BRANCH
+ARG AGENTLIB_COMMIT
+
+COPY images/ploinky-box/prepare-libraries.mjs images/ploinky-box/resolve-libraries.mjs images/ploinky-box/smoke-libraries.mjs /tmp/library-tools/
 COPY sources/achillesAgentLib /opt/ploinky-agentlib
 
-RUN node /usr/local/share/ploinky/agentlib/image-bundle.mjs prepare \
-        --source /opt/ploinky-agentlib \
-        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
-        --commit "$(node -p 'require("/tmp/ploinky-box-dependencies.lock.json").repositories.achillesAgentLib.commit')" \
-    && rm -rf /opt/ploinky-agentlib/.git \
-    && chown -R 0:0 /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib \
-    && find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib -type d -exec chmod 0555 {} + \
-    && find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib -type f -exec chmod a-w {} +
+RUN mkdir -p /usr/local/share/ploinky/agentlib /tmp/ploinky-library-build-home \
+    && chown -R podman:podman \
+        /opt/ploinky-agentlib \
+        /usr/local/share/ploinky/agentlib \
+        /tmp/library-tools \
+        /tmp/ploinky-library-build-home
 
 USER podman
-RUN node /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
+RUN HOME=/tmp/ploinky-library-build-home node /tmp/library-tools/prepare-libraries.mjs prepare achillesAgentLib \
         --source /opt/ploinky-agentlib \
-        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json
+        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
+        --repository "$AGENTLIB_REPOSITORY" \
+        --branch "$AGENTLIB_BRANCH" \
+        --commit "$AGENTLIB_COMMIT"
 
 USER root
+RUN chown -R 0:0 /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib \
+    && find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib -type d -exec chmod 0555 {} + \
+    && find /opt/ploinky-agentlib /usr/local/share/ploinky/agentlib -type f -exec chmod a-w {} + \
+    && test ! -e /opt/ploinky-agentlib/.git
 
 # node-pty is compiled in the exact Fedora/Node runtime it will execute in.
 # Compiler state and the npm build workspace remain confined to this stage.
@@ -239,7 +257,7 @@ USER root
 FROM prepared-rootfs-base AS prepared-rootfs
 
 COPY --from=mcp-sdk-builder /tmp/mcp-sdk /usr/local/lib/ploinky/mcp-sdk
-COPY --from=mcp-sdk-builder /tmp/mcp-sdk-bundle.mjs /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs
+COPY images/ploinky-box/smoke-libraries.mjs /usr/local/share/ploinky/smoke-libraries.mjs
 COPY --from=agentlib-builder /opt/ploinky-agentlib /opt/ploinky-agentlib
 COPY --from=agentlib-builder /usr/local/share/ploinky/agentlib /usr/local/share/ploinky/agentlib
 COPY --from=webtty-builder /usr/local/lib/ploinky/webtty/node_modules /usr/local/lib/ploinky/webtty/node_modules
@@ -248,14 +266,12 @@ COPY --from=webtty-builder /usr/local/share/ploinky/webtty/runtime-contract.json
 
 RUN chown -R 0:0 \
         /usr/local/lib/ploinky/mcp-sdk \
-        /usr/local/share/ploinky/mcp-sdk \
+        /usr/local/share/ploinky/smoke-libraries.mjs \
         /usr/local/lib/ploinky/webtty \
         /usr/local/share/ploinky/webtty \
     && find /usr/local/lib/ploinky/mcp-sdk -type d -exec chmod 0555 {} + \
     && find /usr/local/lib/ploinky/mcp-sdk -type f -exec chmod 0444 {} + \
-    && chmod 0555 \
-        /usr/local/share/ploinky/mcp-sdk \
-        /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs \
+    && chmod 0555 /usr/local/share/ploinky/smoke-libraries.mjs \
     && find /usr/local/lib/ploinky/webtty -type d -exec chmod 0555 {} + \
     && find /usr/local/lib/ploinky/webtty -type f -exec chmod 0444 {} + \
     && chmod 0555 /usr/local/share/ploinky/webtty \
@@ -282,11 +298,8 @@ RUN chown -R 0:0 \
 
 USER podman
 WORKDIR /
-RUN node /usr/local/share/ploinky/mcp-sdk/bundle-contract.mjs verify \
-        --source /usr/local/lib/ploinky/mcp-sdk \
-    && node /usr/local/share/ploinky/agentlib/image-bundle.mjs verify \
-        --source /opt/ploinky-agentlib \
-        --metadata /usr/local/share/ploinky/agentlib/runtime-contract.json \
+RUN node /usr/local/share/ploinky/smoke-libraries.mjs smoke \
+    && node /usr/local/share/ploinky/smoke-libraries.mjs self-test \
     && node /usr/local/share/ploinky/webtty/native-probe.mjs --verify
 
 USER root
