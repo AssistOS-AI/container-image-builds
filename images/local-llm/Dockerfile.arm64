@@ -4,8 +4,10 @@ FROM docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7
 # build, which carries native sm_121a code and runs on the R580 driver under
 # CUDA minor-version compatibility. Same base, /opt layout, PATH and library
 # path as the amd64 image (Dockerfile), so the agent's JavaScript does not
-# branch on CPU architecture. No ik_llama.cpp, TabbyAPI, Ollama or LM Studio:
-# the agent reports them as not available on this platform. The NVIDIA driver
+# branch on CPU architecture. vLLM is in the runner lock only (installed on
+# demand, experimental on unified memory behind the operator's switch). No
+# ik_llama.cpp, TabbyAPI, Ollama or LM Studio: the agent reports them as not
+# available on this platform. The NVIDIA driver
 # libraries and nvidia-smi are not part of the image: a Ploinky Box GPU grant
 # binds them read-only under /usr/local/nvidia at runtime. No model weights are
 # ever part of the image.
@@ -42,8 +44,8 @@ RUN set -eu; \
 # On-demand runners (runners plan §5.2): the pinned uv that rebuilds each
 # runner's environment offline from its verified cache, and /opt/runners, where
 # uid 1000 builds the runnable copies in the container's own filesystem. The C
-# compiler and Python headers are for Triton's launcher when vLLM arrives in
-# this image's lock (plan Phase 4); the first arm64 lock has no runners.
+# compiler and Python headers are for Triton's launcher, which vLLM builds at
+# run time.
 RUN set -eu; \
     uv=0.12.18; \
     apt-get update; \
@@ -64,7 +66,9 @@ RUN set -eu; \
     printf 'uv=%s\n' "$uv" >> /opt/local-llm/source.contract; \
     chmod 0444 /opt/local-llm/source.contract
 # The only runners that can be installed on demand, and the only files they may
-# download: admins choose a runner id, never a URL. The first arm64 lock is empty.
+# download: admins choose a runner id, never a URL. The arm64 lock has vLLM
+# 0.30.0 as its aarch64 wheel closure (the amd64 entry's versions) and the
+# pinned gpt-oss tokenizer vocabulary.
 COPY --chmod=0444 runners.lock.arm64.json /opt/local-llm/runners.lock.json
 # llama.cpp and its CUDA backend find their own libraries through RUNPATH
 # $ORIGIN, so the shared library path holds only the granted driver libraries.

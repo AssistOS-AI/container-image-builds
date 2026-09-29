@@ -7,8 +7,8 @@ name: Publish local-llm agent image
 #   images/local-llm/Dockerfile and its locks stay byte-identical until an
 #   amd64 rebuild.
 # - linux/arm64: built here from images/local-llm/Dockerfile.arm64 on a native
-#   arm64 runner, for NVIDIA GB10 (DGX Spark): llama.cpp only, with native
-#   sm_121a code.
+#   arm64 runner, for NVIDIA GB10 (DGX Spark): llama.cpp, with native sm_121a
+#   code, and vLLM in its runner lock (installed on demand, experimental).
 # The index is assembled only after both proofs and both install checks pass,
 # then its exact children are verified. Runs only when dispatched; publishing
 # is an explicit decision.
@@ -316,8 +316,10 @@ jobs:
         # Downloads, verifies and rebuilds each runner exactly as the agent
         # does, then checks versions, imports without a GPU and library links.
         # Each runner is installed in its own container, removed afterwards.
-        # The first arm64 lock has no entries: the image's lock is still read
-        # and must match the committed one.
+        # The image's lock is read first and must match the committed one; the
+        # arm64 lock's vLLM entry is its aarch64 closure. The complete check of
+        # every installed distribution needs a LOCAL_LLMS_COMMIT whose install
+        # check has it (repinned only to a verified, pushed source).
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]

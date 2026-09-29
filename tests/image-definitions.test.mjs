@@ -353,7 +353,7 @@ test('local-llm amd64 image pins llama.cpp and Ollama CUDA releases, with no wei
     }
 });
 
-test('local-llm arm64 image: llama.cpp for NVIDIA GB10 from pinned release assets, same layout, no other runner', () => {
+test('local-llm arm64 image: llama.cpp for NVIDIA GB10 from pinned release assets, same layout, vLLM only in its lock', () => {
     const dockerfile = read('images/local-llm/Dockerfile.arm64');
     const amd64 = read('images/local-llm/Dockerfile');
     const lock = JSON.parse(read('images/local-llm/sources.lock.arm64.json'));
@@ -387,8 +387,31 @@ test('local-llm arm64 image: llama.cpp for NVIDIA GB10 from pinned release asset
     // (Comments explain the absence, and PATH keeps amd64's /opt/ollama/bin entry; the instructions fetch none of them.)
     const instructions = dockerfile.split('\n').filter((line) => !/^\s*#/.test(line) && !/^ENV PATH=/.test(line)).join('\n');
     assert.doesNotMatch(instructions, /ollama|ik_llama|lmstudio|llmster|\.gguf|safetensors|huggingface|:latest/i);
-    // The first arm64 runner lock is empty (vLLM comes with Phase 4).
-    assert.deepEqual(runners, { schema: 'local-llm.runners-lock/v1', runners: {} });
+    // The arm64 runner lock holds vLLM only (experimental on unified memory, installed on demand): the amd64 entry's
+    // version, licence and checks, the same distributions at the same versions, as aarch64 or pure-Python wheels
+    // from the same host, and the same pinned tokenizer vocabulary. Nothing new is downloaded from anywhere else.
+    assert.equal(runners.schema, 'local-llm.runners-lock/v1');
+    assert.deepEqual(Object.keys(runners.runners), ['vllm']);
+    const vllm = runners.runners.vllm;
+    const amdVllm = JSON.parse(read('images/local-llm/runners.lock.json')).runners.vllm;
+    for (const key of ['version', 'kind', 'licence', 'check']) assert.deepEqual(vllm[key], amdVllm[key], key);
+    const wheels = (files) => files.filter((file) => file.name.endsWith('.whl'));
+    const distributions = (files) => wheels(files).map((file) => file.name.split('-').slice(0, 2).join('==').replace(/[-_.]+(?=[^=]*==)/g, '-').toLowerCase()).sort();
+    assert.equal(wheels(vllm.files).length, 196);
+    assert.deepEqual(distributions(vllm.files), distributions(amdVllm.files));
+    for (const file of wheels(vllm.files)) {
+        assert.match(file.name, /-(any|[a-z0-9_.]*aarch64)\.whl$/, file.name);
+        assert.doesNotMatch(file.name, /x86_64/, file.name);
+        assert.match(file.url, new RegExp(`^https://files\\.pythonhosted\\.org/packages/[0-9a-f/]+/${file.name.replace(/[.+]/g, '\\$&')}$`), file.name);
+        assert.match(file.sha256, /^[0-9a-f]{64}$/, file.name);
+        assert.ok(Number.isInteger(file.size) && file.size > 0, file.name);
+    }
+    assert.deepEqual(vllm.files.filter((file) => !file.name.endsWith('.whl')), amdVllm.files.filter((file) => !file.name.endsWith('.whl')));
+    const hosts = (files) => [...new Set(files.map((file) => new URL(file.url).hostname))].sort();
+    assert.deepEqual(hosts(vllm.files), hosts(amdVllm.files));
+    assert.deepEqual(vllm.files.map((file) => file.name), [...wheels(vllm.files).map((file) => file.name).sort(), 'o200k_base.tiktoken']);
+    // Triton's launcher needs a C compiler and the Python headers at run time; uv rebuilds the environment offline.
+    assert.match(dockerfile, /apt-get install -y --no-install-recommends gcc libc6-dev libpython3\.13-dev;/);
     assert.match(dockerfile, /^COPY --chmod=0444 runners\.lock\.arm64\.json \/opt\/local-llm\/runners\.lock\.json$/m);
     // The same PATH, library path, entrypoint and user as amd64, so the JavaScript never branches on the architecture.
     for (const pattern of [/^ENV PATH=.*$/m, /^ENV LD_LIBRARY_PATH=.*$/m, /^ENTRYPOINT \[\]$/m]) {
