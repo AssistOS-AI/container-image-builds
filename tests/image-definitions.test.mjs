@@ -339,8 +339,8 @@ test('local-llm amd64 image pins llama.cpp and Ollama CUDA releases, with no wei
     assert.match(workflow, /^ {2}AMD64_DIGEST: sha256:b6c79af2aad08b542339346f4a985c84d5cbcacc31e8c6df45f951da7ba0fbf7$/m);
     assert.match(workflow, /^ {2}AMD64_REVISION: 95ba10a2be4eb1aeb0d9612186c746ae9d7b9efe$/m);
     assert.match(workflow, /= "\$AMD64_REVISION"/);
-    // Only arm64 is built, natively, and nothing is emulated or promoted.
-    assert.doesNotMatch(workflow, /setup-qemu|:latest\b|promote/);
+    // Only arm64 is built, natively, and nothing is emulated. latest moves only on an explicit dispatch (index test).
+    assert.doesNotMatch(workflow, /setup-qemu/);
     assert.match(workflow, /push-by-digest=true,name-canonical=true,push=true/);
     assert.match(workflow, /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
     assert.match(workflow, /-path "\*\/blobs\/sha256-\*"/);
@@ -464,6 +464,18 @@ test('local-llm arm64 proof and the index fail closed on the exact digests', () 
     assert.match(index, /imagetools create --tag "\$staging" \\\n\s+"docker\.io\/\$\{IMAGE_NAME\}@\$\{AMD64\}" "docker\.io\/\$\{IMAGE_NAME\}@\$\{ARM64\}"/);
     assert.match(index, /index\.manifests\.length !== 2/);
     assert.match(index, /Refusing to overwrite existing staging tag/);
+    assert.match(index, /echo "digest=\$index_digest" >> "\$GITHUB_OUTPUT"/);
+    // latest moves only when dispatched with promote_latest (default false), after the index, to the exact
+    // proven index digest, and is confirmed read-only afterwards. No other job names latest.
+    assert.match(workflow, /promote_latest:\n\s+description: [^\n]+\n\s+required: true\n\s+default: false\n\s+type: boolean\n/);
+    const promote = workflow.split('\n  promote:\n')[1];
+    assert.match(promote, /if: \$\{\{ inputs\.promote_latest == true \}\}$/m);
+    assert.match(promote, /needs: index$/m);
+    assert.match(promote, /INDEX_DIGEST: \$\{\{ needs\.index\.outputs\.digest \}\}$/m);
+    assert.ok(promote.includes('test "sha256:$(sha256sum "$RUNNER_TEMP/candidate-index.json" | cut -d \' \' -f1)" = "$INDEX_DIGEST"'));
+    assert.ok(promote.includes('imagetools create --tag "docker.io/${IMAGE_NAME}:latest" "docker.io/${IMAGE_NAME}@${INDEX_DIGEST}"'));
+    assert.match(promote, /test "\$latest_digest" = "\$INDEX_DIGEST"/);
+    assert.equal(workflow.split(':latest').length, promote.split(':latest').length);
 });
 
 test('local-llm image builds ik_llama.cpp from a pinned commit for this machine family, off PATH', () => {

@@ -11,9 +11,16 @@ name: Publish local-llm agent image
 #   code, and vLLM in its runner lock (installed on demand, experimental).
 # The index is assembled only after both proofs and both install checks pass,
 # then its exact children are verified. Runs only when dispatched; publishing
-# is an explicit decision.
+# is an explicit decision. With promote_latest, `latest` is then moved to that
+# exact proven index digest, which local-llm's manifest names.
 on:
   workflow_dispatch:
+    inputs:
+      promote_latest:
+        description: Move the latest tag to the proven multi-arch index after every gate passes
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -367,6 +374,8 @@ jobs:
     needs: [amd64, arm64, install-check]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.candidate.outputs.digest }}
     env:
       AMD64: ${{ needs.amd64.outputs.digest }}
       ARM64: ${{ needs.arm64.outputs.digest }}
@@ -381,6 +390,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create the candidate index from the two proven digests
+        id: candidate
         run: |
           set -euo pipefail
           [[ "$AMD64" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -405,5 +415,50 @@ jobs:
             }' "$raw" "$AMD64" "$ARM64"
           index_digest="$(docker buildx imagetools inspect "$staging" --format '{{json .Manifest}}' | node -e 'let s = ""; process.stdin.on("data", (d) => s += d).on("end", () => console.log(JSON.parse(s).digest))')"
           [[ "$index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # The digest handed to promotion is the digest of the exact bytes checked above.
+          printf '%s' "$raw" > "$RUNNER_TEMP/candidate-index.json"
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${index_digest}" > "$RUNNER_TEMP/registry-index.json"
+          test "sha256:$(sha256sum "$RUNNER_TEMP/registry-index.json" | cut -d ' ' -f1)" = "$index_digest"
+          node -e '
+            const fs = require("node:fs");
+            const a = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const b = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+            if (JSON.stringify(a) !== JSON.stringify(b)) process.exit(1);' \
+            "$RUNNER_TEMP/candidate-index.json" "$RUNNER_TEMP/registry-index.json"
+          echo "digest=$index_digest" >> "$GITHUB_OUTPUT"
           printf 'Proven candidate index: `docker.io/%s@%s` (%s)\n- linux/amd64 `%s` (reused)\n- linux/arm64 `%s`\n' \
             "$IMAGE_NAME" "$index_digest" "$staging" "$AMD64" "$ARM64" >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Move latest to the proven multi-arch index
+    if: ${{ inputs.promote_latest == true }}
+    needs: index
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      INDEX_DIGEST: ${{ needs.index.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Move latest by the exact proven index digest
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${INDEX_DIGEST}" > "$RUNNER_TEMP/candidate-index.json"
+          test "sha256:$(sha256sum "$RUNNER_TEMP/candidate-index.json" | cut -d ' ' -f1)" = "$INDEX_DIGEST"
+          docker buildx imagetools create --tag "docker.io/${IMAGE_NAME}:latest" "docker.io/${IMAGE_NAME}@${INDEX_DIGEST}"
+
+      - name: Read-only post-promotion digest confirmation
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}:latest" > "$RUNNER_TEMP/latest-index.json"
+          latest_digest="sha256:$(sha256sum "$RUNNER_TEMP/latest-index.json" | cut -d ' ' -f1)"
+          test "$latest_digest" = "$INDEX_DIGEST"
+          printf 'Promoted `docker.io/%s:latest` -> `%s`\n' "$IMAGE_NAME" "$latest_digest" >> "$GITHUB_STEP_SUMMARY"
