@@ -1,0 +1,34 @@
+{
+  "schema": "assistos.local-llm-sources/v1",
+  "architecture": "arm64",
+  "baseImage": "docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669",
+  "llamaCpp": {
+    "tag": "b11159",
+    "commit": "6b790a9c2",
+    "cuda": "13.4",
+    "build": "release",
+    "gpuComputeCapabilities": [
+      "12.1"
+    ],
+    "assets": [
+      {
+        "name": "llama-b11159-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11159/llama-b11159-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "sha256": "258c9dc7c6c02fd2d805ebf9511876ab7b9d7b2d3f0c2166454d682ccae7644b"
+      },
+      {
+        "name": "cudart-llama-b11159-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11159/cudart-llama-b11159-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "sha256": "34d8602d0084b2498dbf0c436fe2d1d4e54ba577b8d5567eb56990e8fff11bfa"
+      }
+    ]
+  },
+  "uv": {
+    "version": "0.12.18",
+    "asset": {
+      "name": "uv-aarch64-unknown-linux-gnu.tar.gz",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.12.18/uv-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "afb6291f3f0a6b4521fc67b947822506c41dde5b60d2189dd8f3695b2ac8c9e7"
+    }
+  }
+}
