@@ -8,6 +8,11 @@ functional smoke use only Node built-ins, and publication verification adds only
 the selected Ploinky source's dependency-free contract modules. Tests use
 `node --test`. These checks add no npm or Python dependency.
 
+The promotion-only workflow (`promote-ploinky-box-candidate.yml`), its verifier
+`verify-promotion.mjs` and the receipt producer `acceptance-receipt.mjs` are
+likewise Node built-ins only. They call the runner's `gh` and `docker buildx
+imagetools` and reuse the already pinned GitHub actions of the publish workflow.
+
 AchillesAgentLib is a required runtime library when the workspace has no local
 checkout, and the MCP SDK is always supplied by the image. Their sources are
 [AssistOS-AI/AchillesAgentLib](https://github.com/AssistOS-AI/AchillesAgentLib)

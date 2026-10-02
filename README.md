@@ -21,7 +21,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/AssistOSExplorer` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
-| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo, an immutable `AssistOS-AI/ploinky` commit, and the `AssistOS-AI/AchillesAgentLib` and `AssistOS-AI/MCPSDK` commits frozen once per publication | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled AchillesAgentLib and MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` |
+| `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo, an immutable `AssistOS-AI/ploinky` commit, and the `AssistOS-AI/AchillesAgentLib` and `AssistOS-AI/MCPSDK` commits frozen once per publication | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled AchillesAgentLib and MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` (build, candidate, optional promotion of its own build); `promote-ploinky-box-candidate.yml` (promotion of an already built and accepted candidate) |
 
 The former `assistos/default-local-llm` image is retired and no longer built
 here; already published tags are not deleted from the registry. The optional
@@ -520,6 +520,142 @@ and confirms both resolve to the same digest. The candidate tag is retained,
 and workflow concurrency prevents competing promotions. A candidate-only run
 never writes either release alias.
 
+### Promoting an accepted candidate
+
+`promote_stable=true` can only promote the digest the same run just built. To
+move `latest` and `runtime` to a candidate that was built earlier and has since
+passed browser acceptance, dispatch `promote-ploinky-box-candidate.yml`. It has
+no build step: it never builds, pulls an image, or pushes a new one, it only
+re-verifies the candidate and re-tags its immutable index. It joins the
+`publish-ploinky-box-image` concurrency group (`cancel-in-progress: false`), so
+it cannot overlap a publication. Coordinate the release window yourself as well:
+a queued unrelated promotion or a manual registry write is not prevented.
+
+| Input | Meaning |
+| --- | --- |
+| `candidate_run_id`, `candidate_run_attempt` | The successful run and attempt of `publish-ploinky-box-image.yml` that built the candidate |
+| `candidate_digest` | The full immutable index digest, `sha256:` plus 64 hex characters; a tag is rejected |
+| `source_sha`, `image_definitions_sha` | The Ploinky commit and the image-definition commit of that run |
+| `acceptance_receipt_json` | The bounded receipt below |
+
+The workflow runs only when dispatched from `refs/heads/main`; the first step of
+both jobs refuses any other ref. No Buildx builder is set up (`imagetools` talks
+to the registry directly, so nothing is built or pulled). GitHub keeps one
+pending run per concurrency group and cancels an older pending run when a newer
+one queues: that fails safe, nothing is written, and the operator re-dispatches.
+
+The `verify` job holds no registry credential and finishes before the `promote`
+job, which alone logs in. In order, `verify`:
+
+1. Validates every input, then pins the run through `gh api
+   repos/AssistOS-AI/container-image-builds/actions/runs/<id>/attempts/<n>`: the
+   fixed repository (also as the head repository), the path
+   `.github/workflows/publish-ploinky-box-image.yml`, a `workflow_dispatch` event,
+   `completed` with `success`, the exact attempt, and `head_sha ==
+   image_definitions_sha`.
+2. Downloads, from that run only, the candidate artifact
+   `ploinky-box-candidate-<run>-<attempt>`, both native evidence sets, and the
+   frozen `ploinky-box-library-inputs-<run>-<attempt>` artifact. Each must exist
+   once, unexpired, and belong to that run and head commit.
+3. Checks out `image_definitions_sha` and `source_sha` without persisted
+   credentials, and requires both clean and at those commits.
+4. Rebuilds the publication context from the candidate's own run ID, attempt,
+   Ploinky commit, image-definition commit and frozen library selections. The
+   promotion run's own `GITHUB_SHA` and run ID are never used for it; they are
+   recorded separately as the promotion identity. The verifier is loaded from the
+   `image_definitions_sha` checkout, because its bytes are part of every saved
+   proof.
+5. Fetches the raw index by digest and requires `sha256(raw index) ==
+   candidate_digest`, equality with the candidate artifact's index copies, and
+   byte equality of the downloaded native sets with the candidate artifact's
+   copy. It then runs the candidate's own `publicationContext`,
+   `verifyNativeProofs` and `verifyCandidate` in a child process: that is
+   candidate code, so it gets a fresh environment (no `GITHUB_OUTPUT`,
+   `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_STEP_SUMMARY`, token or secret) and
+   cannot patch the verifying process. Before the child starts, the parent reads
+   the saved `candidate-proof.json`, both `native-proof.json` files, `digest.txt`
+   and the raw evidence into memory and checks them: each `native-proof.json`
+   must hash to `nativeProofSha256`, each raw file to its recorded hash, and the
+   normalized `Id` of each raw `image-inspect.json` must equal that proof's
+   `configDigest`. The child runs against a private temporary copy of the native
+   evidence, which is deleted afterwards, and the parent compares its output only
+   with that in-memory snapshot, so nothing the child writes to disk is read back
+   as trusted. That covers the index
+   annotations, exactly the amd64 and arm64 members, the frozen library commits,
+   and the confined smoke and negative self-test.
+6. Validates the acceptance receipt against the same pins.
+
+Only then does `promote` record the previous `latest` and `runtime` indexes, log
+in, and run the existing `docker buildx imagetools create --tag
+docker.io/assistos/ploinky-box:latest --tag docker.io/assistos/ploinky-box:runtime
+docker.io/assistos/ploinky-box@<digest>`. It then fetches both aliases' raw
+indexes and requires their byte hashes to equal the accepted digest. The
+confirmation runs even after a failed write; a mismatch fails the release and the
+job summary lists the exact current aliases. The record (previous aliases,
+accepted digest, candidate and promotion run IDs, commits, confirmation) is
+uploaded as `ploinky-box-promotion-record-<run>-<attempt>`. The two-tag write is
+not atomic, so a partial write is reported, and dispatching the same inputs
+again completes it (`mode=complete-partial`); when both aliases already resolve
+to the digest nothing is written (`mode=current`) and the confirmation still
+runs. The candidate tag and artifacts are kept.
+
+#### Acceptance receipt
+
+The receipt is bounded (16 KiB), data-only JSON of schema
+`ploinky.box.acceptance-receipt/v1`, in canonical form (keys sorted at every
+level, no whitespace); the workflow rejects any other text, so the stored
+evidence is exactly the validated value. It binds the candidate digest, the
+Ploinky, Explorer, AgentLib and AchillesCLI revisions with an explicit
+`mcp_sdk_commit`, the generation, the per-architecture engine image ID, and one
+entry per acceptance phase. All five phases are required, in this order:
+
+| Phase id | Spec | Counts |
+| --- | --- | --- |
+| `copilot-folder-launch` | `05` | release gate: exactly 1 passed |
+| `copilot-live-skills` | `06` | prerequisite: every selected test passed, at least 1 |
+| `optional-agents` | `03` (Marketplace) | prerequisite: every selected test passed, at least 1 |
+| `onlyoffice-confidential` | `50` | release gate: exactly 1 passed |
+| `webmeet-room-chat` | `30` | release gate: exactly 1 passed |
+
+Every entry records its spec, the exact titles of the selected tests (`tests`,
+which must include the pinned title), the `passed`, `failed`, `skipped`,
+`retried` and `flaky` counts (the last four are always 0), and the SHA-256 of its
+report. The five phases are the mandatory sequence; the receipt can record its
+order but not prove it. `build` writes the canonical text with no trailing
+newline, and neither `validate` nor the workflow accepts one, so the output file
+is exactly the text to dispatch. Produce it from the saved Playwright JSON reports, the
+release manifest and the engine's `image inspect` output of the Box image the
+acceptance fixture ran. Both the Docker shape (`Id` as `sha256:<hex>`) and the
+Podman shape (a bare 64-hex `Id`, next to `Digest`, `RepoDigests` and `History`)
+are accepted, and the ID is normalized to `sha256:<hex>` the way Ploinky's
+`normalizeImageId` does before it is compared with the release manifest's Box
+digest and stored:
+
+```sh
+node images/ploinky-box/acceptance-receipt.mjs build \
+  --candidate-digest "$PLAN_ACCEPTED_INDEX_DIGEST" \
+  --release-manifest "$EVIDENCE/release_manifest.json" \
+  --image-inspect "$EVIDENCE/box-image-inspect.json" \
+  --mcp-sdk-commit "$PLAN_MCP_SDK_SHA" --generation "$GENERATION" \
+  --report copilot-folder-launch="$EVIDENCE/05/results.json" \
+  --report copilot-live-skills="$EVIDENCE/06/results.json" \
+  --report optional-agents="$EVIDENCE/03/results.json" \
+  --report onlyoffice-confidential="$EVIDENCE/50/results.json" \
+  --report webmeet-room-chat="$EVIDENCE/30/results.json" > "$EVIDENCE/acceptance-receipt.json"
+```
+
+The workflow checks that the receipt names the promoted digest, that its Ploinky
+revision is `source_sha`, that its AgentLib and MCP SDK commits are the frozen
+library-input commits, and that each engine image ID equals the verified
+`configDigest` of that architecture's image. It cannot prove that the receipt
+was built from real reports or that a browser run took place: the Explorer and
+AchillesCLI commits are checked only for format. The dispatch is the authorized
+operator's release attestation, so retain and inspect the raw reports named by
+the receipt (their SHA-256 digests are in it) before dispatching. Pass the
+receipt as a structured argument, for example `-f
+acceptance_receipt_json="$(cat "$EVIDENCE/acceptance-receipt.json")"`; the
+workflow reads every input through `env:`, never by interpolation into a script.
+
 ## Secrets
 
 Each publishing workflow logs in to Docker Hub as `assistos` and requires:
@@ -598,7 +734,9 @@ transaction; the channel must not point to an incompatible image. Reuse,
 status, stop, and destroy do not pull the channel.
 
 The Node, Umami, Bubblewrap, and Ploinky Box publish workflows are manually dispatched and default
-to candidate publication without stable promotion. Other workflows keep their
+to candidate publication without stable promotion. A Ploinky Box candidate that
+passed acceptance is promoted with `promote-ploinky-box-candidate.yml` (see
+[Promoting an accepted candidate](#promoting-an-accepted-candidate)). Other workflows keep their
 own documented triggers and source inputs.
 
 ## QA host Git bootstrap

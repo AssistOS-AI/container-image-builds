@@ -1,0 +1,245 @@
+name: Promote ploinky-box candidate
+
+# Moves `latest` and the `runtime` compatibility alias to a candidate that an
+# earlier run of publish-ploinky-box-image.yml already built and verified, after
+# that exact digest passed browser acceptance. This workflow has no build step and
+# never pushes a new image: it only re-verifies the candidate and re-tags its
+# immutable multiarchitecture index.
+#
+# The dispatch is the authorized operator's release attestation. The workflow
+# checks the receipt's identity, counts and selections and binds it to the
+# candidate, but it cannot prove that arbitrary operator-supplied JSON describes
+# a real browser run. The operator must retain and inspect the raw Playwright
+# reports named by the receipt before dispatching.
+#
+# It runs only when dispatched from main, so the promotion code is the reviewed
+# code on the default branch. GitHub keeps at most one pending run per concurrency
+# group: a newer queued run cancels an older pending one. That fails safe (nothing
+# is written) and the operator re-dispatches.
+#
+# `docker buildx imagetools` works against the registry directly, so no builder is
+# set up and no image is pulled: the runner's own buildx plugin is enough.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Run ID of the successful publish-ploinky-box-image.yml run that built the candidate
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact attempt of that run
+        required: true
+        type: string
+      candidate_digest:
+        description: Full immutable multiarchitecture index digest, sha256 plus 64 hex characters, never a tag
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character AssistOS-AI/ploinky commit the candidate was built from
+        required: true
+        type: string
+      image_definitions_sha:
+        description: Exact 40-character image-definition commit the candidate run executed at
+        required: true
+        type: string
+      acceptance_receipt_json:
+        description: Bounded ploinky.box.acceptance-receipt/v1 JSON from images/ploinky-box/acceptance-receipt.mjs
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publish-ploinky-box-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/ploinky-box
+  IMAGE_TAG: latest
+  COMPATIBILITY_IMAGE_TAG: runtime
+
+jobs:
+  verify:
+    name: Verify the accepted candidate (no registry credentials)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - name: Require dispatch from the main branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+
+      - name: Checkout promotion definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs and pin the candidate run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DEFINITIONS_SHA: ${{ inputs.image_definitions_sha }}
+          ACCEPTANCE_RECEIPT_JSON: ${{ inputs.acceptance_receipt_json }}
+        run: |
+          set -euo pipefail
+          node images/ploinky-box/verify-promotion.mjs pin
+
+      - name: Download candidate evidence from the pinned run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DEFINITIONS_SHA: ${{ inputs.image_definitions_sha }}
+          ACCEPTANCE_RECEIPT_JSON: ${{ inputs.acceptance_receipt_json }}
+        run: |
+          set -euo pipefail
+          node images/ploinky-box/verify-promotion.mjs download
+
+      - name: Checkout recorded image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.image_definitions_sha }}
+          path: sources/image-definitions
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout recorded Ploinky source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/ploinky
+          ref: ${{ inputs.source_sha }}
+          path: sources/ploinky
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+
+      - name: Verify exact clean recorded checkouts
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DEFINITIONS_SHA: ${{ inputs.image_definitions_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$IMAGE_DEFINITIONS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C sources/image-definitions rev-parse HEAD)" = "$IMAGE_DEFINITIONS_SHA"
+          test -z "$(git -C sources/image-definitions status --porcelain=v1)"
+          test "$(git -C sources/ploinky rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git -C sources/ploinky status --porcelain=v1)"
+
+      - name: Verify the candidate, evidence and acceptance receipt before any registry write
+        id: verify
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DEFINITIONS_SHA: ${{ inputs.image_definitions_sha }}
+          ACCEPTANCE_RECEIPT_JSON: ${{ inputs.acceptance_receipt_json }}
+        run: |
+          set -euo pipefail
+          node images/ploinky-box/verify-promotion.mjs verify >> "$GITHUB_OUTPUT"
+
+      - name: Upload promotion verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-box-promotion-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ploinky-box-promotion-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  promote:
+    name: Move latest and runtime to the verified digest
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ACCEPTED_DIGEST: ${{ needs.verify.outputs.digest }}
+    steps:
+      - name: Require dispatch from the main branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+
+      - name: Checkout promotion definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Record the previous aliases and the alias write plan
+        id: previous
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DEFINITIONS_SHA: ${{ inputs.image_definitions_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ACCEPTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node images/ploinky-box/verify-promotion.mjs aliases >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Re-tagging both aliases is not atomic across the two tags. A failed or
+      # partial write is detected by the confirmation step, and dispatching the
+      # same inputs again completes it: the plan sees which aliases already
+      # resolve to the accepted digest, and writes nothing when both do.
+      - name: Move latest and runtime to the exact accepted digest
+        id: move
+        env:
+          MODE: ${{ steps.previous.outputs.mode }}
+        run: |
+          set -euo pipefail
+          [[ "$ACCEPTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          case "$MODE" in
+            promote|complete-partial)
+              docker buildx imagetools create \
+                --tag "docker.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+                --tag "docker.io/${IMAGE_NAME}:${COMPATIBILITY_IMAGE_TAG}" \
+                "docker.io/${IMAGE_NAME}@${ACCEPTED_DIGEST}"
+              ;;
+            current)
+              echo "latest and runtime already resolve to ${ACCEPTED_DIGEST}; nothing to write"
+              ;;
+            *)
+              echo "Unknown alias write plan: $MODE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Confirm both aliases by raw index bytes
+        id: confirm
+        if: ${{ always() && steps.previous.outcome == 'success' }}
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DEFINITIONS_SHA: ${{ inputs.image_definitions_sha }}
+        run: |
+          set -euo pipefail
+          node images/ploinky-box/verify-promotion.mjs confirm
+
+      - name: Upload promotion record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ploinky-box-promotion-record-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ploinky-box-promotion-evidence
+          if-no-files-found: warn
+          retention-days: 30
