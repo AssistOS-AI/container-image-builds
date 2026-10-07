@@ -44,8 +44,8 @@
     "mcpPort": 8100
   },
   "runtimeContract": {
-    "path": "/opt/roboteam-runtime/contract-v5",
-    "content": "roboteam-runtime-v5\n",
+    "path": "/opt/roboteam-runtime/contract-v6",
+    "content": "roboteam-runtime-v6\n",
     "owner": "0:0",
     "mode": "0444",
     "controllerUser": "root"

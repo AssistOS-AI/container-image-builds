@@ -12,6 +12,7 @@ COPY --from=node-runtime --chmod=0755 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules/npm/ /usr/local/lib/node_modules/npm/
 COPY --from=node-runtime --chmod=0755 /usr/bin/bwrap /usr/bin/bwrap
 COPY --chmod=0444 storage.conf /opt/roboteam-runtime/storage.conf
+COPY --chmod=0755 roboteam-podman-init /usr/local/bin/roboteam-podman-init
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sources.json
 
 ENV CONTAINERS_STORAGE_CONF=/opt/roboteam-runtime/storage.conf
@@ -40,9 +41,12 @@ RUN set -eux; \
     test "$(podman --version)" = 'podman version 5.8.7'; \
     node -e 'JSON.parse(require("node:fs").readFileSync("/usr/local/share/ploinky/roboteam-agent-sources.json", "utf8"))'; \
     install -d -o root -g root -m 0755 /opt/roboteam-runtime; \
-    printf 'roboteam-runtime-v5\n' > /opt/roboteam-runtime/contract-v5; \
-    chmod 0444 /opt/roboteam-runtime/contract-v5; \
-    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v5)" = '0:0:444'
+    sh -n /usr/local/bin/roboteam-podman-init; \
+    test -x /usr/bin/mount; \
+    test -x /usr/bin/findmnt; \
+    printf 'roboteam-runtime-v6\n' > /opt/roboteam-runtime/contract-v6; \
+    chmod 0444 /opt/roboteam-runtime/contract-v6; \
+    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v6)" = '0:0:444'
 
 WORKDIR /code
 CMD ["bash"]

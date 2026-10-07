@@ -159,11 +159,14 @@ runtime. Consequently, tool releases can advance without rebuilding these large
 images.
 
 The root-owned read-only contract is
-`/opt/roboteam-runtime/contract-v5`, containing `roboteam-runtime-v5` followed
+`/opt/roboteam-runtime/contract-v6`, containing `roboteam-runtime-v6` followed
 by one newline. Inner image storage is configured under `/data/podman/images`
 with fuse-overlayfs and `force_mask="0700"`; disposable container state stays
-in `/var/lib/roboteam-podman/storage` with `transient_store` enabled. This keeps
-conmon sockets and writable layers off macOS virtiofs while allowing protected
+in `/var/lib/roboteam-podman/storage` with `transient_store` enabled. The image's
+`roboteam-podman-init` helper mounts `/var/lib/roboteam-podman` as a private,
+2 GiB-limited tmpfs before installation and on every service start; runroot is
+`/var/lib/roboteam-podman/run`. Space is allocated on demand. This prevents
+FUSE-on-FUSE writable layers and keeps conmon sockets off macOS virtiofs, allowing protected
 directories and merged-/usr links in the persistent image cache. GUI images
 pre-create ToolCache and Podman default mount targets, including `/install` and
 `/run/secrets`, so crun does not create them through the nested overlay. SUID
@@ -173,6 +176,12 @@ The `nested` smoke mode runs a real inner Alpine container through `pasta` with
 private IPC and 1 GiB shared memory. It is intended for a Ploinky Box or another
 runtime that supplies `SYS_ADMIN`, `NET_ADMIN`, `/dev/fuse`, and `/dev/net/tun`;
 GitHub-hosted Docker does not provide the required nested mount behavior.
+`scripts/smoke-roboteam-gui.mjs`, streamed to Node inside the deployed RoboTeam
+container, additionally starts an isolated diagnostic Browser with real workspace
+and tool-generation mounts and requires GUI HTTP 200, Chromium CDP and MCP
+responses. It removes only its own diagnostic container and home, without
+starting a workflow or coding agent. Its optional `--isolated-storage` mode is
+for comparison against an older deployment; normal mode uses the deployed storage.
 
 Publication runs source checks, a capability-free outer contract smoke, and
 GUI runtime smokes that prove Node/npm and the launch adapters are present while

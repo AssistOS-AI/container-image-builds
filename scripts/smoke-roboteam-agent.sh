@@ -3,8 +3,10 @@ set -euo pipefail
 
 require_contract() {
     test "$(id -u):$(id -g)" = '0:0'
-    test "$(cat /opt/roboteam-runtime/contract-v5)" = 'roboteam-runtime-v5'
-    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v5)" = '0:0:444'
+    test "$(cat /opt/roboteam-runtime/contract-v6)" = 'roboteam-runtime-v6'
+    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v6)" = '0:0:444'
+    test -x /usr/local/bin/roboteam-podman-init
+    sh -n /usr/local/bin/roboteam-podman-init
     test -x /usr/bin/podman
     test -x /usr/bin/fuse-overlayfs
     test -x /usr/bin/pasta
@@ -25,10 +27,10 @@ case "${1:-contract}" in
         ;;
     nested)
         require_contract
-        install -d /data/podman/images /var/lib/roboteam-podman/storage \
-            /tmp/roboteam-podman-run /tmp/roboteam-podman-xdg
+        roboteam-podman-init
+        install -d /data/podman/images /tmp/roboteam-podman-xdg
         podman run --rm --ipc none --tmpfs /dev/shm:rw,size=1g,mode=1777 --network pasta \
-            docker.io/library/alpine:latest echo nested-podman-ok
+            docker.io/library/alpine:latest sh -ec 'mkdir -p /data/nested-probe /tmp/nested-probe; echo nested-podman-ok'
         ;;
     *)
         echo "usage: $0 [contract|nested]" >&2

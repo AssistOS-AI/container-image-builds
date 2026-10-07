@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+# A FUSE upperdir cannot safely back another fuse-overlayfs writable layer.
+# Keep disposable container state on tmpfs; images and robot homes stay on /data.
+storage_root=/var/lib/roboteam-podman
+if [ -L "$storage_root" ]; then
+    echo "ERROR: RoboTeam storage root must not be a symbolic link" >&2
+    exit 1
+fi
+install -d -m 0700 "$storage_root"
+filesystem=$(findmnt --noheadings --output FSTYPE --mountpoint "$storage_root" || true)
+case "$filesystem" in
+    tmpfs) ;;
+    '') mount -t tmpfs -o size=2g,mode=0700,nosuid,nodev tmpfs "$storage_root" ;;
+    *)
+        echo "ERROR: RoboTeam disposable storage must use tmpfs, not $filesystem" >&2
+        exit 1
+        ;;
+esac
+test "$(findmnt --noheadings --output FSTYPE --mountpoint "$storage_root")" = tmpfs
+install -d -m 0700 "$storage_root/storage" "$storage_root/run"

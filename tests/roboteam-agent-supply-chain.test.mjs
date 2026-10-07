@@ -13,6 +13,7 @@ const computerUseLauncher = read('images/roboteam-agent/roboteam-computer-use-mc
 const desktopMcpService = read('images/roboteam-agent/services/desktop-mcp.run');
 const browserMcpService = read('images/roboteam-agent/services/browser-mcp.run');
 const storage = read('images/roboteam-agent/storage.conf');
+const storageInit = read('images/roboteam-agent/roboteam-podman-init');
 const workflow = read('.github/workflows/publish-roboteam-agent-image.yml');
 const smoke = read('scripts/smoke-roboteam-agent.sh');
 const localInstaller = read('scripts/install-roboteam-local.mjs');
@@ -96,6 +97,7 @@ test('outer image combines Node with the nested Podman controller', () => {
     assert.match(smoke, /npm --version/);
     assert.match(smoke, /NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version/);
     assert.match(storage, /graphroot = "\/var\/lib\/roboteam-podman\/storage"/);
+    assert.match(storage, /runroot = "\/var\/lib\/roboteam-podman\/run"/);
     assert.match(storage, /imagestore = "\/data\/podman\/images"/);
     assert.match(storage, /transient_store = true/);
     assert.match(storage, /mount_program = "\/usr\/bin\/fuse-overlayfs"/);
@@ -109,13 +111,18 @@ test('outer image combines Node with the nested Podman controller', () => {
     assert.doesNotMatch(dockerfile, /chromium|Xvfb|x11vnc|websockify|novnc/i);
 });
 
-test('runtime contract and smoke describe stable bounded nested Podman v5', () => {
-    assert.equal(sources.runtimeContract.path, '/opt/roboteam-runtime/contract-v5');
-    assert.equal(sources.runtimeContract.content, 'roboteam-runtime-v5\n');
+test('runtime contract and smoke describe stable bounded nested Podman v6', () => {
+    assert.equal(sources.runtimeContract.path, '/opt/roboteam-runtime/contract-v6');
+    assert.equal(sources.runtimeContract.content, 'roboteam-runtime-v6\n');
     for (const source of [dockerfile, smoke]) {
-        assert.match(source, /roboteam-runtime-v5/);
+        assert.match(source, /roboteam-runtime-v6/);
         assert.match(source, /podman/);
     }
+    assert.match(dockerfile, /COPY --chmod=0755 roboteam-podman-init/);
+    assert.match(storageInit, /mount -t tmpfs -o size=2g,mode=0700,nosuid,nodev/);
+    assert.match(storageInit, /findmnt.*--mountpoint/);
+    assert.match(smoke, /mkdir -p \/data\/nested-probe \/tmp\/nested-probe/);
+    assert.doesNotMatch(storageInit, /privileged|chmod -R|podman.*(?:prune|reset)/);
 });
 
 test('publication pushes verified multi-architecture runtime, desktop, and browser images directly', () => {
