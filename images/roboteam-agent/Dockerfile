@@ -1,9 +1,12 @@
-ARG PODMAN_BASE_IMAGE=quay.io/podman/upstream:latest
+ARG PODMAN_BASE_IMAGE=quay.io/podman/stable@sha256:f94b291ea3ad28ca5c9362dd6ffb673778aefa157e73b8cea76da7e47a917b1e
 FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca AS node-runtime
 
 FROM ${PODMAN_BASE_IMAGE}
 
 USER root
+ENV HOME=/root
+ENV USER=root
+ENTRYPOINT []
 
 COPY --from=node-runtime --chmod=0755 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules/npm/ /usr/local/lib/node_modules/npm/
@@ -18,6 +21,7 @@ RUN set -eux; \
     truncate -s 0 /etc/subuid; \
     truncate -s 0 /etc/subgid; \
     rm -f /usr/bin/newuidmap /usr/bin/newgidmap; \
+    rm -f /usr/local/bin/npm /usr/local/bin/npx; \
     printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"' > /usr/local/bin/npm; \
     printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npx-cli.js "$@"' > /usr/local/bin/npx; \
     chmod 0755 /usr/local/bin/npm /usr/local/bin/npx; \
@@ -33,12 +37,12 @@ RUN set -eux; \
         /usr/local/bin/npx; do \
         test -x "$executable"; \
     done; \
-    podman --version | grep -E '^podman version 6\.'; \
+    test "$(podman --version)" = 'podman version 5.8.7'; \
     node -e 'JSON.parse(require("node:fs").readFileSync("/usr/local/share/ploinky/roboteam-agent-sources.json", "utf8"))'; \
     install -d -o root -g root -m 0755 /opt/roboteam-runtime; \
-    printf 'roboteam-runtime-v4\n' > /opt/roboteam-runtime/contract-v4; \
-    chmod 0444 /opt/roboteam-runtime/contract-v4; \
-    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v4)" = '0:0:444'
+    printf 'roboteam-runtime-v5\n' > /opt/roboteam-runtime/contract-v5; \
+    chmod 0444 /opt/roboteam-runtime/contract-v5; \
+    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v5)" = '0:0:444'
 
 WORKDIR /code
 CMD ["bash"]

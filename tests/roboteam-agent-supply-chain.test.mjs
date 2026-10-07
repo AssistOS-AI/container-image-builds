@@ -20,16 +20,19 @@ const localInBoxInstaller = read('scripts/install-roboteam-local-in-box.sh');
 const sources = JSON.parse(read('images/roboteam-agent/sources.lock.json'));
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
-test('RoboTeam locks immutable bases and constrains the rolling Podman 6 base', () => {
-    assert.equal(sources.schemaVersion, 4);
-    for (const base of [sources.nodeBase, sources.workstationBase, sources.browserBase]) {
+test('RoboTeam locks immutable bases including a stable Podman release', () => {
+    assert.equal(sources.schemaVersion, 5);
+    for (const base of [sources.nodeBase, sources.podmanBase, sources.workstationBase, sources.browserBase]) {
         assert.match(base.indexDigest, SHA256);
         assert.ok(base.image.endsWith(`@${base.indexDigest}`));
+    }
+    for (const base of [sources.nodeBase, sources.podmanBase, sources.workstationBase, sources.browserBase]) {
         assert.deepEqual(Object.keys(base.platformManifests).sort(), ['linux/amd64', 'linux/arm64']);
         for (const digest of Object.values(base.platformManifests)) assert.match(digest, SHA256);
     }
-    assert.equal(sources.podmanBase.image, 'quay.io/podman/upstream:latest');
-    assert.equal(sources.podmanBase.requiredVersionMajor, 6);
+    assert.equal(sources.podmanBase.version, '5.8.7');
+    assert.match(sources.podmanBase.image, /^quay\.io\/podman\/stable@sha256:[0-9a-f]{64}$/);
+    assert.doesNotMatch(sources.podmanBase.image, /(?:upstream|latest|main|dev|rc)/i);
 });
 
 test('GUI images provide system runtimes while tools come from the persistent runtime cache', () => {
@@ -67,8 +70,11 @@ test('GUI images provide system runtimes while tools come from the persistent ru
 
 test('outer image combines Node with the nested Podman controller', () => {
     assert.match(dockerfile, new RegExp(`^FROM ${sources.nodeBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} AS node-runtime$`, 'm'));
-    assert.match(dockerfile, /^ARG PODMAN_BASE_IMAGE=quay\.io\/podman\/upstream:latest$/m);
+    assert.match(dockerfile, new RegExp(`^ARG PODMAN_BASE_IMAGE=${sources.podmanBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
     assert.match(dockerfile, /^FROM \$\{PODMAN_BASE_IMAGE\}$/m);
+    assert.match(dockerfile, /^ENV HOME=\/root$/m);
+    assert.match(dockerfile, /^ENV USER=root$/m);
+    assert.match(dockerfile, /^ENTRYPOINT \[\]$/m);
     assert.match(dockerfile, /COPY --from=node-runtime --chmod=0755 \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
     assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules\/npm\/ \/usr\/local\/lib\/node_modules\/npm\//);
     assert.match(dockerfile, /exec \/usr\/local\/bin\/node \/usr\/local\/lib\/node_modules\/npm\/bin\/npm-cli\.js/);
@@ -89,19 +95,25 @@ test('outer image combines Node with the nested Podman controller', () => {
     assert.match(dockerfile, /rm -f \/usr\/bin\/newuidmap \/usr\/bin\/newgidmap/);
     assert.match(smoke, /npm --version/);
     assert.match(smoke, /NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version/);
-    assert.match(storage, /graphroot = "\/data\/podman\/storage"/);
-    assert.match(storage, /ignore_chown_errors = "true"/);
+    assert.match(storage, /graphroot = "\/var\/lib\/roboteam-podman\/storage"/);
+    assert.match(storage, /imagestore = "\/data\/podman\/images"/);
+    assert.match(storage, /transient_store = true/);
     assert.match(storage, /mount_program = "\/usr\/bin\/fuse-overlayfs"/);
-    assert.match(dockerfile, /podman --version \| grep -E '\^podman version 6\\\.'/);
+    assert.match(storage, /force_mask = "0700"/);
+    for (const guiDockerfile of [workstationDockerfile, browserDockerfile]) {
+        assert.match(guiDockerfile, /install -d -m 0755 \/install \/opt\/roboteam-tools \/run\/secrets/);
+        assert.match(guiDockerfile, /\/run\/secrets\/etc-pki-entitlement \/run\/secrets\/rhsm/);
+    }
+    assert.match(dockerfile, /test "\$\(podman --version\)" = 'podman version 5\.8\.7'/);
     assert.doesNotMatch(dockerfile, /npm install|@openai\/codex@|codex --version/);
     assert.doesNotMatch(dockerfile, /chromium|Xvfb|x11vnc|websockify|novnc/i);
 });
 
-test('runtime contract and smoke describe bounded nested Podman v4', () => {
-    assert.equal(sources.runtimeContract.path, '/opt/roboteam-runtime/contract-v4');
-    assert.equal(sources.runtimeContract.content, 'roboteam-runtime-v4\n');
+test('runtime contract and smoke describe stable bounded nested Podman v5', () => {
+    assert.equal(sources.runtimeContract.path, '/opt/roboteam-runtime/contract-v5');
+    assert.equal(sources.runtimeContract.content, 'roboteam-runtime-v5\n');
     for (const source of [dockerfile, smoke]) {
-        assert.match(source, /roboteam-runtime-v4/);
+        assert.match(source, /roboteam-runtime-v5/);
         assert.match(source, /podman/);
     }
 });

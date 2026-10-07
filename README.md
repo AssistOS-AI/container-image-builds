@@ -140,8 +140,8 @@ requires package-manager or system-directory privileges.
 ## RoboTeam nested Podman runtime
 
 `docker.io/assistos/roboteam-agent:runtime` is the outer runtime for RoboTeam. It
-uses the Podman 6 upstream digest resolved by each publication and the exact
-Ploinky Node multiarchitecture base recorded in
+uses the immutable official Podman stable multiarchitecture index as its
+Podman 5.8.7 provider and the exact Ploinky Node multiarchitecture base recorded in
 `images/roboteam-agent/sources.lock.json`. It provides Node/npm, Podman,
 Bubblewrap, fuse-overlayfs, pasta, curl, Git, and Bash. It contains neither a GUI
 nor Codex.
@@ -159,10 +159,15 @@ runtime. Consequently, tool releases can advance without rebuilding these large
 images.
 
 The root-owned read-only contract is
-`/opt/roboteam-runtime/contract-v4`, containing `roboteam-runtime-v4` followed
-by one newline. Inner storage is configured under
-`/data/podman/storage` with fuse-overlayfs and `ignore_chown_errors`, matching
-the nested user-namespace constraints. SUID namespace helpers are removed.
+`/opt/roboteam-runtime/contract-v5`, containing `roboteam-runtime-v5` followed
+by one newline. Inner image storage is configured under `/data/podman/images`
+with fuse-overlayfs and `force_mask="0700"`; disposable container state stays
+in `/var/lib/roboteam-podman/storage` with `transient_store` enabled. This keeps
+conmon sockets and writable layers off macOS virtiofs while allowing protected
+directories and merged-/usr links in the persistent image cache. GUI images
+pre-create ToolCache and Podman default mount targets, including `/install` and
+`/run/secrets`, so crun does not create them through the nested overlay. SUID
+namespace helpers are removed.
 
 The `nested` smoke mode runs a real inner Alpine container through `pasta` with
 private IPC and 1 GiB shared memory. It is intended for a Ploinky Box or another

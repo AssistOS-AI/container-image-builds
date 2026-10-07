@@ -3,8 +3,8 @@ set -euo pipefail
 
 require_contract() {
     test "$(id -u):$(id -g)" = '0:0'
-    test "$(cat /opt/roboteam-runtime/contract-v4)" = 'roboteam-runtime-v4'
-    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v4)" = '0:0:444'
+    test "$(cat /opt/roboteam-runtime/contract-v5)" = 'roboteam-runtime-v5'
+    test "$(stat -c '%u:%g:%a' /opt/roboteam-runtime/contract-v5)" = '0:0:444'
     test -x /usr/bin/podman
     test -x /usr/bin/fuse-overlayfs
     test -x /usr/bin/pasta
@@ -16,7 +16,7 @@ require_contract() {
     node --version
     npm --version
     NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version
-    podman --version | grep -E '^podman version 6\.'
+    test "$(podman --version)" = 'podman version 5.8.7'
 }
 
 case "${1:-contract}" in
@@ -25,7 +25,8 @@ case "${1:-contract}" in
         ;;
     nested)
         require_contract
-        install -d /data/podman/storage /tmp/roboteam-podman-run /tmp/roboteam-podman-xdg
+        install -d /data/podman/images /var/lib/roboteam-podman/storage \
+            /tmp/roboteam-podman-run /tmp/roboteam-podman-xdg
         podman run --rm --ipc none --tmpfs /dev/shm:rw,size=1g,mode=1777 --network pasta \
             docker.io/library/alpine:latest echo nested-podman-ok
         ;;

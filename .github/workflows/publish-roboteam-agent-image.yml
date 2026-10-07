@@ -25,7 +25,7 @@ env:
   DESKTOP_IMAGE_TAG: runtime
   BROWSER_IMAGE_NAME: assistos/roboteam-browser
   BROWSER_IMAGE_TAG: runtime
-  BASE_IMAGE: quay.io/podman/upstream:latest
+  BASE_IMAGE: quay.io/podman/stable@sha256:f94b291ea3ad28ca5c9362dd6ffb673778aefa157e73b8cea76da7e47a917b1e
   WORKSTATION_BASE_IMAGE: lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
   BROWSER_BASE_IMAGE: lscr.io/linuxserver/chromium@sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
 
@@ -55,9 +55,9 @@ jobs:
         id: resolve_base
         run: |
           set -euo pipefail
-          resolved_base_digest="$(docker buildx imagetools inspect "$BASE_IMAGE" | awk '/^Digest:/ { print $2; exit }')"
+          resolved_base_digest="${BASE_IMAGE##*@}"
           [[ "$resolved_base_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          resolved_base_image="quay.io/podman/upstream@${resolved_base_digest}"
+          resolved_base_image="$BASE_IMAGE"
           printf 'RESOLVED_BASE_DIGEST=%s\n' "$resolved_base_digest" >> "$GITHUB_ENV"
           printf 'RESOLVED_BASE_IMAGE=%s\n' "$resolved_base_image" >> "$GITHUB_ENV"
           printf 'digest=%s\n' "$resolved_base_digest" >> "$GITHUB_OUTPUT"
@@ -70,6 +70,7 @@ jobs:
           import fs from 'node:fs';
           const lock = JSON.parse(fs.readFileSync('images/roboteam-agent/sources.lock.json', 'utf8'));
           for (const [lockKey, fileName] of [
+            ['podmanBase', 'base-index.json'],
             ['workstationBase', 'workstation-base-index.json'],
             ['browserBase', 'browser-base-index.json'],
           ]) {
@@ -82,10 +83,6 @@ jobs:
               assert.equal(members.get(platform), lock[lockKey].platformManifests[platform]);
             }
           }
-          const podmanIndex = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/base-index.json`, 'utf8'));
-          const podmanPlatforms = new Set(podmanIndex.manifests.map((entry) =>
-            `${entry.platform?.os}/${entry.platform?.architecture}`));
-          for (const platform of ['linux/amd64', 'linux/arm64']) assert.ok(podmanPlatforms.has(platform));
           NODE
 
       - name: Smoke build and verify local architecture contract
@@ -113,13 +110,13 @@ jobs:
             --network=none \
             --entrypoint /bin/sh \
             "$DESKTOP_IMAGE_NAME:smoke" \
-            -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -x /usr/local/bin/roboteam-computer-use-mcp && test ! -e /usr/local/bin/computer-use-linux && test ! -e /usr/local/bin/supergateway'
+            -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -x /usr/local/bin/roboteam-computer-use-mcp && test -d /install && test -d /opt/roboteam-tools && test -d /run/secrets && test -d /run/secrets/etc-pki-entitlement && test -d /run/secrets/rhsm && test ! -e /usr/local/bin/computer-use-linux && test ! -e /usr/local/bin/supergateway'
 
       - name: Smoke build and verify local browser runtime
         run: |
           set -euo pipefail
           docker build --file images/roboteam-agent/Dockerfile.browser --tag "$BROWSER_IMAGE_NAME:smoke" images/roboteam-agent
-          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test ! -e /usr/local/bin/playwright-mcp'
+          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -d /install && test -d /opt/roboteam-tools && test -d /run/secrets && test -d /run/secrets/etc-pki-entitlement && test -d /run/secrets/rhsm && test ! -e /usr/local/bin/playwright-mcp'
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -140,7 +137,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.base.digest=${{ steps.resolve_base.outputs.digest }}
-            io.assistos.roboteam.runtime-contract=roboteam-runtime-v4
+            io.assistos.roboteam.runtime-contract=roboteam-runtime-v5
           provenance: false
 
       - name: Build and push multi-architecture desktop
