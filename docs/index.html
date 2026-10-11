@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>container-image-builds Documentation</title><link rel="stylesheet" href="styles.css"><script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs'; mermaid.initialize({startOnLoad:true,theme:'neutral'});</script></head>
+<body>
+<div data-include="partials/header.html"></div>
+<main class="page"><article class="page__panel content">
+<h1>container-image-builds Documentation</h1>
+<p>container-image-builds defines and verifies the container images used by Ploinky and its agents.</p>
+<h2>Documentation Map</h2>
+<div class="table-wrap"><table class="documentation-map"><thead><tr><th scope="col">Guide</th><th scope="col">Reference</th></tr></thead><tbody><tr><td><a href="index.html">Overview</a><p>container-image-builds defines and verifies the container images used by Ploinky and its agents.</p></td><td><a href="wiki.html">Wiki</a><p>Project terminology and component responsibilities.</p></td></tr><tr><td><a href="operations.html">Operations</a><p>Integration, configuration, and verification paths.</p></td><td><a href="specsLoader.html?spec=matrix.md">Specifications</a><p>Requirements, boundaries, and main behavior.</p></td></tr></tbody></table></div>
+<p>Begin with Overview, follow the practical guidance, then use Wiki for project terms and Specifications for the detailed contracts.</p>
+<h2>Image ownership</h2><p>The repository owns Dockerfiles under <code>images/</code> and publishing workflows under <code>.github/workflows/</code>. Agent source may come from a separately selected repository revision. Pinned checkout material beneath <code>sources/</code> is build input, not a second place to edit the source.</p>
+<h2>Candidate publication and promotion</h2><p>Workflows that separate publication from promotion first publish and verify a <a href="wiki.html#definition-candidate">candidate</a>. Their explicit promotion input controls movement of stable aliases. Ploinky Box also has a separate promotion workflow for an already built candidate, with retained proof and an acceptance receipt.</p>
+<h2>Verification boundaries</h2><p>Native image builds and workflow-specific smoke checks establish different claims from repository tests. A valid Dockerfile or passing static test does not establish that a published image passed runtime acceptance. Each image's workflow defines its exact source inputs, architectures, credentials, and proof requirements.</p>
+<p><a href="specsLoader.html?spec=DS001-coding-style.md">Coding style</a> defines source layout and the verification commands. <a href="wiki.html">Wiki</a> contains the canonical project terms.</p>
+</article></main>
+<div data-include="partials/footer.html"></div><script src="partials-loader.js"></script>
+</body></html>
