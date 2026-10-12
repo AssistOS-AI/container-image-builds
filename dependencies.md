@@ -73,3 +73,61 @@ The inherited container toolchains, base images, and native WebTTY dependency
 remain pinned and documented in `images/ploinky-box/Dockerfile` and the Ploinky
 Box sections of `README.md`. This change does not add packages to those
 inherited toolchains.
+
+## local-llm Vulkan child
+
+`images/local-llm/Dockerfile.vulkan` adds Mesa 25.3.6 and the llama.cpp b11159
+Vulkan release to both proven CUDA parents. Both source locks pin the asset
+URLs, sizes and SHA-256 hashes, Debian snapshot `20261001T000000Z`, direct
+builder package versions and the Vulkan loader/tool versions. The arm64 and
+amd64 builder locks differ where Debian publishes architecture-specific
+package revisions. No global package installation is needed.
+
+Mesa provides RADV and Venus; neither a loader alone nor the existing CUDA
+binary implements those drivers. LLVM, Gallium and software Vulkan drivers are
+disabled. The three vendored patches come from COPR build 10236391,
+`slp/mesa-libkrun-vulkan`, in its original Patch20/21/22 order. The source RPM
+hash and retained download URL are in the locks. Patch filenames are numbered
+for that order; their bytes are unchanged. The originally advertised
+`srpm-builds` URL returned 404, so the retained native-build result supplies the
+same build's RPM. Updates require verifying the source archive's signature,
+patch hashes, zero-fuzz applicability and both native final-child proofs.
+
+Mesa's upstream source is <https://archive.mesa3d.org/mesa-25.3.6.tar.xz>.
+The signing key is Dylan Baker's
+`71C4B75620BC75708B4BDB254C95FAAB3EB073EC`, retained from that release's
+`docs/release-maintainers-keys.asc`. The builder checks the signature and exact
+fingerprint, uses the vendored keyring and retains `docs/license.rst` at
+`/opt/local-llm/vulkan/licenses/mesa-license.rst`. Mesa's core license is MIT;
+its source license document records component exceptions. Retain these
+copyright and license notices when redistributing the drivers and patches.
+
+The llama.cpp assets come from
+<https://github.com/ggml-org/llama.cpp/releases/tag/b11159>. llama.cpp is MIT;
+the release archive's license material stays in `/opt/llama.cpp-vulkan`.
+Debian's Vulkan loader is Apache-2.0, with notices under
+`/usr/share/doc/libvulkan1/copyright`; `vulkan-tools` has its own packaged
+copyright file. Debian supplies the C/C++ toolchain, Meson, Ninja, Python with
+Mako/YAML/packaging, glslang and SPIR-V tools for compilation. Their package
+versions are pinned, and the isolated builder is discarded. Mesa's transitive
+runtime library closure is established by `ldd` in the final-child proof.
+
+The proof uses Bash, Node.js built-ins and Python 3's standard-library tar
+reader, invoked with `python3 -I`. Python avoids extracting an exported root
+filesystem or adding a tar-reader dependency to the Node helpers. It checks
+availability before creating proof containers. The helper removes only the
+containers it created by exact ID. A missing runtime library, modified parent
+file, changed CUDA resolution or wrong contract fails acceptance. Replacing
+Mesa or Python requires equivalent driver support and archive checks.
+
+The publishing workflow's `LOCAL_LLMS_COMMIT` remains its existing pin until
+the local-llms candidate has an authorized commit. Updating that full SHA and
+verifying the resulting native CI run are pending before workflow dispatch.
+Static tests and local arm64 proof do not establish registry publication,
+compressed image growth, AMD hardware support or Apple GPU inference.
+
+The pinned parents already contain two OpenGL symlinks per architecture,
+`/usr/lib/{aarch64,x86_64}-linux-gnu/dri/kms_swrast_dri.so` and `swrast_dri.so`, both
+pointing to `libdril_dri.so`. Acceptance allows exactly those inherited paths
+with unchanged type, mode, owner and target. Added `swrast` paths, lavapipe
+libraries/ICDs and Intel Vulkan drivers still fail the final-child proof.

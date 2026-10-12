@@ -1,18 +1,8 @@
 name: Publish local-llm agent image
 
-# One multi-arch index, as ploinky-node is published:
-# - linux/amd64: the already published image, reused by its pinned digest and
-#   proven again with the expectations it was built with (its revision label,
-#   ik_llama.cpp, CUDA 12 libraries, the LM Studio SDK, the amd64 runner lock).
-#   images/local-llm/Dockerfile and its locks stay byte-identical until an
-#   amd64 rebuild.
-# - linux/arm64: built here from images/local-llm/Dockerfile.arm64 on a native
-#   arm64 runner, for NVIDIA GB10 (DGX Spark): llama.cpp, with native sm_121a
-#   code, and vLLM in its runner lock (installed on demand, experimental).
-# The index is assembled only after both proofs and both install checks pass,
-# then its exact children are verified. Runs only when dispatched; publishing
-# is an explicit decision. With promote_latest, `latest` is then moved to that
-# exact proven index digest, which local-llm's manifest names.
+# Both architectures reuse their proven CUDA parents and add a Vulkan layer.
+# Parent runtime proofs, final-child proofs and runner install checks precede
+# index assembly. Publishing and promotion remain explicit dispatch operations.
 on:
   workflow_dispatch:
     inputs:
@@ -36,6 +26,8 @@ env:
   # index, and the container-image-builds commit it was built from.
   AMD64_DIGEST: sha256:b6c79af2aad08b542339346f4a985c84d5cbcacc31e8c6df45f951da7ba0fbf7
   AMD64_REVISION: 95ba10a2be4eb1aeb0d9612186c746ae9d7b9efe
+  ARM64_DIGEST: sha256:38c56f2d4fb8e7bd1f00043ccce8b9c3ed5b78afefcd9e558463989ecb7685b6
+  ARM64_REVISION: 62d313bfb2a6cd28e01e41feb78385fadad77468
   # The CUDA 13.0.2 devel image (arm64 manifest) whose cuobjdump lists the GPU
   # code in the arm64 llama.cpp build; no GPU is needed for that.
   CUOBJDUMP_IMAGE: docker.io/nvidia/cuda@sha256:450d11555d20ac8ebbbc13ebf17589c2bd42869171a90179ce7098b4a5e64c6a
@@ -155,11 +147,11 @@ jobs:
           retention-days: 30
 
   arm64:
-    name: Build and prove linux/arm64
+    name: Reuse and prove linux/arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.reuse.outputs.digest }}
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -177,31 +169,18 @@ jobs:
           test "$(grep '^FROM ' images/local-llm/Dockerfile.arm64)" = "FROM $BASE_IMAGE"
           node --test --test-name-pattern=local-llm tests/image-definitions.test.mjs
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: assistos
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push linux/arm64 by digest
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: images/local-llm
-          file: images/local-llm/Dockerfile.arm64
-          platforms: linux/arm64
-          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds
-          provenance: false
+      - name: Resolve the reused digest
+        id: reuse
+        run: |
+          set -euo pipefail
+          [[ "$ARM64_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          raw="$(docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${ARM64_DIGEST}")"
+          node -e 'const m=JSON.parse(process.argv[1]); if (!/image\.manifest|distribution\.manifest/.test(m.mediaType)) process.exit(1)' "$raw"
+          echo "digest=$ARM64_DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Prove the runner, its GPU code, the uid and the absence of weights in the exact digest
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.reuse.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -212,7 +191,7 @@ jobs:
           docker image inspect "$image" > "$evidence/image-inspect.json"
           test "$(docker image inspect --format '{{.Architecture}}' "$image")" = arm64
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 1000:1000
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$ARM64_REVISION"
           run() { docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges "$@"; }
           run "$image" sh -c 'set -eu; id -u; node --version; llama-server --version 2>&1 | grep "build 11159,"; echo "$PATH"; echo "$LD_LIBRARY_PATH"' \
             | tee "$evidence/runtime.txt"
@@ -271,9 +250,127 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  vulkan-amd64:
+    name: Build and prove the Vulkan child (linux/amd64)
+    runs-on: ubuntu-24.04
+    needs: amd64
+    timeout-minutes: 90
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Verify immutable inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          node --test --test-reporter=tap tests/image-definitions.test.mjs
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push the Vulkan child by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/local-llm
+          file: images/local-llm/Dockerfile.vulkan
+          platforms: linux/amd64
+          build-args: BASE=docker.io/assistos/local-llm@${{ env.AMD64_DIGEST }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+      - name: Prove the exact final child and the parent comparison control
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          parent="docker.io/${IMAGE_NAME}@${AMD64_DIGEST}"
+          child="docker.io/${IMAGE_NAME}@${DIGEST}"
+          docker pull "$parent"
+          docker pull "$child"
+          EVIDENCE="$RUNNER_TEMP/vulkan-self-test" bash images/local-llm/proof/prove-vulkan-child.sh --self-test "$parent"
+          EVIDENCE="$RUNNER_TEMP/vulkan-proof" bash images/local-llm/proof/prove-vulkan-child.sh "$child" "$parent" amd64
+      - name: Upload final-child proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: local-llm-vulkan-proof-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vulkan-proof
+          if-no-files-found: error
+          retention-days: 30
+
+  vulkan-arm64:
+    name: Build and prove the Vulkan child (linux/arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: arm64
+    timeout-minutes: 90
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Verify immutable inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          node --test --test-reporter=tap tests/image-definitions.test.mjs
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push the Vulkan child by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/local-llm
+          file: images/local-llm/Dockerfile.vulkan
+          platforms: linux/arm64
+          build-args: BASE=docker.io/assistos/local-llm@${{ env.ARM64_DIGEST }}
+          outputs: type=image,name=docker.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+      - name: Prove the exact final child and the parent comparison control
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          parent="docker.io/${IMAGE_NAME}@${ARM64_DIGEST}"
+          child="docker.io/${IMAGE_NAME}@${DIGEST}"
+          docker pull "$parent"
+          docker pull "$child"
+          EVIDENCE="$RUNNER_TEMP/vulkan-self-test" bash images/local-llm/proof/prove-vulkan-child.sh --self-test "$parent"
+          EVIDENCE="$RUNNER_TEMP/vulkan-proof" bash images/local-llm/proof/prove-vulkan-child.sh "$child" "$parent" arm64
+      - name: Upload final-child proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: local-llm-vulkan-proof-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vulkan-proof
+          if-no-files-found: error
+          retention-days: 30
+
   install-check:
     name: Install every runner lock entry in the ${{ matrix.arch }} image
-    needs: [amd64, arm64]
+    needs: [vulkan-amd64, vulkan-arm64]
     strategy:
       fail-fast: false
       matrix:
@@ -287,13 +384,13 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 90
     env:
-      DIGEST: ${{ matrix.arch == 'amd64' && needs.amd64.outputs.digest || needs.arm64.outputs.digest }}
+      DIGEST: ${{ matrix.arch == 'amd64' && needs.vulkan-amd64.outputs.digest || needs.vulkan-arm64.outputs.digest }}
       LOCK: ${{ matrix.lock }}
       # The agent code that installs the runners (runners plan §5.2): a pushed
       # local-llms commit that carries the hardware-profile changes, fetched by
       # its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: b70f5f40a69f75280edfcb1854267fc37c35c6e4
+      LOCAL_LLMS_COMMIT: 1e465abdb954b95732e7e6718043ea93bf8e9296
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -371,14 +468,14 @@ jobs:
 
   index:
     name: Assemble and verify the multi-arch candidate index
-    needs: [amd64, arm64, install-check]
+    needs: [amd64, arm64, vulkan-amd64, vulkan-arm64, install-check]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       digest: ${{ steps.candidate.outputs.digest }}
     env:
-      AMD64: ${{ needs.amd64.outputs.digest }}
-      ARM64: ${{ needs.arm64.outputs.digest }}
+      AMD64: ${{ needs.vulkan-amd64.outputs.digest }}
+      ARM64: ${{ needs.vulkan-arm64.outputs.digest }}
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -395,7 +492,12 @@ jobs:
           set -euo pipefail
           [[ "$AMD64" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$ARM64" =~ ^sha256:[0-9a-f]{64}$ ]]
-          test "$AMD64" = "$AMD64_DIGEST"
+          for pair in "$AMD64 $AMD64_DIGEST" "$ARM64 $ARM64_DIGEST"; do
+            read -r child parent <<< "$pair"
+            docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${parent}" > "$RUNNER_TEMP/parent.json"
+            docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${child}" > "$RUNNER_TEMP/child.json"
+            node -e 'const fs=require("node:fs"),a=JSON.parse(fs.readFileSync(process.argv[1])).layers,b=JSON.parse(fs.readFileSync(process.argv[2])).layers;if(b.length<=a.length||JSON.stringify(b.slice(0,a.length).map(l=>l.digest))!==JSON.stringify(a.map(l=>l.digest)))process.exit(1)' "$RUNNER_TEMP/parent.json" "$RUNNER_TEMP/child.json"
+          done
           staging="docker.io/${IMAGE_NAME}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           if docker buildx imagetools inspect "$staging" >/dev/null 2>&1; then
             echo "Refusing to overwrite existing staging tag: $staging" >&2
@@ -426,8 +528,18 @@ jobs:
             if (JSON.stringify(a) !== JSON.stringify(b)) process.exit(1);' \
             "$RUNNER_TEMP/candidate-index.json" "$RUNNER_TEMP/registry-index.json"
           echo "digest=$index_digest" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$index_digest" > "$RUNNER_TEMP/index-digest.txt"
           printf 'Proven candidate index: `docker.io/%s@%s` (%s)\n- linux/amd64 `%s` (reused)\n- linux/arm64 `%s`\n' \
             "$IMAGE_NAME" "$index_digest" "$staging" "$AMD64" "$ARM64" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload candidate index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: local-llm-index-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate-index.json
+            ${{ runner.temp }}/index-digest.txt
+          if-no-files-found: error
+          retention-days: 30
 
   promote:
     name: Move latest to the proven multi-arch index

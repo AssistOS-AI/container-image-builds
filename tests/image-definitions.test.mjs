@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { compareInspect, compareManifests } from '../images/local-llm/proof/verify-vulkan-child.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -295,6 +298,118 @@ test('opencode-free-agent image bakes the pinned OpenCode CLI with a read-only a
     assert.doesNotMatch(runtime, /API_KEY|'run'|--print-logs|https:\/\//);
 });
 
+test('local-llm Dockerfile.vulkan: global ARG BASE before the first FROM and redeclared before the runtime RUN', () => {
+    const dockerfile = read('images/local-llm/Dockerfile.vulkan');
+    assert.equal(dockerfile.split('\n')[0], 'ARG BASE');
+    assert.equal(dockerfile.match(/^FROM /gm).length, 2);
+    const runtime = dockerfile.split('FROM ${BASE}\n')[1];
+    assert.ok(runtime.indexOf('ARG BASE') < runtime.indexOf('RUN '));
+    assert.match(runtime, /case "\$BASE" in docker.io\/assistos\/local-llm@sha256:\?{64}\)/);
+    assert.match(runtime, /\*\[!0-9a-f\]\*/);
+    assert.match(dockerfile, /--no-install-recommends --no-upgrade/);
+    assert.match(dockerfile, /gpgv --status-fd 1 --keyring/);
+    assert.match(dockerfile, /patch -p1 -F0/);
+    assert.match(dockerfile, /-Dvulkan-drivers=amd,virtio/);
+    assert.match(dockerfile, /-Dllvm=disabled/);
+    assert.doesNotMatch(dockerfile, /lvp|llvmpipe|swrast/);
+    assert.equal(dockerfile.trimEnd().split('\n').at(-1), 'USER 1000:1000');
+    for (const key of ['vulkan_contract', 'vulkan_llama_cpp', 'vulkan_llama_cpp_server', 'vulkan_mesa', 'vulkan_icd_radv', 'vulkan_icd_venus', 'vulkaninfo']) assert.ok(runtime.includes(`${key}=`), key);
+    for (const suffix of ['', '.arm64']) {
+        const lock = JSON.parse(read(`images/local-llm/sources.lock${suffix}.json`)).vulkan;
+        assert.match(lock.llamaCpp.url, /llama-b11159-bin-ubuntu-vulkan-(x64|arm64)\.tar\.gz$/);
+        assert.match(lock.llamaCpp.sha256, /^[0-9a-f]{64}$/);
+        assert.ok(lock.llamaCpp.size > 0);
+        assert.ok(dockerfile.includes(lock.mesa.sha256));
+        assert.equal(lock.mesa.coprBuildId, 10236391);
+        assert.deepEqual(lock.mesa.keyFingerprints, ['71C4B75620BC75708B4BDB254C95FAAB3EB073EC']);
+        for (const patch of lock.mesa.patches) assert.equal(createHash('sha256').update(read(`images/local-llm/mesa-patches/${patch.name}`)).digest('hex'), patch.sha256);
+    }
+});
+
+test('local-llm publish workflow: the index needs both Vulkan jobs and assembles their digests', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    const index = workflow.match(/^  index:\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/m)[1];
+    assert.match(index, /needs: \[amd64, arm64, vulkan-amd64, vulkan-arm64, install-check\]/);
+    for (const arch of ['amd64', 'arm64']) {
+        const parent = workflow.split(`\n  ${arch}:\n`)[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+        assert.match(parent, /id: reuse\n/);
+        assert.ok(parent.includes('DIGEST: ${{ steps.reuse.outputs.digest }}'), `${arch} proof must use its resolved parent digest`);
+        assert.doesNotMatch(parent, /steps\.build\.outputs\.digest/);
+        assert.ok(index.includes(`needs.vulkan-${arch}.outputs.digest`));
+        const job = workflow.split(`\n  vulkan-${arch}:\n`)[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+        assert.match(job, new RegExp(`needs: ${arch}\\n`));
+        assert.ok(job.includes(`platforms: linux/${arch}`));
+        assert.match(job, /file: images\/local-llm\/Dockerfile\.vulkan/);
+        assert.match(job, /prove-vulkan-child\.sh --self-test "\$parent"/);
+        assert.match(job, /prove-vulkan-child\.sh "\$child" "\$parent"/);
+    }
+});
+
+test('local-llm publish workflow: one proof artifact per Vulkan child and one index artifact, with exact names', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    for (const arch of ['amd64', 'arm64']) {
+        const job = workflow.split(`\n  vulkan-${arch}:\n`)[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+        assert.equal(job.match(/uses: actions\/upload-artifact/g).length, 1);
+        assert.ok(job.includes(`name: local-llm-vulkan-proof-${arch}-\${{ github.run_id }}-\${{ github.run_attempt }}`));
+    }
+    const index = workflow.split('\n  index:\n')[1].split('\n  promote:\n')[0];
+    assert.equal(index.match(/uses: actions\/upload-artifact/g).length, 1);
+    assert.ok(index.includes('name: local-llm-index-${{ github.run_id }}-${{ github.run_attempt }}'));
+    assert.match(index, /candidate-index\.json/);
+    assert.match(index, /index-digest\.txt/);
+});
+
+test('local-llm final-child proof refuses changed, deleted, type-changed and software-driver entries', () => {
+    const parent = '/etc/debian_version file 0644 0 0 abc\n/etc/hosts file 0644 0 0 volatile\n/var/lib/dpkg/status file 0644 0 0 aaa\n';
+    assert.deepEqual(compareManifests(parent, parent.replace('volatile', 'different').replace('aaa', 'bbb')), ['/etc/hosts']);
+    assert.throws(() => compareManifests(parent, parent.replace('abc', 'changed')), /parent path changed: \/etc\/debian_version/);
+    assert.throws(() => compareManifests(parent, parent.split('\n').slice(1).join('\n')), /parent path deleted/);
+    assert.throws(() => compareManifests(parent, parent.replace('/etc/hosts file', '/etc/hosts symlink')), /excluded path type changed/);
+    assert.throws(() => compareManifests(parent, parent + '/lib/libvulkan_lvp.so file 0644 0 0 aaa\n'), /forbidden Vulkan driver/);
+    assert.throws(() => compareManifests(parent, parent.replace('aaa', 'bbb'), { selfTest: true }), /parent path changed/);
+});
+
+test('local-llm tar manifest keeps hidden names, escapes spaces and rejects duplicate or traversal paths', () => {
+    const make = (names) => spawnSync('python3', ['-I', '-c', 'import io,sys,tarfile,json; a=tarfile.open(fileobj=sys.stdout.buffer,mode="w|"); [(a.addfile(tarfile.TarInfo(n),io.BytesIO(b""))) for n in json.loads(sys.argv[1])]; a.close()', JSON.stringify(names)]);
+    const reader = path.join(repoRoot, 'images/local-llm/proof/tar-manifest.py');
+    const parse = (names) => {
+        const archive = make(names);
+        assert.equal(archive.status, 0, archive.stderr?.toString());
+        return spawnSync('python3', ['-I', reader], { input: archive.stdout, encoding: 'utf8' });
+    };
+    const valid = parse(['./.hidden', 'name with%space']);
+    assert.equal(valid.status, 0, valid.stderr);
+    assert.match(valid.stdout, /^\/\.hidden file /m);
+    assert.match(valid.stdout, /^\/name%20with%25space file /m);
+    assert.notEqual(parse(['same', './same']).status, 0);
+    assert.notEqual(parse(['../outside']).status, 0);
+});
+
+test('local-llm final-child proof allows only unchanged inherited OpenGL swrast symlinks', () => {
+    for (const arch of ['aarch64', 'x86_64']) {
+        for (const name of ['kms_swrast', 'swrast']) {
+            const inherited = `/usr/lib/${arch}-linux-gnu/dri/${name}_dri.so symlink 0777 0 0 libdril_dri.so\n`;
+            assert.deepEqual(compareManifests(inherited, inherited), []);
+        }
+    }
+    const p = '/usr/lib/aarch64-linux-gnu/dri/swrast_dri.so symlink 0777 0 0 libdril_dri.so\n';
+    assert.deepEqual(compareManifests(p, p), []);
+    assert.throws(() => compareManifests('/etc/base file 0644 0 0 aaa\n', '/etc/base file 0644 0 0 aaa\n' + p), /forbidden added swrast/);
+    assert.throws(() => compareManifests(p, p.replace('0777', '0755')), /parent path changed/);
+    assert.throws(() => compareManifests(p, p.replace('libdril_dri.so', 'libvulkan_lvp.so')), /parent path changed/);
+    assert.throws(() => compareManifests(p, p + '/opt/swrast.so file 0644 0 0 aaa\n'), /forbidden added swrast/);
+    assert.throws(() => compareManifests(p, p + '/opt/lvp_icd.json file 0644 0 0 aaa\n'), /forbidden Vulkan driver/);
+});
+
+test('local-llm final-child proof refuses config, labels and layer ancestry changes', () => {
+    const parent = { Architecture: 'arm64', Config: {User:'1000:1000',Env:['LD_LIBRARY_PATH=/usr/local/nvidia/lib64'],Labels:{ 'org.opencontainers.image.revision':'old',keep:'yes'}}, RootFS:{Layers:['parent']} };
+    const child = structuredClone(parent);child.Config.Labels['org.opencontainers.image.revision']='local';child.RootFS.Layers.push('child');
+    assert.deepEqual(compareInspect(parent, child, 'arm64', 'local').added, ['child']);
+    const env = structuredClone(child);env.Config.Env.push('VK_DRIVER_FILES=global');assert.throws(() => compareInspect(parent, env, 'arm64', 'local'), /config changed/);
+    const labels = structuredClone(child);labels.Config.Labels.keep='changed';assert.throws(() => compareInspect(parent, labels, 'arm64', 'local'), /parent labels changed/);
+    const layers = structuredClone(child);layers.RootFS.Layers[0]='different';assert.throws(() => compareInspect(parent, layers, 'arm64', 'local'), /parent layers are not a prefix/);
+});
+
 test('local-llm amd64 image pins llama.cpp and Ollama CUDA releases, with no weights', () => {
     const workflow = read('.github/workflows/publish-local-llm-image.yml');
     const dockerfile = read('images/local-llm/Dockerfile');
@@ -335,7 +450,10 @@ test('local-llm amd64 image pins llama.cpp and Ollama CUDA releases, with no wei
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/local-llm/);
     assert.ok(workflow.includes(`BASE_IMAGE: ${base}`));
     // amd64 is not rebuilt: the published digest is reused and proven again (B1).
-    assert.doesNotMatch(workflow, /platforms: linux\/amd64/);
+    const amd64Builds = workflow.split(/\n  [a-z][a-z0-9-]*:\n/).filter((job) => /platforms: linux\/amd64/.test(job));
+    assert.equal(amd64Builds.length, 1);
+    assert.match(amd64Builds[0], /file: images\/local-llm\/Dockerfile\.vulkan/);
+    assert.match(amd64Builds[0], /build-args: BASE=docker.io\/assistos\/local-llm@\$\{\{ env.AMD64_DIGEST \}\}/);
     assert.match(workflow, /^ {2}AMD64_DIGEST: sha256:b6c79af2aad08b542339346f4a985c84d5cbcacc31e8c6df45f951da7ba0fbf7$/m);
     assert.match(workflow, /^ {2}AMD64_REVISION: 95ba10a2be4eb1aeb0d9612186c746ae9d7b9efe$/m);
     assert.match(workflow, /= "\$AMD64_REVISION"/);
@@ -436,13 +554,13 @@ test('local-llm arm64 image: llama.cpp for NVIDIA GB10 from pinned release asset
 
 test('local-llm arm64 proof and the index fail closed on the exact digests', () => {
     const workflow = read('.github/workflows/publish-local-llm-image.yml');
-    const arm64 = workflow.split('\n  arm64:\n')[1].split('\n  install-check:\n')[0];
+    const arm64 = workflow.split('\n  arm64:\n')[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
     assert.match(arm64, /runs-on: ubuntu-24\.04-arm$/m);
-    assert.match(arm64, /file: images\/local-llm\/Dockerfile\.arm64$/m);
-    assert.match(arm64, /platforms: linux\/arm64$/m);
-    assert.match(arm64, /provenance: false$/m);
+    assert.doesNotMatch(arm64, /uses: docker\/build-push-action/);
+    assert.match(arm64, /echo "digest=\$ARM64_DIGEST"/);
+    assert.match(workflow, /ARM64_DIGEST: sha256:38c56f2d4fb8e7bd1f00043ccce8b9c3ed5b78afefcd9e558463989ecb7685b6/);
     assert.match(arm64, /\.Architecture\}\}' "\$image"\)" = arm64/);
-    assert.match(arm64, /= "\$GITHUB_SHA"/);
+    assert.match(arm64, /= "\$ARM64_REVISION"/);
     // The amd64 proof rules that apply: uid, version, weight scan, LM Studio absence, closure, lock bytes, contract.
     for (const rule of ['test "$(sed -n 1p "$evidence/runtime.txt")" = 1000', "grep -q 'build 11159,'", 'test "$weights" = 0',
         'test "$lmstudio_files" = 0', 'grep -v "libcuda.so.1"', 'cmp images/local-llm/runners.lock.arm64.json "$evidence/runners.lock.json"',
@@ -459,8 +577,8 @@ test('local-llm arm64 proof and the index fail closed on the exact digests', () 
     assert.match(workflow, /cmp "\$LOCK" -/);
     // The index comes only after both proofs and both install checks, from the exact digests, and is verified.
     const index = workflow.split('\n  index:\n')[1];
-    assert.match(index, /needs: \[amd64, arm64, install-check\]$/m);
-    assert.match(index, /test "\$AMD64" = "\$AMD64_DIGEST"/);
+    assert.match(index, /needs: \[amd64, arm64, vulkan-amd64, vulkan-arm64, install-check\]$/m);
+    assert.match(index, /b\.slice\(0,a\.length\)\.map\(l=>l\.digest\)/);
     assert.match(index, /imagetools create --tag "\$staging" \\\n\s+"docker\.io\/\$\{IMAGE_NAME\}@\$\{AMD64\}" "docker\.io\/\$\{IMAGE_NAME\}@\$\{ARM64\}"/);
     assert.match(index, /index\.manifests\.length !== 2/);
     assert.match(index, /Refusing to overwrite existing staging tag/);
@@ -572,7 +690,7 @@ test('local-llm image ships the runner lock, a pinned uv and a runner directory 
     assert.match(dockerfile, /install -d -o 1000 -g 1000 -m 0755 \/opt\/runners;/);
     assert.ok(workflow.includes(`grep -qx 'uv=${sources.uv.version}'`));
     // CI installs each lock entry in the published image, in its own job after the build.
-    assert.match(workflow, /^ {2}install-check:\n {4}name: [^\n]+\n {4}needs: \[amd64, arm64\]$/m);
+    assert.match(workflow, /^ {2}install-check:\n {4}name: [^\n]+\n {4}needs: \[vulkan-amd64, vulkan-arm64\]$/m);
     assert.match(workflow, /LOCAL_LLMS_COMMIT: [0-9a-f]{40}$/m);
     // A real, pushed local-llms commit, never a placeholder.
     assert.doesNotMatch(workflow, /LOCAL_LLMS_COMMIT: 0{40}$/m);

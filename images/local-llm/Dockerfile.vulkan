@@ -1,0 +1,66 @@
+ARG BASE
+FROM docker.io/assistos/ploinky-node:24-trixie-tools@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669 AS mesa-builder
+USER root
+ARG TARGETARCH
+COPY sources.lock*.json /tmp/vulkan-sources/
+COPY mesa-patches /tmp/mesa-patches
+COPY mesa-release-keyring.gpg /tmp/mesa-release-keyring.gpg
+RUN set -eu; \
+    arch=${TARGETARCH:-$(dpkg --print-architecture)}; \
+    case "$arch" in amd64) cp /tmp/vulkan-sources/sources.lock.json /tmp/sources.lock.json;; arm64) cp /tmp/vulkan-sources/sources.lock.arm64.json /tmp/sources.lock.json;; *) exit 1;; esac; \
+    snapshot=$(node -p 'require("/tmp/sources.lock.json").vulkan.debianSnapshot'); \
+    printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s/ trixie main\n' "$snapshot" > /tmp/vulkan.list; \
+    apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- update; \
+    packages=$(node -p 'Object.entries(require("/tmp/sources.lock.json").vulkan.buildPackages).map(([k,v]) => `${k}=${v}`).join(" ")'); \
+    apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- install -y --no-install-recommends $packages; \
+    curl -fsSL --retry 5 -o /tmp/mesa.tar.xz https://archive.mesa3d.org/mesa-25.3.6.tar.xz; \
+    printf '%s  /tmp/mesa.tar.xz\n' 59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206 | sha256sum --check --strict -; \
+    curl -fsSL --retry 5 -o /tmp/mesa.sig https://archive.mesa3d.org/mesa-25.3.6.tar.xz.sig; \
+    gpgv --status-fd 1 --keyring /tmp/mesa-release-keyring.gpg /tmp/mesa.sig /tmp/mesa.tar.xz > /tmp/signature.status; \
+    grep -q '^\[GNUPG:\] VALIDSIG 71C4B75620BC75708B4BDB254C95FAAB3EB073EC ' /tmp/signature.status; \
+    tar -xJf /tmp/mesa.tar.xz -C /tmp; \
+    node -e 'const fs=require("node:fs"),c=require("node:crypto"),l=require("/tmp/sources.lock.json"); for(const p of l.vulkan.mesa.patches){if(c.createHash("sha256").update(fs.readFileSync(`/tmp/mesa-patches/${p.name}`)).digest("hex")!==p.sha256)throw Error(p.name)}'; \
+    cd /tmp/mesa-25.3.6; \
+    for p in /tmp/mesa-patches/*.patch; do patch -p1 -F0 < "$p"; done; \
+    meson setup build --wrap-mode=nofallback --libdir=lib -Dprefix=/opt/local-llm/vulkan \
+      -Dvulkan-drivers=amd,virtio -Dgallium-drivers= -Dllvm=disabled -Dplatforms= \
+      -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false -Dgles1=disabled \
+      -Dgles2=disabled -Dvideo-codecs= -Dvulkan-layers= -Dtools= -Dbuildtype=release -Db_ndebug=true; \
+    ninja -C build -j2; ninja -C build install; \
+    node -e 'const fs=require("node:fs"),p="/opt/local-llm/vulkan";fs.mkdirSync(`${p}/icd.d`);for(const [id,lib] of [["radeon","radeon"],["virtio","virtio"]]){const file=fs.readdirSync(`${p}/share/vulkan/icd.d`).find(f=>f.startsWith(`${id}_icd`));if(!file)throw Error(id);const d=JSON.parse(fs.readFileSync(`${p}/share/vulkan/icd.d/${file}`));d.ICD.library_path=`${p}/lib/libvulkan_${lib}.so`;fs.writeFileSync(`${p}/icd.d/${id}_icd.json`,JSON.stringify(d)+"\n")}'; \
+    rm -rf /opt/local-llm/vulkan/share/vulkan; \
+    install -D -m 0444 docs/license.rst /opt/local-llm/vulkan/licenses/mesa-license.rst
+
+FROM ${BASE}
+ARG BASE
+ARG TARGETARCH
+USER root
+RUN set -eu; \
+    case "$BASE" in docker.io/assistos/local-llm@sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1;; esac; \
+    digest=${BASE##*@sha256:}; case "$digest" in *[!0-9a-f]*) exit 1;; esac
+COPY sources.lock*.json /tmp/vulkan-sources/
+RUN set -eu; \
+    arch=${TARGETARCH:-$(dpkg --print-architecture)}; \
+    case "$arch" in amd64) lock=/tmp/vulkan-sources/sources.lock.json;; arm64) lock=/tmp/vulkan-sources/sources.lock.arm64.json;; *) exit 1;; esac; \
+    snapshot=$(node -p 'require(process.argv[1]).vulkan.debianSnapshot' "$lock"); \
+    printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s/ trixie main\n' "$snapshot" > /tmp/vulkan.list; \
+    apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- update; \
+    apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- install -y --no-install-recommends --no-upgrade \
+      libvulkan1=1.4.309.0-1 vulkan-tools=1.4.304.0+dfsg1-1 libdrm2 libdrm-amdgpu1 libelf1t64 libexpat1 libzstd1 zlib1g libwayland-client0; \
+    test ! -e /usr/share/vulkan/icd.d || test -z "$(ls -A /usr/share/vulkan/icd.d)"; \
+    url=$(node -p 'require(process.argv[1]).vulkan.llamaCpp.url' "$lock"); \
+    sha=$(node -p 'require(process.argv[1]).vulkan.llamaCpp.sha256' "$lock"); \
+    size=$(node -p 'require(process.argv[1]).vulkan.llamaCpp.size' "$lock"); \
+    curl -fsSL --retry 5 -o /tmp/vulkan-llama.tar.gz "$url"; \
+    test "$(stat -c %s /tmp/vulkan-llama.tar.gz)" = "$size"; \
+    printf '%s  /tmp/vulkan-llama.tar.gz\n' "$sha" | sha256sum --check --strict -; \
+    mkdir /opt/llama.cpp-vulkan; \
+    tar -xzf /tmp/vulkan-llama.tar.gz -C /opt/llama.cpp-vulkan --strip-components=1 --no-same-owner; \
+    chown -R root:root /opt/llama.cpp-vulkan; chmod -R go-w /opt/llama.cpp-vulkan; \
+    /opt/llama.cpp-vulkan/llama-server --version 2>&1 | grep -q 'build 11159,'; \
+    chmod u+w /opt/local-llm/source.contract; \
+    printf 'vulkan_contract=1\nvulkan_llama_cpp=b11159\nvulkan_llama_cpp_server=/opt/llama.cpp-vulkan/llama-server\nvulkan_mesa=25.3.6+libkrun.3\nvulkan_icd_radv=/opt/local-llm/vulkan/icd.d/radeon_icd.json\nvulkan_icd_venus=/opt/local-llm/vulkan/icd.d/virtio_icd.json\nvulkaninfo=/usr/bin/vulkaninfo\n' >> /opt/local-llm/source.contract; \
+    chmod 0444 /opt/local-llm/source.contract; \
+    rm -rf /tmp/vulkan-sources /tmp/vulkan.list /tmp/vulkan-llama.tar.gz /var/lib/apt/lists/*
+COPY --from=mesa-builder /opt/local-llm/vulkan /opt/local-llm/vulkan
+USER 1000:1000

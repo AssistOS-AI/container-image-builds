@@ -132,5 +132,67 @@
         "sha512": "3bf3e07e7a53d712920de4184827d12391b2de13dff7598a543b982d41d924c883169b6f3f8d4c4a75a87e6f1d9c29b4db9e9935f64833b0d2cee48c0059e31c"
       }
     ]
+  },
+  "vulkan": {
+    "llamaCpp": {
+      "tag": "b11159",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11159/llama-b11159-bin-ubuntu-vulkan-x64.tar.gz",
+      "sha256": "b514ba0b41969bf2e543d176e0499d41789717230631e65533069d8e8a6a2283",
+      "size": 30607288,
+      "license": "MIT"
+    },
+    "mesa": {
+      "version": "25.3.6",
+      "url": "https://archive.mesa3d.org/mesa-25.3.6.tar.xz",
+      "sha256": "59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206",
+      "signatureUrl": "https://archive.mesa3d.org/mesa-25.3.6.tar.xz.sig",
+      "keyFingerprints": [
+        "71C4B75620BC75708B4BDB254C95FAAB3EB073EC"
+      ],
+      "coprBuildId": 10236391,
+      "sourceRpmUrl": "https://copr-be.cloud.fedoraproject.org/results/slp/mesa-libkrun-vulkan/fedora-43-aarch64/10236391-mesa/mesa-25.3.6-102.fc43.src.rpm",
+      "sourceRpmSha256": "5e53f56d57dd71c01650bc9c0cefe4d4a4d38ea16aa4359c0bb475869247180d",
+      "patches": [
+        {
+          "name": "0001-virtio-vulkan-force-16k-alignment.patch",
+          "sha256": "056fd954db83c2545b4ecdac35ac930b67b4057a102e716c7939b403c3a67f19"
+        },
+        {
+          "name": "0002-virtio-vulkan-silence-stuck-in-wait.patch",
+          "sha256": "6552236858211c9c069ffd4dda9727be1610ae5bf8f802d767110cd099a41deb"
+        },
+        {
+          "name": "0003-Revert-venus-filter-out-venus-incapable-physical-dev.patch",
+          "sha256": "7a96e57cab0506cc3b1c1dbdeaa8a9ebfde21e8ae3efd60e7e17c45099f0bad4"
+        }
+      ]
+    },
+    "debianSnapshot": "20261001T000000Z",
+    "buildPackages": {
+      "xz-utils": "5.8.1-1+deb13u1",
+      "gpgv": "2.4.7-21+deb13u1+b5",
+      "patch": "2.8-2",
+      "zlib1g-dev": "1:1.3.dfsg+really1.3.1-1+b1",
+      "bison": "2:3.8.2+dfsg-1+b2",
+      "flex": "2.6.4-8.2+b4",
+      "g++": "4:14.2.0-1",
+      "glslang-tools": "15.1.0+1.4.309.0-1",
+      "libdrm-dev": "2.4.124-2",
+      "libelf-dev": "0.192-4",
+      "libexpat1-dev": "2.8.3-1~deb13u1",
+      "libzstd-dev": "1.5.7+dfsg-1",
+      "meson": "1.7.0-1",
+      "ninja-build": "1.12.1-1",
+      "pkgconf": "1.8.1-4",
+      "python3-mako": "1.3.9-1",
+      "python3-packaging": "25.0-1",
+      "python3-yaml": "6.0.2-1+b2",
+      "libvulkan-dev": "1.4.309.0-1",
+      "spirv-tools": "2025.1~rc1-1"
+    },
+    "runtimePackages": {
+      "libvulkan1": "1.4.309.0-1",
+      "vulkan-tools": "1.4.304.0+dfsg1-1"
+    }
   }
 }
