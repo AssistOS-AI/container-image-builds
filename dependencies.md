@@ -139,3 +139,19 @@ The pinned parents already contain two OpenGL symlinks per architecture,
 pointing to `libdril_dri.so`. Acceptance allows exactly those inherited paths
 with unchanged type, mode, owner and target. Added `swrast` paths, lavapipe
 libraries/ICDs and Intel Vulkan drivers still fail the final-child proof.
+
+## OnlyOffice, LiveKit, and Egress native archive publication
+
+`scripts/oci-layout-index.mjs` describes single-platform OCI layouts, verifies
+their blobs and expands gzip layers with `node:zlib` to check their diff IDs,
+proves a loaded image against its layout, and assembles the two-platform index.
+It rejects layer compression it cannot expand with built-ins. It uses only Node built-ins and runs with the Node.js that
+GitHub's `ubuntu-24.04` and `ubuntu-24.04-arm` runners provide; its tests use
+`node --test` and temporary synthetic layouts.
+
+Native jobs use only Buildx, which exports each build both as an OCI layout and
+into the local daemon. The publish job installs `skopeo` from the runner's
+Ubuntu 24.04 archive, as these workflows already did, and uses it only to copy
+the verified layout to Docker Hub with `--preserve-digests`. Building on native
+runners removes the QEMU action and the inline Python archive verifier that the
+emulated multiplatform builds required. No npm or Python dependency is added.

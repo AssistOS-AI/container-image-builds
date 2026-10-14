@@ -79,19 +79,28 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     const dockerfile = read('images/onlyoffice-agent/Dockerfile');
     const bindInterposer = read('images/onlyoffice-agent/docservice-loopback-bind.c');
 
-    assert.match(workflow, /images\/onlyoffice-agent/);
+    assert.match(workflow, /IMAGE_DEFINITION:\s*images\/onlyoffice-agent/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/onlyoffice-agent/);
-    assert.match(workflow, /uses:\s*actions\/checkout@v4[\s\S]*?fetch-depth:\s*0/);
-    assert.match(workflow, /docker\/login-action@v3/);
+    assert.match(workflow, /uses:\s*actions\/checkout@[0-9a-f]{40} # v4[\s\S]*?fetch-depth:\s*0/);
+    assert.match(workflow, /docker\/login-action@[0-9a-f]{40} # v3/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /--platform linux\/amd64,linux\/arm64/);
     assert.match(workflow, /expected_digest:[\s\S]*required:\s*true/);
     assert.match(workflow, /Verify archive digest and platform set before registry mutation/);
+    assert.match(workflow, /if \[ "\$actual" != "\$EXPECTED_DIGEST" \]/);
     assert.match(workflow, /skopeo copy --all/);
     assert.match(workflow, /remote_digest.*EXPECTED_DIGEST/);
     assert.doesNotMatch(workflow, /onlyoffice_version|node_runtime_image|ONLYOFFICE_BASE_IMAGE=/);
     assert.doesNotMatch(workflow, /^\s*push:/m);
     assert.match(workflow, /test -x \/app\/ds\/run-document-server\.sh/);
+    // Each native image proves its own compiled interposer: DocService's port
+    // moves to loopback, other ports keep their address, and loading outside
+    // the exact scope fails closed with status 126.
+    assert.match(workflow, /printf "%s  %s\\n" "\$expected" "\$interposer" \| sha256sum --check --strict -/);
+    assert.match(workflow, /test "\$\(scoped python3 -c "\$probe" 8000 0\.0\.0\.0\)" = 127\.0\.0\.1/);
+    assert.match(workflow, /test "\$\(scoped python3 -c "\$probe" 8001 0\.0\.0\.0\)" = 0\.0\.0\.0/);
+    assert.match(workflow, /test "\$status" = 126/);
+    assert.match(workflow, /http:\/\/127\.0\.0\.1\/healthcheck/);
+    assert.match(workflow, /Document Server did not report healthy on \$ARCH/);
 
     assert.match(dockerfile, /^FROM docker\.io\/library\/node:24-bookworm-slim@sha256:[0-9a-f]{64} AS node-runtime$/m);
     assert.match(dockerfile, /^FROM docker\.io\/onlyoffice\/documentserver:9\.3\.1@sha256:[0-9a-f]{64}$/m);
@@ -121,6 +130,69 @@ test('onlyoffice-agent workflow layers Node onto the standard Document Server im
     assert.match(bindInterposer, /IN6_IS_ADDR_UNSPECIFIED/);
     assert.match(bindInterposer, /in6addr_loopback/);
     assert.match(bindInterposer, /docservice-port-8000/);
+});
+
+test('OnlyOffice, LiveKit, and Egress prove each architecture natively and publish only the verified layout', () => {
+    for (const [file, name] of [
+        ['publish-onlyoffice-agent-image.yml', 'onlyoffice-agent'],
+        ['publish-livekit-server-agent.yml', 'livekit-server-agent'],
+        ['publish-livekit-egress-loopback.yml', 'livekit-egress'],
+    ]) {
+        const workflow = read(`.github/workflows/${file}`);
+        const [beforePublish, publishJob] = workflow.split(/^  publish:$/m);
+        assert.ok(publishJob, `${file} must have a publish job`);
+        const buildJob = beforePublish.slice(beforePublish.indexOf('\n  build:\n'));
+
+        // Native runners only: no emulation and no combined platform build.
+        assert.match(buildJob, /- arch: amd64\s+platform: linux\/amd64\s+runner: ubuntu-24\.04\s/, file);
+        assert.match(buildJob, /- arch: arm64\s+platform: linux\/arm64\s+runner: ubuntu-24\.04-arm\s/, file);
+        assert.match(buildJob, /case "\$ARCH\/\$\(uname -m\)" in amd64\/x86_64\|arm64\/aarch64\)/, file);
+        assert.match(buildJob, /timeout-minutes: \d+/, file);
+        assert.doesNotMatch(workflow, /setup-qemu|linux\/amd64,linux\/arm64|build-push-action|^\s*push:/m, file);
+
+        // Each runner seals its own reproducible layout, loads exactly those
+        // bytes, and proves the loaded root filesystem before any smoke test.
+        assert.match(buildJob, /docker buildx build \\\s+--platform "\$PLATFORM" \\/, file);
+        assert.match(buildJob, /--build-arg "SOURCE_DATE_EPOCH=\$SOURCE_DATE_EPOCH"/, file);
+        assert.match(buildJob, /--provenance=false/, file);
+        assert.match(buildJob, /rewrite-timestamp=true/, file);
+        assert.match(buildJob, /--output "type=oci,dest=\$native\/layout,tar=false,rewrite-timestamp=true"/, file);
+        assert.match(buildJob, /--output "type=docker,name=\$PROOF_IMAGE,rewrite-timestamp=true"/, file);
+        assert.match(buildJob, /node scripts\/oci-layout-index\.mjs describe "\$native\/layout" --platform "\$PLATFORM"/, file);
+        assert.match(buildJob, /docker image inspect "\$PROOF_IMAGE" > "\$native\/evidence\/image-inspect\.json"/, file);
+        assert.match(buildJob, /node scripts\/oci-layout-index\.mjs verify-loaded/, file);
+        assert.ok(buildJob.indexOf('verify-loaded') < buildJob.indexOf('--pull=never'), `${file} must prove the loaded image before smoke tests`);
+        assert.match(buildJob, new RegExp(`name: ${name}-native-\\$\\{\\{ matrix\\.arch \\}\\}`), file);
+        assert.match(buildJob, /compression-level: 0\s+overwrite: true/, file);
+        // A negated command is exempt from `set -e` unless it is last, so
+        // every negative gate must exit explicitly.
+        assert.doesNotMatch(workflow, /^\s*! /m, file);
+        // Native jobs hold no registry credentials, so nothing can be pushed
+        // before the assembled index is verified.
+        assert.doesNotMatch(beforePublish, /DOCKERHUB_TOKEN|login-action|skopeo copy --all|docker push/, file);
+
+        // The publish job assembles only the proven members, checks the
+        // digest, copies the layout, and re-verifies the registry bytes.
+        assert.match(publishJob, new RegExp(`pattern: ${name}-native-\\*`), file);
+        assert.match(publishJob, new RegExp(`= '${name}-native-amd64 ${name}-native-arm64'`), file);
+        assert.match(publishJob, /--proof "linux\/amd64=/, file);
+        assert.match(publishJob, /--proof "linux\/arm64=/, file);
+        assert.match(publishJob, /computed OCI index \$actual does not equal approved expected_digest/, file);
+        const assemble = publishJob.indexOf('oci-layout-index.mjs assemble');
+        const login = publishJob.indexOf('login-action');
+        const copy = publishJob.indexOf('skopeo copy --all --preserve-digests "oci:');
+        assert.ok(assemble > 0 && assemble < login && login < copy, `${file} must verify before authenticating and publishing`);
+        assert.match(publishJob, /skopeo copy --all --preserve-digests "oci:/, file);
+        assert.match(publishJob, /skopeo inspect --raw "\$destination" > "\$RUNNER_TEMP\/registry-index\.json"/, file);
+        assert.match(publishJob, /digest: \$\{\{ steps\.publish\.outputs\.digest \}\}/, file);
+        assert.ok(publishJob.indexOf('digest=$') > copy, `${file} must expose the digest only after publication`);
+        assert.match(publishJob, /oci-layout-index\.mjs verify-index "\$RUNNER_TEMP\/registry-index\.json" --expected-digest/, file);
+
+        // Every action is pinned to a full commit.
+        for (const [, reference] of workflow.matchAll(/uses:\s*(\S+)/g)) {
+            assert.match(reference, /@[0-9a-f]{40}$/, `${file} action ${reference} is not pinned to a commit`);
+        }
+    }
 });
 
 test('independent WebTTY image and publication workflow are retired', () => {
@@ -923,31 +995,37 @@ test('livekit workflow builds the relocated Explorer source with centralized Doc
     assert.match(workflow, /refs\/heads\/main/);
     assert.doesNotMatch(workflow, /webmeetInfra|ploinky-proxy|refs\/heads\/ploinky-box/);
     assert.match(workflow, /git -C sources\/AssistOSExplorer rev-parse HEAD/);
-    assert.match(workflow, /context:\s*\.\/sources\/AssistOSExplorer\/liveKitServerAgent/);
-    assert.match(workflow, /file:\s*\.\/images\/livekit-server-agent\/Dockerfile/);
+    assert.match(workflow, /-f images\/livekit-server-agent\/Dockerfile\s*\\\s*sources\/AssistOSExplorer\/liveKitServerAgent$/m);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/livekit-server-agent/);
     assert.match(workflow, /default: 'webmeet-infra'/);
-    assert.match(workflow, /type=raw,value=\$\{\{ env\.IMAGE_TAG \}\}-\$\{\{ steps\.source\.outputs\.sha \}\}/);
-    assert.match(workflow, /platforms: linux\/amd64,linux\/arm64/);
-    assert.match(workflow, /docker\/login-action@v3/);
-    assert.match(workflow, /- name: Build and push\s+id: build\s+uses: docker\/build-push-action@v6/);
+    assert.match(workflow, /for tag in "\$IMAGE_TAG" "\$IMAGE_TAG-\$SOURCE_SHA"; do/);
+    assert.match(workflow, /SOURCE_SHA: \$\{\{ needs\.source\.outputs\.sha \}\}/);
+    assert.match(workflow, /docker\/login-action@[0-9a-f]{40} # v3/);
+    assert.doesNotMatch(workflow, /build-push-action|metadata-action|Smoke build local architecture/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /Smoke build local architecture/);
-    assert.match(workflow, /docker build[\s\S]*sources\/AssistOSExplorer\/liveKitServerAgent/);
+    assert.match(workflow, /docker buildx build[\s\S]*sources\/AssistOSExplorer\/liveKitServerAgent/);
     assert.match(workflow, /for binary in livekit-server egress redis-server pulseaudio setpriv ps node npm git g\+\+ getent ip make curl nc tini/);
+    // The Egress input is checked as an exact two-platform index whose bytes
+    // match the pinned digest, not only by its reference format.
+    assert.match(workflow, /docker buildx imagetools inspect --raw "\$LIVEKIT_EGRESS_IMAGE"/);
+    assert.match(workflow, /verify-index "\$RUNNER_TEMP\/egress-index\.json" \\\s*--expected-digest "\$\{LIVEKIT_EGRESS_IMAGE##\*@\}"/);
+    assert.match(workflow, /expected_digest:[\s\S]*?required:\s*false/);
+    assert.match(workflow, /if \[\[ -n "\$EXPECTED_DIGEST" && "\$actual" != "\$EXPECTED_DIGEST" \]\]/);
+    assert.match(workflow, /livekit-server --version/);
+    assert.match(workflow, /test "\$\(egress --version \| awk "\{print \\\$NF\}"\)" = 1\.9\.0/);
     assert.match(dockerfile, /Acquire::Retries "10"/);
     assert.match(dockerfile, /Acquire::https::Timeout "60"/);
     assert.match(dockerfile, /Components: main universe/);
     assert.match(dockerfile, /APT::Update::Error-Mode "any"/);
     assert.match(dockerfile, /command -v ps/);
-    assert.match(workflow, /for retired in turnserver nginx certbot python3/);
+    assert.match(workflow, /for retired in turnserver nginx certbot python3; do\s+if command -v "\$retired" >\/dev\/null 2>&1; then\s+echo "retired command \$retired is present" >&2\s+exit 1/);
+    assert.match(workflow, /--label "org\.opencontainers\.image\.revision=\$SOURCE_REF"/);
     // Base images are pinned by manifest digest, not tag alone (webmeet
     // network-hardening trim: resolved via the Docker Hub registry v2 API,
     // see the comment block above the ARG lines in the Dockerfile itself).
     assert.match(dockerfile, /^ARG LIVEKIT_SERVER_IMAGE=livekit\/livekit-server:v1\.11\.0@sha256:[0-9a-f]{64}$/m);
     assert.match(dockerfile, /^ARG LIVEKIT_EGRESS_IMAGE$/m);
     assert.match(workflow, /--build-arg LIVEKIT_EGRESS_IMAGE=/);
-    assert.match(workflow, /build-args:[\s\S]*LIVEKIT_EGRESS_IMAGE=/);
     assert.match(dockerfile, /livekit-egress-loopback\.contract/);
     assert.match(dockerfile, /sha256sum --check --strict/);
     assert.match(dockerfile, /^ARG NODE_BASE=node:24-bookworm-slim@sha256:[0-9a-f]{64}$/m);
@@ -966,7 +1044,7 @@ test('livekit workflow builds the relocated Explorer source with centralized Doc
     assert.match(dockerfile, /"libc-bin=\$\{LIBC_BIN_VERSION\}"/);
     assert.match(dockerfile, /"redis-server=\$\{REDIS_VERSION\}"/);
     assert.match(dockerfile, /command -v getent/);
-    assert.match(workflow, /outputs:\s+digest:\s*\$\{\{ steps\.build\.outputs\.digest \}\}/);
+    assert.match(workflow, /outputs:\s+digest:\s*\$\{\{ steps\.publish\.outputs\.digest \}\}/);
     assert.match(workflow, /\^sha256:\[0-9a-f\]\{64\}\$/);
     assert.match(workflow, /Published immutable image:/);
     assert.match(workflow, /GITHUB_STEP_SUMMARY/);

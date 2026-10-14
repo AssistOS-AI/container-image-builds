@@ -25,14 +25,35 @@ env:
   IMAGE_NAME: assistos/livekit-egress
   IMAGE_TAG: ${{ inputs.image_tag || 'v1.9.1-ploinky-loopback' }}
   EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+  IMAGE_DEFINITION: images/livekit-egress-loopback
 
 jobs:
-  publish:
-    name: Verify exact Egress OCI index, then publish
-    runs-on: ubuntu-24.04
+  # Each architecture is built, loaded, and proven on its own native runner.
+  # Nothing is pushed here: the sealed layout travels as an artifact.
+  build:
+    name: Build and prove native ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+      PROOF_IMAGE: localhost/livekit-egress-proof:${{ matrix.arch }}
     steps:
       - name: Checkout image definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate publication inputs
         run: |
@@ -45,18 +66,41 @@ jobs:
             echo 'image_tag is malformed' >&2
             exit 1
           fi
+          case "$ARCH/$(uname -m)" in amd64/x86_64|arm64/aarch64) ;; *) echo "runner is not native $ARCH" >&2; exit 1 ;; esac
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build local architecture
+      - name: Fix the reproducible build epoch
         run: |
           set -euo pipefail
-          docker build -t "$IMAGE_NAME:smoke" images/livekit-egress-loopback
-          docker run --rm --entrypoint sh "$IMAGE_NAME:smoke" -lc '
+          source_date_epoch="$(git log -1 --format=%ct -- "$IMAGE_DEFINITION")"
+          if [[ ! "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'Egress image definition has no valid reproducible-build epoch' >&2
+            exit 1
+          fi
+          printf 'SOURCE_DATE_EPOCH=%s\n' "$source_date_epoch" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build the sealed native layout and load the same build
+        run: |
+          set -euo pipefail
+          native="$RUNNER_TEMP/livekit-egress-native-$ARCH"
+          mkdir -p "$native/evidence"
+          docker buildx build \
+            --platform "$PLATFORM" \
+            --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
+            --provenance=false \
+            --output "type=oci,dest=$native/layout,tar=false,rewrite-timestamp=true" \
+            --output "type=docker,name=$PROOF_IMAGE,rewrite-timestamp=true" \
+            "$IMAGE_DEFINITION"
+          node scripts/oci-layout-index.mjs describe "$native/layout" --platform "$PLATFORM" > "$native/evidence/member.json"
+          docker image inspect "$PROOF_IMAGE" > "$native/evidence/image-inspect.json"
+          node scripts/oci-layout-index.mjs verify-loaded "$native/evidence/member.json" "$native/evidence/image-inspect.json"
+
+      - name: Prove the patched binary contract natively
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=never --entrypoint sh "$PROOF_IMAGE" -lc '
             set -eu
             contract=/usr/local/share/ploinky/livekit-egress-loopback.contract
             test -f "$contract" && test ! -L "$contract"
@@ -65,6 +109,7 @@ jobs:
             test "$(sed -n "2p" "$contract")" = source_commit=ba52a026bea409bde31dcc7da9ba5322e967520c
             expected="$(sed -n "s/^binary_sha256=//p" "$contract")"
             printf "%s  %s\n" "$expected" /usr/bin/egress | sha256sum --check --strict -
+            test "$(/usr/bin/egress --version | awk "{print \$NF}")" = 1.9.0
           '
 
       - name: Prove semantic endpoints and loopback-only health listener
@@ -89,10 +134,10 @@ jobs:
             '  address: 127.0.0.1:6379' \
             'template_port: 7980' \
             'health_port: 7981' > /tmp/egress-smoke.yaml
-          docker run -d --name "$egress" --network "container:$redis" \
+          docker run -d --pull=never --name "$egress" --network "container:$redis" \
             -v /tmp/egress-smoke.yaml:/tmp/egress.yaml:ro \
             -e EGRESS_CONFIG_FILE=/tmp/egress.yaml \
-            "$IMAGE_NAME:smoke" >/dev/null
+            "$PROOF_IMAGE" >/dev/null
           for _ in $(seq 1 30); do
             if docker exec "$egress" curl -fsS http://127.0.0.1:7981/ >/tmp/egress-health.json 2>/dev/null; then
               break
@@ -102,61 +147,80 @@ jobs:
           jq -e '.CpuLoad | numbers' /tmp/egress-health.json >/dev/null
           docker exec "$egress" curl -fsS http://127.0.0.1:7980/ | grep -Fq 'LiveKit Egress'
           docker exec "$egress" sh -c "grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]+0100007F:1F2D[[:space:]]' /proc/net/tcp"
-          ! docker exec "$egress" sh -c "grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]+00000000:1F2D[[:space:]]' /proc/net/tcp"
-          ! docker run --rm --network "$network" --entrypoint curl "$IMAGE_NAME:smoke" \
-            -fsS --connect-timeout 2 "http://$redis:7981/"
+          if docker exec "$egress" sh -c "grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]+00000000:1F2D[[:space:]]' /proc/net/tcp"; then
+            echo 'Egress health listener is bound to every IPv4 interface' >&2
+            exit 1
+          fi
+          if docker run --rm --pull=never --network "$network" --entrypoint curl "$PROOF_IMAGE" \
+            -fsS --connect-timeout 2 "http://$redis:7981/"; then
+            echo 'Egress health listener is reachable from the bridge network' >&2
+            exit 1
+          fi
 
-      - name: Build sealed multi-architecture OCI archive
+      - name: Record native source evidence
         run: |
           set -euo pipefail
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --provenance=false \
-            --output type=oci,dest=/tmp/livekit-egress-loopback.oci.tar \
-            images/livekit-egress-loopback
+          node --input-type=module <<'NODE' > "$RUNNER_TEMP/livekit-egress-native-$ARCH/evidence/source-evidence.json"
+          process.stdout.write(JSON.stringify({
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            architecture: process.env.ARCH,
+            sourceDateEpoch: process.env.SOURCE_DATE_EPOCH,
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Upload proven native layout
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: livekit-egress-native-${{ matrix.arch }}
+          path: ${{ runner.temp }}/livekit-egress-native-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+
+  publish:
+    name: Verify exact Egress OCI index, then publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download proven native layouts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: livekit-egress-native-*
+          path: ${{ runner.temp }}/native
 
       - name: Verify archive digest and platform set before registry mutation
+        id: assemble
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import re
-          import tarfile
-
-          archive = pathlib.Path('/tmp/livekit-egress-loopback.oci.tar')
-          expected = os.environ['EXPECTED_DIGEST']
-          with tarfile.open(archive, 'r') as tar:
-              root = json.load(tar.extractfile('index.json'))
-              descriptors = root.get('manifests')
-              if not isinstance(descriptors, list) or len(descriptors) != 1:
-                  raise SystemExit('OCI archive must contain exactly one top-level image index')
-              descriptor = descriptors[0]
-              digest = descriptor.get('digest', '')
-              if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
-                  raise SystemExit('OCI archive descriptor digest is malformed')
-              blob_name = f"blobs/sha256/{digest.removeprefix('sha256:')}"
-              blob = tar.extractfile(blob_name).read()
-              actual = 'sha256:' + hashlib.sha256(blob).hexdigest()
-              if actual != digest:
-                  raise SystemExit('OCI archive descriptor does not match its exact bytes')
-              image_index = json.loads(blob)
-              if image_index.get('mediaType') != 'application/vnd.oci.image.index.v1+json':
-                  raise SystemExit('sealed artifact is not an OCI image index')
-              platforms = {
-                  (item.get('platform', {}).get('os'), item.get('platform', {}).get('architecture'))
-                  for item in image_index.get('manifests', [])
-              }
-              required = {('linux', 'amd64'), ('linux', 'arm64')}
-              if platforms != required:
-                  raise SystemExit(f'OCI platform set must equal {sorted(required)}, got {sorted(platforms)}')
-              if expected and actual != expected:
-                  raise SystemExit(f'computed OCI index {actual} does not equal approved expected_digest')
-          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
-              print(f'SEALED_DIGEST={actual}', file=env)
-          PY
+          native="$RUNNER_TEMP/native"
+          test "$(find "$native" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | paste -sd ' ')" = 'livekit-egress-native-amd64 livekit-egress-native-arm64'
+          revision="$(git log -1 --format=%H -- "$IMAGE_DEFINITION")"
+          node scripts/oci-layout-index.mjs assemble --out "$RUNNER_TEMP/livekit-egress-index" \
+            --member "linux/amd64=$native/livekit-egress-native-amd64/layout" \
+            --proof "linux/amd64=$native/livekit-egress-native-amd64/evidence/member.json" \
+            --member "linux/arm64=$native/livekit-egress-native-arm64/layout" \
+            --proof "linux/arm64=$native/livekit-egress-native-arm64/evidence/member.json" \
+            --annotation "org.opencontainers.image.revision=$revision" \
+            --annotation "org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds" \
+            > "$RUNNER_TEMP/assembled.json"
+          actual="$(jq -r .digest "$RUNNER_TEMP/assembled.json")"
+          if [[ -n "$EXPECTED_DIGEST" && "$actual" != "$EXPECTED_DIGEST" ]]; then
+            echo "computed OCI index $actual does not equal approved expected_digest" >&2
+            exit 1
+          fi
+          echo "SEALED_DIGEST=$actual" >> "$GITHUB_ENV"
 
       - name: Install archive publisher
         run: |
@@ -165,22 +229,50 @@ jobs:
           sudo apt-get install -y --no-install-recommends skopeo
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Publish the already-verified archive
+      - name: Publish the already-verified layout
+        id: publish
         run: |
           set -euo pipefail
           destination="docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-          skopeo copy --all "oci-archive:/tmp/livekit-egress-loopback.oci.tar" "$destination"
-          remote_digest="$(skopeo inspect --raw "$destination" | sha256sum | awk '{print "sha256:" $1}')"
+          skopeo copy --all --preserve-digests "oci:$RUNNER_TEMP/livekit-egress-index" "$destination"
+          skopeo inspect --raw "$destination" > "$RUNNER_TEMP/registry-index.json"
+          remote_digest="$(sha256sum "$RUNNER_TEMP/registry-index.json" | awk '{print "sha256:" $1}')"
           if [ "$remote_digest" != "$SEALED_DIGEST" ]; then
             echo "registry digest mismatch after copy: expected $SEALED_DIGEST, got $remote_digest" >&2
             exit 1
           fi
+          node scripts/oci-layout-index.mjs verify-index "$RUNNER_TEMP/registry-index.json" --expected-digest "$SEALED_DIGEST" >/dev/null
+          echo "digest=$remote_digest" >> "$GITHUB_OUTPUT"
           printf 'Published patched Egress: `docker.io/%s@%s`\n' \
             "$IMAGE_NAME" "$remote_digest" >> "$GITHUB_STEP_SUMMARY"
           printf 'Rebuild livekit-server-agent with this exact immutable reference before activation.\n' \
             >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect publication evidence
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/livekit-egress-publication-evidence"
+          mkdir -p "$evidence"
+          for arch in amd64 arm64; do
+            if [ -d "$RUNNER_TEMP/native/livekit-egress-native-$arch/evidence" ]; then
+              cp -R "$RUNNER_TEMP/native/livekit-egress-native-$arch/evidence" "$evidence/native-$arch"
+            fi
+          done
+          for file in assembled.json registry-index.json; do
+            if [ -f "$RUNNER_TEMP/$file" ]; then cp "$RUNNER_TEMP/$file" "$evidence/"; fi
+          done
+
+      - name: Upload publication evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: livekit-egress-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/livekit-egress-publication-evidence
+          if-no-files-found: warn
+          retention-days: 30

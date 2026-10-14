@@ -34,11 +34,19 @@ test('publication workflow verifies exact bytes before mutation and proves same-
   assert.match(workflow, /0100007F:1F2D/);
   assert.match(workflow, /00000000:1F2D/);
   assert.match(workflow, /--network "\$network" --entrypoint curl/);
-  assert.match(workflow, /--platform linux\/amd64,linux\/arm64/);
   assert.match(workflow, /expected_digest:[\s\S]*required:\s*false/);
   assert.match(workflow, /Verify archive digest and platform set before registry mutation/);
-  assert.match(workflow, /SEALED_DIGEST=\{actual\}/);
+  assert.match(workflow, /SEALED_DIGEST=\$actual/);
   assert.match(workflow, /skopeo copy --all/);
   assert.match(workflow, /remote_digest.*SEALED_DIGEST/);
   assert.doesNotMatch(workflow, /^\s*push:/m);
+});
+
+test('each native architecture proves the patched binary and its loopback-only listener', () => {
+  assert.match(workflow, /test "\$\(\/usr\/bin\/egress --version \| awk "\{print \\\$NF\}"\)" = 1\.9\.0/);
+  assert.match(workflow, /printf "%s  %s\\n" "\$expected" \/usr\/bin\/egress \| sha256sum --check --strict -/);
+  assert.match(workflow, /docker run -d --pull=never --name "\$egress" --network "container:\$redis"/);
+  assert.match(workflow, /if docker exec "\$egress" sh -c "grep -Eq '[^']*00000000:1F2D[^']*' \/proc\/net\/tcp"; then\s+echo [^\n]*\s+exit 1/);
+  assert.match(workflow, /if docker run --rm --pull=never --network "\$network" --entrypoint curl "\$PROOF_IMAGE" \\\s+-fsS --connect-timeout 2 "http:\/\/\$redis:7981\/"; then\s+echo [^\n]*\s+exit 1/);
+  assert.doesNotMatch(workflow, /\$IMAGE_NAME:smoke/);
 });

@@ -48,10 +48,13 @@ mount. Native architecture images are published by immutable digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
 current tip of `AssistOSExplorer/main`, its default branch. The checkout lives at
-`sources/AssistOSExplorer`; both builds use its `liveKitServerAgent` directory
-with this repository's centralized Dockerfile. It builds and smoke-tests the
-local architecture before authenticating and publishing the multiarchitecture
-image.
+`sources/AssistOSExplorer`; both native builds use its `liveKitServerAgent`
+directory with this repository's centralized Dockerfile. A single `source` job
+checks the source tip once, confirms that the `egress_image` input resolves to
+an index whose bytes match its digest and that contains exactly `linux/amd64`
+and `linux/arm64`, and passes the source commit time to both builds as their
+reproducible-build epoch. Publication follows the
+[native archive flow](#onlyoffice-livekit-and-egress-native-archive-publication).
 Its three base images are pinned by manifest-list digest, and Ubuntu package
 resolution is pinned to a dated repository snapshot with exact direct-package
 versions. The pinned `libc-bin` package and both build-time and workflow smoke
@@ -63,12 +66,63 @@ and integrate this workflow change before removing the old source from
 dispatching a future build. The source move itself does not require publication
 or a change to existing consumer image digests.
 
-The LiveKit workflow keeps its stable `webmeet-infra` release tag and
-also exposes the pushed multiarchitecture manifest digest as the `publish` job's
-`digest` output. Each workflow validates that build output as an exact sha256
-digest and writes the resulting `docker.io/assistos/...@sha256:...` reference
-to both the log and GitHub job summary. Publishing and pinning consumer
-manifests remain separate authorized operations.
+The LiveKit workflow keeps its stable `webmeet-infra` release tag and the
+`webmeet-infra-<12-character source SHA>` tag, and exposes the verified
+multiarchitecture index digest as the `publish` job's `digest` output. An
+optional `expected_digest` input constrains that digest. The source revision
+and repository are recorded both as `org.opencontainers.image.*` labels on each
+image and as annotations on the index. The resulting
+`docker.io/assistos/...@sha256:...` reference is written to both the log and
+GitHub job summary. Publishing and pinning consumer manifests remain separate
+authorized operations.
+
+## OnlyOffice, LiveKit, and Egress native archive publication
+
+`publish-onlyoffice-agent-image.yml`, `publish-livekit-server-agent.yml`, and
+`publish-livekit-egress-loopback.yml` build each architecture on its own native
+runner, `ubuntu-24.04` for amd64 and `ubuntu-24.04-arm` for arm64. None of them
+uses QEMU. Each native job:
+
+1. exports one single-platform build twice, with `--provenance=false`,
+   `SOURCE_DATE_EPOCH`, and `rewrite-timestamp=true`: as an OCI layout
+   directory and into the runner's daemon;
+2. records the layout's manifest, config, layers, diff IDs, and runtime
+   configuration with `scripts/oci-layout-index.mjs describe`, which also
+   verifies every blob and that every stored layer expands to its declared diff
+   ID, so the compressed bytes that are published hold the tested filesystem;
+3. requires the loaded image's architecture, root filesystem diff IDs, and
+   `Entrypoint`, `Cmd`, `Env`, `User`, `WorkingDir`, and `Labels` to equal the
+   layout's (`verify-loaded`);
+4. runs the image's native gates against that loaded image with
+   `--pull=never`; and
+5. uploads the layout and its evidence as an artifact that a re-run of the
+   job replaces. Native jobs hold no registry credentials and push nothing.
+
+The image-specific native gates are:
+
+| Workflow | Native gates on each architecture |
+| --- | --- |
+| OnlyOffice | Tool versions, contract mode and interposer hash, the interposer moving only port 8000 from `0.0.0.0` to `127.0.0.1` and failing closed with status 126 outside its scope, and Document Server reporting `true` on `/healthcheck`. |
+| LiveKit | Required and retired commands, the Egress contract hash, and executing `livekit-server`, `egress`, `redis-server`, and `node`. |
+| Egress | Contract mode, source commit and binary hash, `egress --version`, the health and template endpoints, the health listener bound only to `127.0.0.1:7981`, and refusal from the bridge network. |
+
+The `publish` job then runs `scripts/oci-layout-index.mjs assemble`. The helper
+re-verifies both downloaded layouts, including layer expansion, requires each
+member to equal the manifest
+and diff IDs its native job proved, and writes one canonical OCI index with
+exactly the amd64 and arm64 members plus source annotations. The same member
+bytes and annotations always produce the same index digest. The job compares
+that digest with `expected_digest` (required for OnlyOffice, optional for
+LiveKit and Egress) before it logs in. Only then does
+`skopeo copy --all --preserve-digests` publish the layout, and the job re-reads
+the registry's raw index and requires the same digest and platform set before
+it exposes the digest as its output. Evidence from both native jobs, the assembled
+index, and the registry copy is retained for 30 days.
+
+Indexes assembled this way are not byte-identical to indexes that earlier
+Buildx multiplatform builds produced. When `expected_digest` does not match,
+the failure message and the `assembled.json` evidence report the computed
+digest for review.
 
 ## Bizanso runtime
 
@@ -714,8 +768,13 @@ gh workflow run publish-ploinky-node-image.yml \
 
 gh workflow run publish-onlyoffice-agent-image.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f onlyoffice_version=9.3.1 \
+  -f expected_digest="${ONLYOFFICE_INDEX_DIGEST:?Set the approved sha256 OCI-index digest}" \
   -f image_tag=9.3.1
+
+# expected_digest is optional; when set, publication requires that index digest.
+gh workflow run publish-livekit-egress-loopback.yml \
+  --repo AssistOS-AI/container-image-builds \
+  -f image_tag=v1.9.1-ploinky-loopback
 
 gh workflow run publish-llm-runtime-cpu-image.yml \
   --repo AssistOS-AI/container-image-builds \

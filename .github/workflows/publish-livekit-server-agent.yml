@@ -11,6 +11,11 @@ on:
         description: 'Verified patched Egress index: docker.io/assistos/livekit-egress@sha256:<64 lowercase hex>'
         required: true
         type: string
+      expected_digest:
+        description: 'Optional sha256 digest constraint for the exact multi-architecture OCI index'
+        required: false
+        default: ''
+        type: string
       image_tag:
         description: 'Docker Hub tag to publish for liveKitServerAgent'
         required: false
@@ -28,20 +33,26 @@ env:
   IMAGE_NAME: assistos/livekit-server-agent
   IMAGE_TAG: ${{ inputs.image_tag || 'webmeet-infra' }}
   LIVEKIT_EGRESS_IMAGE: ${{ inputs.egress_image }}
+  EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+  SOURCE_REF: ${{ inputs.source_ref }}
 
 jobs:
-  publish:
-    name: Build and push Docker Hub image
-    runs-on: ubuntu-latest
+  # Validates every input once, so both native builds consume the same
+  # source revision, Egress index, and reproducible build epoch.
+  source:
+    name: Validate source and Egress inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      sha: ${{ steps.source.outputs.sha }}
+      epoch: ${{ steps.source.outputs.epoch }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Validate immutable source revision
-        env:
-          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
           if [[ ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -52,9 +63,24 @@ jobs:
             echo "egress_image must be the exact verified patched Egress multi-architecture index" >&2
             exit 1
           fi
+          if [[ -n "$EXPECTED_DIGEST" && ! "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'expected_digest must be empty or an explicit lowercase sha256 OCI-index digest' >&2
+            exit 1
+          fi
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,114}$ ]]; then
+            echo 'image_tag is malformed' >&2
+            exit 1
+          fi
+
+      - name: Verify the Egress input is a two-platform index
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "$LIVEKIT_EGRESS_IMAGE" > "$RUNNER_TEMP/egress-index.json"
+          node scripts/oci-layout-index.mjs verify-index "$RUNNER_TEMP/egress-index.json" \
+            --expected-digest "${LIVEKIT_EGRESS_IMAGE##*@}"
 
       - name: Checkout AssistOSExplorer source
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: AssistOS-AI/AssistOSExplorer
           ref: ${{ inputs.source_ref }}
@@ -63,8 +89,6 @@ jobs:
 
       - name: Verify main source tip
         id: source
-        env:
-          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
           actual_sha="$(git -C sources/AssistOSExplorer rev-parse HEAD)"
@@ -75,23 +99,90 @@ jobs:
             exit 1
           fi
           echo "sha=${actual_sha:0:12}" >> "$GITHUB_OUTPUT"
+          echo "epoch=$(git -C sources/AssistOSExplorer log -1 --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke build local architecture
+  # Each architecture is built, loaded, and proven on its own native runner.
+  # Nothing is pushed here: the sealed layout travels as an artifact.
+  build:
+    name: Build and prove native ${{ matrix.platform }}
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+      PROOF_IMAGE: localhost/livekit-server-agent-proof:${{ matrix.arch }}
+      SOURCE_DATE_EPOCH: ${{ needs.source.outputs.epoch }}
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout AssistOSExplorer source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: AssistOS-AI/AssistOSExplorer
+          ref: ${{ inputs.source_ref }}
+          path: sources/AssistOSExplorer
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Verify the validated source revision and native runner
         run: |
           set -euo pipefail
-          docker build \
+          test "$(git -C sources/AssistOSExplorer rev-parse HEAD)" = "$SOURCE_REF"
+          [[ "$SOURCE_DATE_EPOCH" =~ ^[1-9][0-9]*$ ]]
+          case "$ARCH/$(uname -m)" in amd64/x86_64|arm64/aarch64) ;; *) echo "runner is not native $ARCH" >&2; exit 1 ;; esac
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build the sealed native layout and load the same build
+        run: |
+          set -euo pipefail
+          native="$RUNNER_TEMP/livekit-server-agent-native-$ARCH"
+          mkdir -p "$native/evidence"
+          docker buildx build \
+            --platform "$PLATFORM" \
             --build-arg LIVEKIT_EGRESS_IMAGE="$LIVEKIT_EGRESS_IMAGE" \
+            --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
+            --label "org.opencontainers.image.revision=$SOURCE_REF" \
+            --label "org.opencontainers.image.source=https://github.com/AssistOS-AI/AssistOSExplorer" \
+            --provenance=false \
+            --output "type=oci,dest=$native/layout,tar=false,rewrite-timestamp=true" \
+            --output "type=docker,name=$PROOF_IMAGE,rewrite-timestamp=true" \
             -f images/livekit-server-agent/Dockerfile \
-            -t "$IMAGE_NAME:smoke" \
             sources/AssistOSExplorer/liveKitServerAgent
-          docker run --rm --entrypoint sh "$IMAGE_NAME:smoke" -c '
+          docker buildx prune --all --force >/dev/null
+          node scripts/oci-layout-index.mjs describe "$native/layout" --platform "$PLATFORM" > "$native/evidence/member.json"
+          docker image inspect "$PROOF_IMAGE" > "$native/evidence/image-inspect.json"
+          node scripts/oci-layout-index.mjs verify-loaded "$native/evidence/member.json" "$native/evidence/image-inspect.json"
+
+      - name: Prove binaries and the Egress contract natively
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=never --entrypoint sh "$PROOF_IMAGE" -c '
             set -eu
             for binary in livekit-server egress redis-server pulseaudio setpriv ps node npm git g++ getent ip make curl nc tini; do
               command -v "$binary" >/dev/null
             done
             test "$(id -u egress)" -gt 0
             for retired in turnserver nginx certbot python3; do
-              ! command -v "$retired" >/dev/null 2>&1
+              if command -v "$retired" >/dev/null 2>&1; then
+                echo "retired command $retired is present" >&2
+                exit 1
+              fi
             done
             test -x /code/scripts/start-livekit-server-agent.sh
             contract=/usr/local/share/ploinky/livekit-egress-loopback.contract
@@ -99,53 +190,133 @@ jobs:
             test "$(stat -c "%u:%g:%a" "$contract")" = 0:0:444
             expected="$(sed -n "s/^binary_sha256=//p" "$contract")"
             printf "%s  %s\n" "$expected" /usr/bin/egress | sha256sum --check --strict -
+            livekit-server --version
+            test "$(egress --version | awk "{print \$NF}")" = 1.9.0
+            redis-server --version
+            node --version
           '
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Record native source evidence
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' > "$RUNNER_TEMP/livekit-server-agent-native-$ARCH/evidence/source-evidence.json"
+          process.stdout.write(JSON.stringify({
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            workflowSha: process.env.GITHUB_SHA,
+            workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            architecture: process.env.ARCH,
+            sourceRef: process.env.SOURCE_REF,
+            egressImage: process.env.LIVEKIT_EGRESS_IMAGE,
+            sourceDateEpoch: process.env.SOURCE_DATE_EPOCH,
+          }, null, 2) + '\n');
+          NODE
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Upload proven native layout
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: livekit-server-agent-native-${{ matrix.arch }}
+          path: ${{ runner.temp }}/livekit-server-agent-native-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+
+  publish:
+    name: Verify exact OCI index, then publish
+    needs: [source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    env:
+      SOURCE_SHA: ${{ needs.source.outputs.sha }}
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download proven native layouts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: livekit-server-agent-native-*
+          path: ${{ runner.temp }}/native
+
+      - name: Verify archive digest and platform set before registry mutation
+        id: assemble
+        run: |
+          set -euo pipefail
+          native="$RUNNER_TEMP/native"
+          test "$(find "$native" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | paste -sd ' ')" = 'livekit-server-agent-native-amd64 livekit-server-agent-native-arm64'
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{12}$ ]]
+          node scripts/oci-layout-index.mjs assemble --out "$RUNNER_TEMP/livekit-server-agent-index" \
+            --member "linux/amd64=$native/livekit-server-agent-native-amd64/layout" \
+            --proof "linux/amd64=$native/livekit-server-agent-native-amd64/evidence/member.json" \
+            --member "linux/arm64=$native/livekit-server-agent-native-arm64/layout" \
+            --proof "linux/arm64=$native/livekit-server-agent-native-arm64/evidence/member.json" \
+            --annotation "org.opencontainers.image.revision=$SOURCE_REF" \
+            --annotation "org.opencontainers.image.source=https://github.com/AssistOS-AI/AssistOSExplorer" \
+            --annotation "io.assistos.livekit.egress-image=$LIVEKIT_EGRESS_IMAGE" \
+            > "$RUNNER_TEMP/assembled.json"
+          actual="$(jq -r .digest "$RUNNER_TEMP/assembled.json")"
+          if [[ -n "$EXPECTED_DIGEST" && "$actual" != "$EXPECTED_DIGEST" ]]; then
+            echo "computed OCI index $actual does not equal approved expected_digest" >&2
+            exit 1
+          fi
+          echo "SEALED_DIGEST=$actual" >> "$GITHUB_ENV"
+
+      - name: Install archive publisher
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ env.IMAGE_TAG }}
-            type=raw,value=${{ env.IMAGE_TAG }}-${{ steps.source.outputs.sha }}
-
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: ./sources/AssistOSExplorer/liveKitServerAgent
-          file: ./images/livekit-server-agent/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            LIVEKIT_EGRESS_IMAGE=${{ env.LIVEKIT_EGRESS_IMAGE }}
-          provenance: false
-
-      - name: Report immutable image reference
-        id: report
-        env:
-          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+      - name: Publish the already-verified layout under both tags
+        id: publish
         run: |
           set -euo pipefail
-          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Build output digest is missing or malformed." >&2
-            exit 1
-          fi
-          immutable_ref="docker.io/${IMAGE_NAME}@${BUILD_DIGEST}"
+          for tag in "$IMAGE_TAG" "$IMAGE_TAG-$SOURCE_SHA"; do
+            destination="docker://docker.io/${IMAGE_NAME}:${tag}"
+            skopeo copy --all --preserve-digests "oci:$RUNNER_TEMP/livekit-server-agent-index" "$destination"
+            skopeo inspect --raw "$destination" > "$RUNNER_TEMP/registry-index.json"
+            remote_digest="$(sha256sum "$RUNNER_TEMP/registry-index.json" | awk '{print "sha256:" $1}')"
+            if [ "$remote_digest" != "$SEALED_DIGEST" ]; then
+              echo "registry digest mismatch after copy to $tag: expected $SEALED_DIGEST, got $remote_digest" >&2
+              exit 1
+            fi
+            node scripts/oci-layout-index.mjs verify-index "$RUNNER_TEMP/registry-index.json" --expected-digest "$SEALED_DIGEST" >/dev/null
+          done
+          echo "digest=$SEALED_DIGEST" >> "$GITHUB_OUTPUT"
+          immutable_ref="docker.io/${IMAGE_NAME}@${SEALED_DIGEST}"
           echo "Published immutable image: $immutable_ref"
           printf 'Published immutable image: `%s`\n' "$immutable_ref" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect publication evidence
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/livekit-server-agent-publication-evidence"
+          mkdir -p "$evidence"
+          for arch in amd64 arm64; do
+            if [ -d "$RUNNER_TEMP/native/livekit-server-agent-native-$arch/evidence" ]; then
+              cp -R "$RUNNER_TEMP/native/livekit-server-agent-native-$arch/evidence" "$evidence/native-$arch"
+            fi
+          done
+          for file in assembled.json registry-index.json; do
+            if [ -f "$RUNNER_TEMP/$file" ]; then cp "$RUNNER_TEMP/$file" "$evidence/"; fi
+          done
+
+      - name: Upload publication evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: livekit-server-agent-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/livekit-server-agent-publication-evidence
+          if-no-files-found: warn
+          retention-days: 30
