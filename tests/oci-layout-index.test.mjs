@@ -10,6 +10,7 @@ import zlib from 'node:zlib';
 import {
     assembleIndex,
     describeLayout,
+    serializeReleaseIndex,
     verifyLayerDiffIds,
     verifyLoadedImage,
     verifyReleaseIndex,
@@ -157,7 +158,30 @@ test('verifyLoadedImage binds a loaded image to the archived root filesystem and
     assert.throws(() => verifyLoadedImage(description, [inspect[0], inspect[0]]), /exactly one/);
 });
 
-test('assembleIndex writes a canonical, deterministic two-platform index from proven members', t => {
+// Indexes BuildKit published for these images: OnlyOffice and Egress through
+// the Buildx OCI exporter, LiveKit through build-push-action. The fixtures are
+// the registry's raw bytes, so their digests are the published references.
+const BUILDKIT_INDEXES = {
+    'onlyoffice-agent': 'sha256:70484bd71c144af9ef28e5599ce99272c715c7bac011e90e0e64f49ac7312839',
+    'livekit-server-agent': 'sha256:fc05e4349bc1eab5a1f28ad4bd8a7ec3324867bdaf526eb55c4cdb7031b46eea',
+    'livekit-egress': 'sha256:0e70e2dd162582153984a0969cba7eb76f1ac0283246e889d7817c297224c7f6',
+};
+
+test('serializeReleaseIndex reproduces BuildKit multiplatform indexes byte for byte', () => {
+    for (const [name, digest] of Object.entries(BUILDKIT_INDEXES)) {
+        const raw = fs.readFileSync(path.join(root, 'tests/fixtures/buildkit-indexes', `${name}.json`));
+        assert.equal(digestOf(raw), digest, `${name} fixture is not the published index`);
+        const members = JSON.parse(raw).manifests.map(entry => ({
+            manifest: { mediaType: entry.mediaType, digest: entry.digest, size: entry.size },
+            platformDescriptor: entry.platform,
+        }));
+        const serialized = serializeReleaseIndex(members);
+        assert.ok(serialized.equals(raw), `${name} serialization differs from BuildKit`);
+        assert.equal(digestOf(serialized), digest);
+    }
+});
+
+test('assembleIndex writes a BuildKit-identical, deterministic two-platform index from proven members', t => {
     const directory = scratch(t);
     const layouts = twoLayouts(directory);
     const proofs = { amd64: describeLayout(layouts.amd64), arm64: describeLayout(layouts.arm64) };
@@ -165,10 +189,8 @@ test('assembleIndex writes a canonical, deterministic two-platform index from pr
         { platform: 'linux/amd64', layout: layouts.amd64, proof: proofs.amd64 },
         { platform: 'linux/arm64', layout: layouts.arm64, proof: proofs.arm64 },
     ];
-    const annotations = { 'org.opencontainers.image.source': 'https://example.invalid/source', 'org.opencontainers.image.revision': 'f'.repeat(40) };
-
-    const first = assembleIndex({ members, outDir: path.join(directory, 'first'), annotations });
-    const second = assembleIndex({ members, outDir: path.join(directory, 'second'), annotations: Object.fromEntries(Object.entries(annotations).reverse()) });
+    const first = assembleIndex({ members, outDir: path.join(directory, 'first') });
+    const second = assembleIndex({ members, outDir: path.join(directory, 'second') });
     assert.equal(first.digest, second.digest);
     assert.deepEqual(first.members, { 'linux/amd64': proofs.amd64.manifest.digest, 'linux/arm64': proofs.arm64.manifest.digest });
 
@@ -178,7 +200,9 @@ test('assembleIndex writes a canonical, deterministic two-platform index from pr
     assert.equal(digestOf(indexBytes), first.digest);
     const index = JSON.parse(indexBytes);
     assert.deepEqual(index.manifests.map(entry => entry.platform), [{ architecture: 'amd64', os: 'linux' }, { architecture: 'arm64', os: 'linux' }]);
-    assert.deepEqual(Object.keys(index.annotations), ['org.opencontainers.image.revision', 'org.opencontainers.image.source']);
+    assert.equal(index.annotations, undefined);
+    assert.ok(indexBytes.equals(serializeReleaseIndex(Object.values(proofs))), 'assembled index must use the BuildKit serialization');
+    assert.notEqual(indexBytes.at(-1), 0x0a, 'BuildKit writes no trailing newline');
     verifyReleaseIndex(indexBytes, { digest: first.digest, members: first.members });
 
     // The assembled layout is itself a valid input: each member resolves.
@@ -189,7 +213,7 @@ test('assembleIndex writes a canonical, deterministic two-platform index from pr
     }
 });
 
-test('assembleIndex refuses wrong order, mismatched proofs, wrong platforms, bad annotations, and reused output', t => {
+test('assembleIndex refuses wrong order, mismatched proofs, wrong platforms, and reused output', t => {
     const directory = scratch(t);
     const layouts = twoLayouts(directory);
     const proofs = { amd64: describeLayout(layouts.amd64), arm64: describeLayout(layouts.arm64) };
@@ -200,7 +224,6 @@ test('assembleIndex refuses wrong order, mismatched proofs, wrong platforms, bad
     assert.throws(() => assembleIndex({ members: [...good].reverse(), outDir: path.join(directory, 'reversed') }));
     assert.throws(() => assembleIndex({ members: [good[0], { ...good[1], proof: proofs.amd64 }], outDir: path.join(directory, 'proof') }), /native proof/);
     assert.throws(() => assembleIndex({ members: [good[0], { ...good[1], layout: layouts.amd64 }], outDir: path.join(directory, 'platform') }), /is not linux\/arm64/);
-    assert.throws(() => assembleIndex({ members: good, outDir: path.join(directory, 'annotation'), annotations: { 'Bad Key': 'x' } }), /annotation key/);
     fs.mkdirSync(path.join(directory, 'used'));
     fs.writeFileSync(path.join(directory, 'used', 'leftover'), '');
     assert.throws(() => assembleIndex({ members: good, outDir: path.join(directory, 'used') }), /new or empty/);
@@ -252,7 +275,6 @@ test('command line assembles from proofs and prints the index digest', t => {
         'assemble', '--out', path.join(directory, 'out'),
         '--member', `linux/amd64=${layouts.amd64}`, '--proof', `linux/amd64=${path.join(directory, 'amd64.json')}`,
         '--member', `linux/arm64=${layouts.arm64}`, '--proof', `linux/arm64=${path.join(directory, 'arm64.json')}`,
-        '--annotation', 'org.opencontainers.image.revision=abc',
     ]);
     assert.equal(assembled.status, 0, assembled.stderr);
     const { digest } = JSON.parse(assembled.stdout);

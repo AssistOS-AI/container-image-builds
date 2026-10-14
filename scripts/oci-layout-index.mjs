@@ -27,7 +27,6 @@ const MANIFEST_MEDIA_TYPES = new Set([
     'application/vnd.docker.distribution.manifest.v2+json',
 ]);
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
-const annotationKeyPattern = /^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:\.[a-z0-9]+(?:[.-][a-z0-9]+)*)*$/;
 
 const sha256 = bytes => `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 const readJson = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -196,21 +195,30 @@ function linkBlob(source, target, digest) {
     }
 }
 
-function sortedAnnotations(annotations) {
-    const entries = Object.entries(annotations).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    for (const [key, value] of entries) {
-        assert.match(key, annotationKeyPattern, `malformed annotation key ${key}`);
-        assert.equal(typeof value, 'string');
-        assert.ok(value.length > 0, `empty annotation ${key}`);
-    }
-    return Object.fromEntries(entries);
+// Serializes a release index byte for byte as BuildKit writes a
+// multiplatform index built with provenance disabled: the OCI index media
+// type, members in platform order, each as mediaType, digest, size, and
+// platform, two-space indentation, no annotations, and no trailing newline.
+// Equal member images therefore give the same digest as a Buildx
+// multiplatform build of the same images.
+export function serializeReleaseIndex(members) {
+    return Buffer.from(JSON.stringify({
+        schemaVersion: 2,
+        mediaType: INDEX_MEDIA_TYPE,
+        manifests: members.map(member => ({
+            mediaType: member.manifest.mediaType,
+            digest: member.manifest.digest,
+            size: member.manifest.size,
+            platform: member.platformDescriptor,
+        })),
+    }, null, 2));
 }
 
 // Writes a new layout holding exactly the amd64 and arm64 members, in that
-// order, under a canonical index. Equal member bytes and annotations always
-// give the same index digest, so an approved digest can be checked before any
-// registry mutation. Each member must match the proof its native job recorded.
-export function assembleIndex({ members, outDir, annotations = {} }) {
+// order, under a BuildKit-identical index, so an approved digest can be
+// checked before any registry mutation. Each member must match the proof its
+// native job recorded.
+export function assembleIndex({ members, outDir }) {
     assert.deepEqual(members.map(member => member.platform), RELEASE_PLATFORMS);
     assert.ok(!fs.existsSync(outDir) || fs.readdirSync(outDir).length === 0, 'output layout directory must be new or empty');
     fs.mkdirSync(path.join(outDir, 'blobs', 'sha256'), { recursive: true });
@@ -227,19 +235,7 @@ export function assembleIndex({ members, outDir, annotations = {} }) {
         return description;
     });
     assert.notEqual(described[0].manifest.digest, described[1].manifest.digest);
-    const index = {
-        schemaVersion: 2,
-        mediaType: INDEX_MEDIA_TYPE,
-        manifests: described.map(description => ({
-            ...description.manifest,
-            platform: description.platformDescriptor,
-        })),
-    };
-    const canonicalAnnotations = sortedAnnotations(annotations);
-    if (Object.keys(canonicalAnnotations).length > 0) {
-        index.annotations = canonicalAnnotations;
-    }
-    const bytes = Buffer.from(JSON.stringify(index));
+    const bytes = serializeReleaseIndex(described);
     const digest = sha256(bytes);
     fs.writeFileSync(blobPath(outDir, digest), bytes);
     fs.writeFileSync(path.join(outDir, 'index.json'), JSON.stringify({
@@ -287,7 +283,7 @@ function parsePairs(values, flag) {
 }
 
 function parseArguments(argv) {
-    const options = { member: [], proof: [], annotation: [], positional: [] };
+    const options = { member: [], proof: [], positional: [] };
     for (let index = 0; index < argv.length; index += 1) {
         const argument = argv[index];
         const flag = argument.startsWith('--') ? argument.slice(2) : null;
@@ -325,7 +321,7 @@ async function main(argv) {
         return { ok: true };
     }
     if (command === 'assemble') {
-        assert.ok(options.out, 'usage: assemble --out <dir> --member os/arch=<layout> --proof os/arch=<describe.json> [--annotation key=value]');
+        assert.ok(options.out, 'usage: assemble --out <dir> --member os/arch=<layout> --proof os/arch=<describe.json>');
         const proofs = new Map(parsePairs(options.proof, '--proof').map(([platform, file]) => [platform, readJson(file)]));
         const members = parsePairs(options.member, '--member').map(([platform, layout]) => {
             assert.ok(proofs.has(platform), `missing --proof for ${platform}`);
@@ -335,11 +331,7 @@ async function main(argv) {
         for (const member of members) {
             await verifyLayerDiffIds(member.layout, describeLayout(member.layout));
         }
-        return assembleIndex({
-            members,
-            outDir: options.out,
-            annotations: Object.fromEntries(parsePairs(options.annotation, '--annotation')),
-        });
+        return assembleIndex({ members, outDir: options.out });
     }
     if (command === 'verify-index') {
         assert.equal(options.positional.length, 1, 'usage: verify-index <raw-index.json> [--expected-digest sha256:...] [--member os/arch=sha256:...]');

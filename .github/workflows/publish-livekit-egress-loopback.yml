@@ -191,7 +191,6 @@ jobs:
       - name: Checkout image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Download proven native layouts
@@ -206,14 +205,11 @@ jobs:
           set -euo pipefail
           native="$RUNNER_TEMP/native"
           test "$(find "$native" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | paste -sd ' ')" = 'livekit-egress-native-amd64 livekit-egress-native-arm64'
-          revision="$(git log -1 --format=%H -- "$IMAGE_DEFINITION")"
           node scripts/oci-layout-index.mjs assemble --out "$RUNNER_TEMP/livekit-egress-index" \
             --member "linux/amd64=$native/livekit-egress-native-amd64/layout" \
             --proof "linux/amd64=$native/livekit-egress-native-amd64/evidence/member.json" \
             --member "linux/arm64=$native/livekit-egress-native-arm64/layout" \
             --proof "linux/arm64=$native/livekit-egress-native-arm64/evidence/member.json" \
-            --annotation "org.opencontainers.image.revision=$revision" \
-            --annotation "org.opencontainers.image.source=https://github.com/AssistOS-AI/container-image-builds" \
             > "$RUNNER_TEMP/assembled.json"
           actual="$(jq -r .digest "$RUNNER_TEMP/assembled.json")"
           if [[ -n "$EXPECTED_DIGEST" && "$actual" != "$EXPECTED_DIGEST" ]]; then

@@ -177,6 +177,9 @@ test('OnlyOffice, LiveKit, and Egress prove each architecture natively and publi
         assert.match(publishJob, new RegExp(`= '${name}-native-amd64 ${name}-native-arm64'`), file);
         assert.match(publishJob, /--proof "linux\/amd64=/, file);
         assert.match(publishJob, /--proof "linux\/arm64=/, file);
+        // Index annotations would change the digest away from the BuildKit
+        // index of the same member images.
+        assert.doesNotMatch(workflow, /--annotation/, file);
         assert.match(publishJob, /computed OCI index \$actual does not equal approved expected_digest/, file);
         const assemble = publishJob.indexOf('oci-layout-index.mjs assemble');
         const login = publishJob.indexOf('login-action');

@@ -70,8 +70,8 @@ The LiveKit workflow keeps its stable `webmeet-infra` release tag and the
 `webmeet-infra-<12-character source SHA>` tag, and exposes the verified
 multiarchitecture index digest as the `publish` job's `digest` output. An
 optional `expected_digest` input constrains that digest. The source revision
-and repository are recorded both as `org.opencontainers.image.*` labels on each
-image and as annotations on the index. The resulting
+and repository are recorded as `org.opencontainers.image.*` labels on each
+image. The resulting
 `docker.io/assistos/...@sha256:...` reference is written to both the log and
 GitHub job summary. Publishing and pinning consumer manifests remain separate
 authorized operations.
@@ -108,10 +108,13 @@ The image-specific native gates are:
 
 The `publish` job then runs `scripts/oci-layout-index.mjs assemble`. The helper
 re-verifies both downloaded layouts, including layer expansion, requires each
-member to equal the manifest
-and diff IDs its native job proved, and writes one canonical OCI index with
-exactly the amd64 and arm64 members plus source annotations. The same member
-bytes and annotations always produce the same index digest. The job compares
+member to equal the manifest and diff IDs its native job proved, and writes an
+OCI index with exactly the amd64 and arm64 members, serialized byte for byte as
+BuildKit writes a multiplatform index without attestations: two-space
+indentation, no annotations, and no trailing newline. The same member images
+therefore produce the same digest as a Buildx multiplatform build of them;
+`tests/fixtures/buildkit-indexes/` holds the published OnlyOffice, LiveKit, and
+Egress indexes that the helper reproduces exactly. The job compares
 that digest with `expected_digest` (required for OnlyOffice, optional for
 LiveKit and Egress) before it logs in. Only then does
 `skopeo copy --all --preserve-digests` publish the layout, and the job re-reads
@@ -119,10 +122,12 @@ the registry's raw index and requires the same digest and platform set before
 it exposes the digest as its output. Evidence from both native jobs, the assembled
 index, and the registry copy is retained for 30 days.
 
-Indexes assembled this way are not byte-identical to indexes that earlier
-Buildx multiplatform builds produced. When `expected_digest` does not match,
-the failure message and the `assembled.json` evidence report the computed
-digest for review.
+Native builds of unchanged image definitions have reproduced the published
+member images exactly: the 2026-10-14 OnlyOffice trial rebuilt both
+`sha256:0a95ca28…` (amd64) and `sha256:41cf0111…` (arm64), the members of the
+approved `sha256:70484bd7…` index. When `expected_digest` does not match, the
+failure message and the `assembled.json` evidence report the computed digest
+for review.
 
 ## Bizanso runtime
 

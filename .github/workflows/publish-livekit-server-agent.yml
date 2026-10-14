@@ -254,9 +254,6 @@ jobs:
             --proof "linux/amd64=$native/livekit-server-agent-native-amd64/evidence/member.json" \
             --member "linux/arm64=$native/livekit-server-agent-native-arm64/layout" \
             --proof "linux/arm64=$native/livekit-server-agent-native-arm64/evidence/member.json" \
-            --annotation "org.opencontainers.image.revision=$SOURCE_REF" \
-            --annotation "org.opencontainers.image.source=https://github.com/AssistOS-AI/AssistOSExplorer" \
-            --annotation "io.assistos.livekit.egress-image=$LIVEKIT_EGRESS_IMAGE" \
             > "$RUNNER_TEMP/assembled.json"
           actual="$(jq -r .digest "$RUNNER_TEMP/assembled.json")"
           if [[ -n "$EXPECTED_DIGEST" && "$actual" != "$EXPECTED_DIGEST" ]]; then
