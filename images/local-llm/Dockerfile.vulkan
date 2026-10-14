@@ -13,9 +13,9 @@ RUN set -eu; \
     apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- update; \
     packages=$(node -p 'Object.entries(require("/tmp/sources.lock.json").vulkan.buildPackages).map(([k,v]) => `${k}=${v}`).join(" ")'); \
     apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- install -y --no-install-recommends $packages; \
-    curl -fsSL --retry 5 -o /tmp/mesa.tar.xz https://archive.mesa3d.org/mesa-25.3.6.tar.xz; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/mesa.tar.xz https://archive.mesa3d.org/mesa-25.3.6.tar.xz; \
     printf '%s  /tmp/mesa.tar.xz\n' 59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206 | sha256sum --check --strict -; \
-    curl -fsSL --retry 5 -o /tmp/mesa.sig https://archive.mesa3d.org/mesa-25.3.6.tar.xz.sig; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/mesa.sig https://archive.mesa3d.org/mesa-25.3.6.tar.xz.sig; \
     gpgv --status-fd 1 --keyring /tmp/mesa-release-keyring.gpg /tmp/mesa.sig /tmp/mesa.tar.xz > /tmp/signature.status; \
     grep -q '^\[GNUPG:\] VALIDSIG 71C4B75620BC75708B4BDB254C95FAAB3EB073EC ' /tmp/signature.status; \
     tar -xJf /tmp/mesa.tar.xz -C /tmp; \
@@ -51,7 +51,7 @@ RUN set -eu; \
     url=$(node -p 'require(process.argv[1]).vulkan.llamaCpp.url' "$lock"); \
     sha=$(node -p 'require(process.argv[1]).vulkan.llamaCpp.sha256' "$lock"); \
     size=$(node -p 'require(process.argv[1]).vulkan.llamaCpp.size' "$lock"); \
-    curl -fsSL --retry 5 -o /tmp/vulkan-llama.tar.gz "$url"; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/vulkan-llama.tar.gz "$url"; \
     test "$(stat -c %s /tmp/vulkan-llama.tar.gz)" = "$size"; \
     printf '%s  /tmp/vulkan-llama.tar.gz\n' "$sha" | sha256sum --check --strict -; \
     mkdir /opt/llama.cpp-vulkan; \
