@@ -1,0 +1,11 @@
+{
+  "schema": "assistos.bizanso-runtime-inputs/v1",
+  "baseImage": "docker.io/assistos/ploinky-node@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669",
+  "transformersVersion": "4.3.1",
+  "model": {
+    "name": "Xenova/multilingual-e5-small",
+    "revision": "761b726dd34fb83930e26aab4e9ac3899aa1fa78",
+    "dtype": "q8",
+    "dimensions": 384
+  }
+}

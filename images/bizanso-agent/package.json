@@ -1,0 +1,8 @@
+{
+  "name": "@assistos/bizanso-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "dependencies": { "@huggingface/transformers": "4.3.1" }
+}

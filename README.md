@@ -9,6 +9,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | Image | Source repo | Build context | Dockerfile | Workflow |
 | --- | --- | --- | --- | --- |
 | `assistos/ploinky-node:24-trixie-tools` | this repo | `images/ploinky-node` | `images/ploinky-node/Dockerfile` | `publish-ploinky-node-image.yml` |
+| `assistos/bizanso-agent:runtime` | this repo, public dependencies and a pinned embedding model; no private application source | `images/bizanso-agent` | `images/bizanso-agent/Dockerfile` | `publish-bizanso-agent-image.yml` |
 | `assistos/onlyoffice-agent:9.3.1` | this repo | `images/onlyoffice-agent` | `images/onlyoffice-agent/Dockerfile` | `publish-onlyoffice-agent-image.yml` |
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
@@ -68,6 +69,23 @@ also exposes the pushed multiarchitecture manifest digest as the `publish` job's
 digest and writes the resulting `docker.io/assistos/...@sha256:...` reference
 to both the log and GitHub job summary. Publishing and pinning consumer
 manifests remain separate authorized operations.
+
+## Bizanso runtime
+
+The Bizanso runtime contains Node.js, SQLite, document extraction commands, Transformers.js 4.3.1, and the pinned multilingual-e5-small model. Its build context is only `images/bizanso-agent`: it never checks out or copies private Bizanso application source, accounts, workspace data, or credentials. Ploinky mounts the application's private workspace checkout separately at `/app/bizanso`, read-only. The image's dependency adapter and model remain under `/opt/bizanso-runtime`, outside that mount.
+
+`publish-bizanso-agent-image.yml` builds natively on amd64 and arm64, publishes each architecture by digest, and runs its exact image without networking, Linux capabilities, or privilege escalation. The gate checks actual offline multilingual inference, Node SQLite, document commands, UID/GID 1000, and the absence of application source. Assembly verifies both saved proofs against the workflow revision, run, attempt, base image, dependency lock, and model revision. Only those two native manifests enter the run-specific candidate index. `promote_stable=true` explicitly moves `runtime` to the proven index; the default does not move the stable tag.
+
+Publication uses the repository's `DOCKERHUB_TOKEN`, not local Podman credentials or a private-source token. The resulting digest is adopted separately in the private Bizanso repository with `node scripts/adopt-runtime-image.mjs docker.io/assistos/bizanso-agent@sha256:<verified-digest>`. Adoption changes the image reference, read-only source mount, and dependency/model locations; it neither deploys the workspace nor changes identity or user data.
+
+Local verification does not publish or promote:
+
+```bash
+node --test tests/bizanso-runtime.test.mjs
+podman build -t localhost/bizanso-runtime:check images/bizanso-agent
+podman run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+  --entrypoint node localhost/bizanso-runtime:check /opt/bizanso-runtime/smoke-runtime.mjs
+```
 
 ## Umami agent supply chain
 
