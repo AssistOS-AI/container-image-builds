@@ -97,7 +97,11 @@ Mesa's upstream source is <https://archive.mesa3d.org/mesa-25.3.6.tar.xz>.
 The signing key is Dylan Baker's
 `71C4B75620BC75708B4BDB254C95FAAB3EB073EC`, retained from that release's
 `docs/release-maintainers-keys.asc`. The builder checks the signature and exact
-fingerprint, uses the vendored keyring and retains `docs/license.rst` at
+fingerprint, uses the vendored keyring and the vendored detached signature
+`images/local-llm/mesa-25.3.6.tar.xz.sig` (SHA-256
+`6533c0eb2978a8eaca80ac187b390dc6266264fbf436c50652fd1a17cd024ca3`, the 119-byte
+file published as `mesa-25.3.6.tar.xz.sig`; vendored because the upstream host
+intermittently refused CI connections) and retains `docs/license.rst` at
 `/opt/local-llm/vulkan/licenses/mesa-license.rst`. Mesa's core license is MIT;
 its source license document records component exceptions. Retain these
 copyright and license notices when redistributing the drivers and patches.

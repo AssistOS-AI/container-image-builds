@@ -5,6 +5,7 @@ ARG TARGETARCH
 COPY sources.lock*.json /tmp/vulkan-sources/
 COPY mesa-patches /tmp/mesa-patches
 COPY mesa-release-keyring.gpg /tmp/mesa-release-keyring.gpg
+COPY mesa-25.3.6.tar.xz.sig /tmp/mesa.sig
 RUN set -eu; \
     arch=${TARGETARCH:-$(dpkg --print-architecture)}; \
     case "$arch" in amd64) cp /tmp/vulkan-sources/sources.lock.json /tmp/sources.lock.json;; arm64) cp /tmp/vulkan-sources/sources.lock.arm64.json /tmp/sources.lock.json;; *) exit 1;; esac; \
@@ -15,7 +16,6 @@ RUN set -eu; \
     apt-get -o Dir::Etc::sourcelist=/tmp/vulkan.list -o Dir::Etc::sourceparts=- install -y --no-install-recommends $packages; \
     curl -fsSL --retry 5 --retry-all-errors -o /tmp/mesa.tar.xz https://archive.mesa3d.org/mesa-25.3.6.tar.xz; \
     printf '%s  /tmp/mesa.tar.xz\n' 59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206 | sha256sum --check --strict -; \
-    curl -fsSL --retry 5 --retry-all-errors -o /tmp/mesa.sig https://archive.mesa3d.org/mesa-25.3.6.tar.xz.sig; \
     gpgv --status-fd 1 --keyring /tmp/mesa-release-keyring.gpg /tmp/mesa.sig /tmp/mesa.tar.xz > /tmp/signature.status; \
     grep -q '^\[GNUPG:\] VALIDSIG 71C4B75620BC75708B4BDB254C95FAAB3EB073EC ' /tmp/signature.status; \
     tar -xJf /tmp/mesa.tar.xz -C /tmp; \
