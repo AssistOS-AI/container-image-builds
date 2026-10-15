@@ -27,7 +27,7 @@ env:
   DESKTOP_IMAGE_TAG: runtime
   BROWSER_IMAGE_NAME: assistos/roboteam-browser
   BROWSER_IMAGE_TAG: runtime
-  BASE_IMAGE: quay.io/podman/stable@sha256:f94b291ea3ad28ca5c9362dd6ffb673778aefa157e73b8cea76da7e47a917b1e
+  BASE_IMAGE: quay.io/podman/stable@sha256:f345d8d4fddea244d3a1ced27bcec82d14cc9e32cb5ead7f5882b0baf59dc8b0
   WORKSTATION_BASE_IMAGE: lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
   BROWSER_BASE_IMAGE: lscr.io/linuxserver/chromium@sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
 

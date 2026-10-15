@@ -1,4 +1,4 @@
-ARG PODMAN_BASE_IMAGE=quay.io/podman/stable@sha256:f94b291ea3ad28ca5c9362dd6ffb673778aefa157e73b8cea76da7e47a917b1e
+ARG PODMAN_BASE_IMAGE=quay.io/podman/stable@sha256:f345d8d4fddea244d3a1ced27bcec82d14cc9e32cb5ead7f5882b0baf59dc8b0
 FROM docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca AS node-runtime
 
 FROM ${PODMAN_BASE_IMAGE}

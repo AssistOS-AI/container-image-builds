@@ -9,14 +9,14 @@
     }
   },
   "podmanBase": {
-    "image": "quay.io/podman/stable@sha256:f94b291ea3ad28ca5c9362dd6ffb673778aefa157e73b8cea76da7e47a917b1e",
-    "indexDigest": "sha256:f94b291ea3ad28ca5c9362dd6ffb673778aefa157e73b8cea76da7e47a917b1e",
+    "image": "quay.io/podman/stable@sha256:f345d8d4fddea244d3a1ced27bcec82d14cc9e32cb5ead7f5882b0baf59dc8b0",
+    "indexDigest": "sha256:f345d8d4fddea244d3a1ced27bcec82d14cc9e32cb5ead7f5882b0baf59dc8b0",
     "version": "5.8.7",
     "platformManifests": {
-      "linux/amd64": "sha256:4364cd2163b257ee06b9c1ab0018ac56e9620a6c0dddcb0b41a5839d893246ea",
-      "linux/arm64": "sha256:98398942bb0531c1535423bfb14f95727e2e2d9f754a88b6d74bc2cd92910a73"
+      "linux/amd64": "sha256:3c86a40ab2b027db3568aa93f2127c5425a5274a53fa118693af782a859bba38",
+      "linux/arm64": "sha256:27ada606d6945ef8b6017351cbc7dab26549700029599fbbde5ff5955d8cf6e4"
     },
-    "resolution": "The official Podman stable multiarchitecture index is immutable; publication verifies that it still exposes native linux/amd64 and linux/arm64 members before building."
+    "resolution": "Pinned to the index of the official v5.8.7-immutable tag, because quay.io rebuilds the moving stable tags and deletes their earlier indexes; publication verifies that it still exposes native linux/amd64 and linux/arm64 members before building."
   },
   "workstationBase": {
     "image": "lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e",
