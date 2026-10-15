@@ -220,8 +220,9 @@ requires package-manager or system-directory privileges.
 uses the immutable official Podman stable multiarchitecture index as its
 Podman 5.8.7 provider and the exact Ploinky Node multiarchitecture base recorded in
 `images/roboteam-agent/sources.lock.json`. It provides Node/npm, Podman,
-Bubblewrap, fuse-overlayfs, pasta, curl, Git, and Bash. It contains neither a GUI
-nor Codex.
+Bubblewrap, fuse-overlayfs, pasta, curl, Git, Bash, and ripgrep 15.1.0 (the
+checksum-pinned upstream release, which OpenCode's skill, glob and grep tools need
+on PATH). It contains neither a GUI nor Codex.
 
 `docker.io/assistos/roboteam-desktop:runtime` derives from the digest-pinned
 LinuxServer Ubuntu XFCE Webtop base. It contains Node/npm plus the X11, AT-SPI,

@@ -90,9 +90,14 @@ test('outer image combines Node with the nested Podman controller', () => {
         '/usr/local/bin/node',
         '/usr/local/bin/npm',
         '/usr/local/bin/npx',
+        '/usr/local/bin/rg',
     ]) {
         assert.ok(dockerfile.includes(executable));
     }
+    // OpenCode needs ripgrep on PATH; a checksum-pinned upstream release, never a runtime download.
+    assert.match(dockerfile, /releases\/download\/15\.1\.0\/\$asset\.tar\.gz/);
+    assert.match(dockerfile, /sha256sum --check --strict/);
+    assert.match(dockerfile, /tar --no-same-owner/);
     assert.match(dockerfile, /rm -f \/usr\/bin\/newuidmap \/usr\/bin\/newgidmap/);
     assert.match(smoke, /npm --version/);
     assert.match(smoke, /NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version/);

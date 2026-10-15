@@ -18,6 +18,26 @@ COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sour
 ENV CONTAINERS_STORAGE_CONF=/opt/roboteam-runtime/storage.conf
 ENV XDG_RUNTIME_DIR=/tmp/roboteam-podman-xdg
 
+ARG TARGETARCH
+
+# OpenCode's skill, glob and grep tools need ripgrep on PATH. Without it OpenCode
+# downloads ripgrep into the robot home at run time, and extracting that archive
+# fails inside the Bubblewrap sandbox, so every skill load returns the tar error.
+# The unmodified upstream release binary is pinned by its published checksum.
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) asset=ripgrep-15.1.0-x86_64-unknown-linux-musl; sha=1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599 ;; \
+      arm64) asset=ripgrep-15.1.0-aarch64-unknown-linux-gnu; sha=2b661c6ef508e902f388e9098d9c4c5aca72c87b55922d94abdba830b4dc885e ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --location --silent --show-error \
+      "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/$asset.tar.gz" -o /tmp/ripgrep.tar.gz; \
+    printf '%s  %s\n' "$sha" /tmp/ripgrep.tar.gz | sha256sum --check --strict -; \
+    tar --no-same-owner -xzf /tmp/ripgrep.tar.gz -C /tmp "$asset/rg"; \
+    install -o root -g root -m 0755 "/tmp/$asset/rg" /usr/local/bin/rg; \
+    rm -rf /tmp/ripgrep.tar.gz "/tmp/$asset"; \
+    case "$(rg --version | head -n 1)" in 'ripgrep 15.1.0 '*) ;; *) exit 1 ;; esac
+
 RUN set -eux; \
     truncate -s 0 /etc/subuid; \
     truncate -s 0 /etc/subgid; \
@@ -35,7 +55,8 @@ RUN set -eux; \
         /usr/bin/bwrap \
         /usr/local/bin/node \
         /usr/local/bin/npm \
-        /usr/local/bin/npx; do \
+        /usr/local/bin/npx \
+        /usr/local/bin/rg; do \
         test -x "$executable"; \
     done; \
     test "$(podman --version)" = 'podman version 5.8.7'; \

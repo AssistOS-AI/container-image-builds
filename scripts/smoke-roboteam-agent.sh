@@ -13,12 +13,14 @@ require_contract() {
     test -x /usr/local/bin/node
     test -x /usr/local/bin/npm
     test -x /usr/local/bin/npx
+    test -x /usr/local/bin/rg
     test ! -e /usr/bin/newuidmap
     test ! -e /usr/bin/newgidmap
     node --version
     npm --version
     NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main' npm --version
     test "$(podman --version)" = 'podman version 5.8.7'
+    rg --version | head -n 1 | grep -q '^ripgrep 15\.1\.0 '
 }
 
 case "${1:-contract}" in
