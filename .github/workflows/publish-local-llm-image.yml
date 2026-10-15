@@ -390,7 +390,7 @@ jobs:
       # local-llms commit that carries the hardware-profile changes, fetched by
       # its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: 1e465abdb954b95732e7e6718043ea93bf8e9296
+      LOCAL_LLMS_COMMIT: 95e0521543754525b4e7952d281cfd93f8391fae
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -415,6 +415,18 @@ jobs:
           git -C "$code" fetch -q --depth 1 origin "$LOCAL_LLMS_COMMIT"
           git -C "$code" checkout -q FETCH_HEAD
           test "$(git -C "$code" rev-parse HEAD)" = "$LOCAL_LLMS_COMMIT"
+
+      - name: Install the engine package the check imports
+        # tools/runner_install_check.mjs imports pworker. The committed
+        # local-llm/package-lock.json decides what is installed, and
+        # local-llm/.npmrc (bin-links=false, ignore-scripts=true) keeps the
+        # mounted node_modules free of links and scripts. pworker is a public
+        # git dependency, so this step needs the network and git but no token.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/local-llms"
+          npm --prefix local-llm ci
+          test -z "$(find local-llm/node_modules -type l)"
 
       - name: Install each lock entry, one at a time
         # Downloads, verifies and rebuilds each runner exactly as the agent
