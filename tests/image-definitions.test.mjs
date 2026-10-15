@@ -488,9 +488,10 @@ test('local-llm final-child proof refuses config, labels and layer ancestry chan
 test('local-llm install check pins the engine-era local-llms commit and installs its package on the host from the lock before mounting it', () => {
     const workflow = read('.github/workflows/publish-local-llm-image.yml');
     assert.match(workflow, /LOCAL_LLMS_COMMIT: 95e0521543754525b4e7952d281cfd93f8391fae\n/);
-    const install = workflow.indexOf('npm --prefix local-llm ci');
-    const mount = workflow.indexOf(':/code:ro');
-    assert.ok(install > 0 && mount > 0 && install < mount, 'npm ci comes before the container that mounts local-llms');
+    const job = workflow.split('\n  install-check:\n')[1]?.split(/\n {2}[a-z-]+:\n/)[0] || '';
+    const install = job.indexOf('npm --prefix local-llm ci');
+    const mount = job.indexOf(':/code:ro');
+    assert.ok(install > 0 && mount > 0 && install < mount, 'within the install-check job, npm ci comes before the container that mounts local-llms');
     assert.doesNotMatch(workflow, /npm --prefix local-llm install/, 'the lock decides what is installed');
     assert.match(workflow, /test -z "\$\(find local-llm\/node_modules -type l\)"/, 'the mounted tree holds no symlink');
 });
