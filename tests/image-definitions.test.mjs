@@ -485,6 +485,17 @@ test('local-llm final-child proof refuses config, labels and layer ancestry chan
     const layers = structuredClone(child);layers.RootFS.Layers[0]='different';assert.throws(() => compareInspect(parent, layers, 'arm64', 'local'), /parent layers are not a prefix/);
 });
 
+test('local-llm install check pins the engine-era local-llms commit and installs its package on the host from the lock before mounting it', () => {
+    const workflow = read('.github/workflows/publish-local-llm-image.yml');
+    assert.match(workflow, /LOCAL_LLMS_COMMIT: 05b19fcc9047f63994aec27e3e8589c2385b4ba0\n/);
+    const job = workflow.split('\n  install-check:\n')[1]?.split(/\n {2}[a-z-]+:\n/)[0] || '';
+    const install = job.indexOf('npm --prefix local-llm ci');
+    const mount = job.indexOf(':/code:ro');
+    assert.ok(install > 0 && mount > 0 && install < mount, 'within the install-check job, npm ci comes before the container that mounts local-llms');
+    assert.doesNotMatch(workflow, /npm --prefix local-llm install/, 'the lock decides what is installed');
+    assert.match(workflow, /test -z "\$\(find local-llm\/node_modules -type l\)"/, 'the mounted tree holds no symlink');
+});
+
 test('local-llm amd64 image pins llama.cpp and Ollama CUDA releases, with no weights', () => {
     const workflow = read('.github/workflows/publish-local-llm-image.yml');
     const dockerfile = read('images/local-llm/Dockerfile');

@@ -128,9 +128,10 @@ containers it created by exact ID. A missing runtime library, modified parent
 file, changed CUDA resolution or wrong contract fails acceptance. Replacing
 Mesa or Python requires equivalent driver support and archive checks.
 
-The publishing workflow's `LOCAL_LLMS_COMMIT` remains its existing pin until
-the local-llms candidate has an authorized commit. Updating that full SHA and
-verifying the resulting native CI run are pending before workflow dispatch.
+The publishing workflow's `LOCAL_LLMS_COMMIT` pins the local-llms commit whose
+agent imports the `pworker` engine package. The install-check job installs that
+package on the host with `npm --prefix local-llm ci`, from the commit's own
+lockfile and `.npmrc`, before it mounts the tree read-only at `/code`.
 Static tests and local arm64 proof do not establish registry publication,
 compressed image growth, AMD hardware support or Apple GPU inference.
 
