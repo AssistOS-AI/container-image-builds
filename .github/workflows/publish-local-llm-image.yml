@@ -390,7 +390,7 @@ jobs:
       # local-llms commit that carries the hardware-profile changes, fetched by
       # its full hash.
       LOCAL_LLMS_REPOSITORY: https://github.com/AssistOS-AI/local-llms.git
-      LOCAL_LLMS_COMMIT: 95e0521543754525b4e7952d281cfd93f8391fae
+      LOCAL_LLMS_COMMIT: 05b19fcc9047f63994aec27e3e8589c2385b4ba0
     steps:
       - name: Checkout exact image definitions
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

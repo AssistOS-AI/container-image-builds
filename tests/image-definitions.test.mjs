@@ -487,7 +487,7 @@ test('local-llm final-child proof refuses config, labels and layer ancestry chan
 
 test('local-llm install check pins the engine-era local-llms commit and installs its package on the host from the lock before mounting it', () => {
     const workflow = read('.github/workflows/publish-local-llm-image.yml');
-    assert.match(workflow, /LOCAL_LLMS_COMMIT: 95e0521543754525b4e7952d281cfd93f8391fae\n/);
+    assert.match(workflow, /LOCAL_LLMS_COMMIT: 05b19fcc9047f63994aec27e3e8589c2385b4ba0\n/);
     const job = workflow.split('\n  install-check:\n')[1]?.split(/\n {2}[a-z-]+:\n/)[0] || '';
     const install = job.indexOf('npm --prefix local-llm ci');
     const mount = job.indexOf(':/code:ro');
