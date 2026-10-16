@@ -14,14 +14,14 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/llm-runtime-cpu:cpu-arm64-smoke` | this repo | `images/llm-runtime-cpu` | `images/llm-runtime-cpu/Dockerfile` | `publish-llm-runtime-cpu-image.yml` |
 | `assistos/umami-agent:umami-stack` | this repo | `images/umami-agent` | `images/umami-agent/Dockerfile` | `publish-umami-agent-image.yml` |
 | `assistos/local-llm:latest` (multi-arch: reused parent + Vulkan layer on amd64 and arm64; `latest` moves to a proven candidate index only when dispatched with `promote_latest`) | this repo | `images/local-llm` | `images/local-llm/Dockerfile.vulkan`; unchanged parent definitions in `Dockerfile` and `Dockerfile.arm64` | `publish-local-llm-image.yml` |
-| `assistos/search-agent:searxng-browser` | `AssistOS-AI/proxies` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
-| `assistos/opencode-free-agent` (digest-pinned candidates) | `AssistOS-AI/proxies` | `opencode-free` | `images/opencode-free-agent/Dockerfile` | `publish-opencode-free-agent-image.yml` |
+| `assistos/search-agent:searxng-browser` | `AssistOS-AI/legacy-agents` | `searchAgent` | `images/search-agent/Dockerfile` | `publish-search-agent-image.yml` |
+| `assistos/opencode-free-agent` (digest-pinned candidates) | `AssistOS-AI/legacy-agents` | `opencode-free` | `images/opencode-free-agent/Dockerfile` | `publish-opencode-free-agent-image.yml` |
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-desktop:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-browser:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.browser` | `publish-roboteam-agent-image.yml` |
 | `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
-| `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/AssistOSExplorer` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
-| `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/proxies` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
+| `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeet` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
+| `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/AssistOSExplorer` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
 | `assistos/ploinky-box:latest` (`runtime` compatibility alias) | this repo, an immutable `AssistOS-AI/ploinky` commit, and the `AssistOS-AI/AchillesAgentLib` and `AssistOS-AI/MCPSDK` commits frozen once per publication | repo root; rootless nested-Podman appliance with the canonical Ploinky entrypoint, bundled AchillesAgentLib and MCP SDK, and integrated cloudflared | `images/ploinky-box/Dockerfile` | `publish-ploinky-box-image.yml` (build, candidate, optional promotion of its own build); `promote-ploinky-box-candidate.yml` (promotion of an already built and accepted candidate) |
 
 The former `assistos/default-local-llm` image is retired and no longer built
@@ -29,8 +29,8 @@ here; already published tags are not deleted from the registry. The optional
 `llm-runtime-cpu` image remains available.
 
 The `bwrap-runner` workflow checks out exact full-SHA `basic`, `copilot-agents`,
-and `AchillesCLI` inputs under `sources/`; the latter two supply the Open
-Interpreter and GPTResearcher consumer gates. Those two SHAs are explicitly
+and `legacy-agents` inputs under `sources/`; the latter two supply the Open
+Interpreter and GPTResearcher consumer gates. GPTResearcher now comes from `legacy-agents`; the dispatch input and provenance annotation keep their historical `achilles_cli` names for evidence compatibility. Those two SHAs are explicitly
 prepublication consumer-code inputs: they contain the ABI/disposition adapters
 while retaining the existing privileged declarations and mutable image
 references. The workflow neither requires nor creates the later digest-pin and
@@ -47,8 +47,8 @@ its own tools. Router and application source remain on the read-only runtime
 mount. Native architecture images are published by immutable digest.
 
 The LiveKit workflow accepts only the exact 40-character commit SHA at the
-current tip of `AssistOSExplorer/main`, its default branch. The checkout lives at
-`sources/AssistOSExplorer`; both native builds use its `liveKitServerAgent`
+current tip of `webmeet/main`, its default branch. The checkout lives at
+`sources/webmeet`; both native builds use its `liveKitServerAgent`
 directory with this repository's centralized Dockerfile. A single `source` job
 checks the source tip once, confirms that the `egress_image` input resolves to
 an index whose bytes match its digest and that contains exactly `linux/amd64`
@@ -60,9 +60,9 @@ resolution is pinned to a dated repository snapshot with exact direct-package
 versions. The pinned `libc-bin` package and both build-time and workflow smoke
 gates guarantee that the startup script's `getent` dependency is present.
 
-Merge the relocated `liveKitServerAgent` source into `AssistOSExplorer/main`
+Merge the relocated `liveKitServerAgent` source into `webmeet/main`
 and integrate this workflow change before removing the old source from
-`webmeetInfra`. Select the resulting current `AssistOSExplorer/main` SHA when
+AssistOSExplorer. Select the resulting current `webmeet/main` SHA when
 dispatching a future build. The source move itself does not require publication
 or a change to existing consumer image digests.
 
@@ -796,15 +796,15 @@ gh workflow run publish-bwrap-runner.yml \
   --repo AssistOS-AI/container-image-builds \
   -f source_ref="$(git -C ../basic rev-parse HEAD)" \
   -f copilot_agents_ref="$(git -C ../copilot-agents rev-parse HEAD)" \
-  -f achilles_cli_ref="$(git -C ../AchillesCLI rev-parse HEAD)" \
+  -f achilles_cli_ref="$(git -C ../legacy-agents rev-parse HEAD)" \
   -f promote_stable=false
 
-# Use an AssistOSExplorer checkout at the current origin/main tip.
+# Use a webmeet checkout at the current origin/main tip.
 # LIVEKIT_EGRESS_IMAGE must be the verified patched Egress multiarchitecture
 # index reference: docker.io/assistos/livekit-egress@sha256:<64 lowercase hex>.
 gh workflow run publish-livekit-server-agent.yml \
   --repo AssistOS-AI/container-image-builds \
-  -f source_ref="$(git -C ../AssistOSExplorer rev-parse HEAD)" \
+  -f source_ref="$(git -C ../webmeet rev-parse HEAD)" \
   -f egress_image="${LIVEKIT_EGRESS_IMAGE:?Set the verified patched Egress index reference}" \
   -f image_tag=webmeet-infra
 

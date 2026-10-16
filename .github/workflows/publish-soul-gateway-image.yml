@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'AssistOS-AI/proxies ref to build from'
+        description: 'AssistOS-AI/AssistOSExplorer ref to build from'
         required: false
         default: 'main'
         type: string
@@ -33,17 +33,17 @@ jobs:
       - name: Checkout image definitions
         uses: actions/checkout@v4
 
-      - name: Checkout proxies source
+      - name: Checkout AssistOSExplorer source
         uses: actions/checkout@v4
         with:
-          repository: AssistOS-AI/proxies
+          repository: AssistOS-AI/AssistOSExplorer
           ref: ${{ inputs.source_ref || 'main' }}
-          path: sources/proxies
+          path: sources/AssistOSExplorer
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
       - name: Resolve source revision
         id: source
-        run: echo "sha=$(git -C sources/proxies rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=$(git -C sources/AssistOSExplorer rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Smoke build local architecture
         run: |
@@ -51,7 +51,7 @@ jobs:
           docker build \
             -f images/soul-gateway/Dockerfile \
             -t "$IMAGE_NAME:smoke" \
-            sources/proxies/soul-gateway
+            sources/AssistOSExplorer/soul-gateway
           docker run --rm "$IMAGE_NAME:smoke" node -e "import('node:sqlite').then(() => console.log('node:sqlite ok'))"
           docker run --rm "$IMAGE_NAME:smoke" sqlite3 --version
           docker run --rm "$IMAGE_NAME:smoke" test -f /opt/soul-gateway/src/index.mjs
@@ -80,7 +80,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./sources/proxies/soul-gateway
+          context: ./sources/AssistOSExplorer/soul-gateway
           file: ./images/soul-gateway/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true

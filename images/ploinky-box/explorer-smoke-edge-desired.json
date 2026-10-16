@@ -12,7 +12,7 @@
     "credentialMode": "turn-rest",
     "sharedSecret": "smoke/turn-rest",
     "credentialConsumers": [
-      "AchillesIDE/webmeetAgent"
+      "webmeet/webmeetAgent"
     ]
   }
 }

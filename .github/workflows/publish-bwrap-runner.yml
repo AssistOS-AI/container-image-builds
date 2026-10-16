@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       achilles_cli_ref:
-        description: Exact prepublication AssistOS-AI/AchillesCLI code SHA for GPTResearcher smoke
+        description: Exact prepublication AssistOS-AI/legacy-agents code SHA for GPTResearcher smoke (input name kept for evidence compatibility; it formerly named AchillesCLI)
         required: true
         type: string
       promote_stable:
@@ -98,9 +98,9 @@ jobs:
       - name: Checkout immutable GPTResearcher consumer source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: AssistOS-AI/AchillesCLI
+          repository: AssistOS-AI/legacy-agents
           ref: ${{ needs.resolve-source.outputs.achilles_cli_sha }}
-          path: sources/AchillesCLI
+          path: sources/legacy-agents
           fetch-depth: 0
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
@@ -117,14 +117,14 @@ jobs:
           grep -Fx "FROM $PYTHON_BASE_IMAGE" images/bwrap-runner/Dockerfile
           test "$(git -C sources/basic rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(git -C sources/copilot-agents rev-parse HEAD)" = "$COPILOT_AGENTS_SHA"
-          test "$(git -C sources/AchillesCLI rev-parse HEAD)" = "$ACHILLES_CLI_SHA"
+          test "$(git -C sources/legacy-agents rev-parse HEAD)" = "$ACHILLES_CLI_SHA"
           test -z "$(git -C sources/basic status --porcelain=v1)"
           test -z "$(git -C sources/copilot-agents status --porcelain=v1)"
-          test -z "$(git -C sources/AchillesCLI status --porcelain=v1)"
+          test -z "$(git -C sources/legacy-agents status --porcelain=v1)"
           test -f sources/basic/bwrap-runner/lib/capability.mjs
           test -f sources/basic/tests/integration/bwrapRunnerNative.mjs
           test -f sources/copilot-agents/openInterpreterAgent/tools/status.mjs
-          test -f sources/AchillesCLI/GPTResearcher/scripts/install-gpt-researcher.sh
+          test -f sources/legacy-agents/GPTResearcher/scripts/install-gpt-researcher.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -341,7 +341,7 @@ jobs:
           podman run --rm --userns=keep-id:uid=1000,gid=1000 \
             --cap-drop=all \
             --security-opt=no-new-privileges \
-            --volume "$PWD/sources/AchillesCLI/GPTResearcher:/consumer:ro" \
+            --volume "$PWD/sources/legacy-agents/GPTResearcher:/consumer:ro" \
             --volume "$PWD/scripts/smoke-gpt-researcher.sh:/smoke-gpt-researcher.sh:ro" \
             --volume "$gpt_state:/gpt-state" \
             --env HOME=/gpt-state/home \
@@ -353,7 +353,7 @@ jobs:
             --network=none \
             --cap-drop=all \
             --security-opt=no-new-privileges \
-            --volume "$PWD/sources/AchillesCLI/GPTResearcher:/consumer:ro" \
+            --volume "$PWD/sources/legacy-agents/GPTResearcher:/consumer:ro" \
             --volume "$PWD/scripts/smoke-gpt-researcher.sh:/smoke-gpt-researcher.sh:ro" \
             --volume "$gpt_state:/gpt-state" \
             --env HOME=/gpt-state/home \
