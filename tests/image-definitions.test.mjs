@@ -902,10 +902,10 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
     assert.match(workflow, /repository:\s*AssistOS-AI\/basic/);
     assert.match(workflow, /path:\s*sources\/basic/);
     assert.match(workflow, /repository:\s*AssistOS-AI\/copilot-agents/);
-    assert.match(workflow, /repository:\s*AssistOS-AI\/AchillesCLI/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/legacy-agents/);
     assert.match(workflow, /git -C sources\/basic rev-parse HEAD/);
     assert.match(workflow, /git -C sources\/copilot-agents rev-parse HEAD/);
-    assert.match(workflow, /git -C sources\/AchillesCLI rev-parse HEAD/);
+    assert.match(workflow, /git -C sources\/legacy-agents rev-parse HEAD/);
     assert.match(workflow, /git status --porcelain=v1/);
     assert.match(workflow, /context:\s*\.\/sources\/basic\/bwrap-runner/);
     assert.match(workflow, /file:\s*\.\/images\/bwrap-runner\/Dockerfile/);
@@ -994,12 +994,12 @@ test('bwrap-runner workflow publishes only digest-proven native candidates befor
     assert.match(gptSmoke, /"network":"none","readiness":true,"minimalTask":true/);
 });
 
-test('livekit workflow builds the relocated Explorer source with centralized Dockerfile', () => {
+test('livekit workflow builds the webmeet source with centralized Dockerfile', () => {
     const workflow = read('.github/workflows/publish-livekit-server-agent.yml');
     const dockerfile = read('images/livekit-server-agent/Dockerfile');
 
-    assert.match(workflow, /repository:\s*AssistOS-AI\/AssistOSExplorer/);
-    assert.match(workflow, /path:\s*sources\/AssistOSExplorer/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/webmeet/);
+    assert.match(workflow, /path:\s*sources\/webmeet/);
     assert.match(workflow, /ref:\s*\$\{\{ inputs\.source_ref \}\}/);
     assert.match(workflow, /source_ref:[\s\S]*?required:\s*true/);
     assert.match(workflow, /egress_image:[\s\S]*?required:\s*true/);
@@ -1007,9 +1007,12 @@ test('livekit workflow builds the relocated Explorer source with centralized Doc
     assert.doesNotMatch(workflow, /source_ref:[\s\S]*?default:\s*['"]?main/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
     assert.match(workflow, /refs\/heads\/main/);
+    assert.match(workflow, /git -C sources\/webmeet ls-remote --exit-code origin refs\/heads\/main/);
+    assert.match(workflow, /current tip of webmeet\/main/);
+    assert.doesNotMatch(workflow, /AssistOS-AI\/AssistOSExplorer/);
     assert.doesNotMatch(workflow, /webmeetInfra|ploinky-proxy|refs\/heads\/ploinky-box/);
-    assert.match(workflow, /git -C sources\/AssistOSExplorer rev-parse HEAD/);
-    assert.match(workflow, /-f images\/livekit-server-agent\/Dockerfile\s*\\\s*sources\/AssistOSExplorer\/liveKitServerAgent$/m);
+    assert.match(workflow, /git -C sources\/webmeet rev-parse HEAD/);
+    assert.match(workflow, /-f images\/livekit-server-agent\/Dockerfile\s*\\\s*sources\/webmeet\/liveKitServerAgent$/m);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/livekit-server-agent/);
     assert.match(workflow, /default: 'webmeet-infra'/);
     assert.match(workflow, /for tag in "\$IMAGE_TAG" "\$IMAGE_TAG-\$SOURCE_SHA"; do/);
@@ -1017,7 +1020,7 @@ test('livekit workflow builds the relocated Explorer source with centralized Doc
     assert.match(workflow, /docker\/login-action@[0-9a-f]{40} # v3/);
     assert.doesNotMatch(workflow, /build-push-action|metadata-action|Smoke build local architecture/);
     assert.match(workflow, /password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}/);
-    assert.match(workflow, /docker buildx build[\s\S]*sources\/AssistOSExplorer\/liveKitServerAgent/);
+    assert.match(workflow, /docker buildx build[\s\S]*sources\/webmeet\/liveKitServerAgent/);
     assert.match(workflow, /for binary in livekit-server egress redis-server pulseaudio setpriv ps node npm git g\+\+ getent ip make curl nc tini/);
     // The Egress input is checked as an exact two-platform index whose bytes
     // match the pinned digest, not only by its reference format.
@@ -1099,10 +1102,10 @@ test('soul-gateway workflow builds source checkout with SQLite and baked gateway
     const workflow = read('.github/workflows/publish-soul-gateway-image.yml');
     const dockerfile = read('images/soul-gateway/Dockerfile');
 
-    assert.match(workflow, /repository:\s*AssistOS-AI\/proxies/);
-    assert.match(workflow, /path:\s*sources\/proxies/);
-    assert.match(workflow, /git -C sources\/proxies rev-parse --short=12 HEAD/);
-    assert.match(workflow, /context:\s*\.\/sources\/proxies\/soul-gateway/);
+    assert.match(workflow, /repository:\s*AssistOS-AI\/AssistOSExplorer/);
+    assert.match(workflow, /path:\s*sources\/AssistOSExplorer/);
+    assert.match(workflow, /git -C sources\/AssistOSExplorer rev-parse --short=12 HEAD/);
+    assert.match(workflow, /context:\s*\.\/sources\/AssistOSExplorer\/soul-gateway/);
     assert.match(workflow, /file:\s*\.\/images\/soul-gateway\/Dockerfile/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/soul-gateway/);
     assert.match(workflow, /docker\/build-push-action@v6/);
