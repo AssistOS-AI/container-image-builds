@@ -50,6 +50,8 @@ const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/;
 const REVISION_KEYS = ['achilles_agent_lib', 'achilles_cli', 'explorer', 'mcp_sdk_commit', 'ploinky'];
 const GATE_KEYS = ['cohort', 'failed', 'finished_at', 'flaky', 'id', 'passed', 'postflight_sha256', 'preflight_sha256', 'report_sha256', 'retried', 'skipped', 'spec', 'started_at', 'tests'];
 const PARENT_RESULT_KEY = 'parent_result_sha256';
+// The C5 parent's cleanup flags: exactly these six keys, each true. None may be missing, and none may be added.
+const PARENT_CLEANUP_FLAGS = Object.freeze(['credentialPersisted', 'credentialRemoved', 'linksRemoved', 'sourceUnregistered', 'robotDeleted', 'folderDeleted']);
 const COHORT_KEYS = ['container_id', 'started_at'];
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_GENERATION_AGE_MS = 1_800_000;
@@ -283,7 +285,7 @@ function checkPreflight(preflight, gateId, manifest, imageId) {
 
 /**
  * The C5 parent's verdict for spec 06: code OK, a proven leak scan with no leaks and no undecodable files,
- * and every cleanup flag true. `leaks` and `undecodable` may be a count or a list; only zero or empty passes.
+ * and exactly the six cleanup flags, each true. `leaks` and `undecodable` may be a count or a list; only zero or empty passes.
  */
 function checkParentResult(parent, gateId) {
     const none = (value) => value === 0 || (Array.isArray(value) && value.length === 0);
@@ -291,8 +293,10 @@ function checkParentResult(parent, gateId) {
     assert.equal(parent.leakScanCoverage, 'proven', `gate ${gateId}: the parent result leakScanCoverage is not proven`);
     assert.ok(none(parent.leaks), `gate ${gateId}: the parent result does not report zero leaks`);
     assert.ok(none(parent.undecodable), `gate ${gateId}: the parent result does not report zero undecodable files`);
-    assert.ok(isPlainObject(parent.cleanup) && Object.keys(parent.cleanup).length > 0 && Object.values(parent.cleanup).every((flag) => flag === true),
-        `gate ${gateId}: the parent result cleanup flags are not all true`);
+    assert.ok(isPlainObject(parent.cleanup)
+        && JSON.stringify(Object.keys(parent.cleanup).sort()) === JSON.stringify([...PARENT_CLEANUP_FLAGS].sort())
+        && PARENT_CLEANUP_FLAGS.every((flag) => parent.cleanup[flag] === true),
+        `gate ${gateId}: the parent result cleanup must hold exactly the flags ${PARENT_CLEANUP_FLAGS.join(', ')}, all true`);
 }
 
 /**

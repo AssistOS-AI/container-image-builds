@@ -755,7 +755,7 @@ keys are ignored):
 | `profile-preflight_codex.json` | `runId`, `capturedAt`, `ledgerCoverage` (must be `selected-ledger-identities`), `generationMaxAgeMs` (an integer, at most 1 800 000), `box.containerId`, `box.startedAt`, `box.imageId` (must equal the engine image ID), `repositories.{achillesAgentLib, ploinky, achillesCLI, explorer}.commit` (must equal the release manifest) |
 | `test-results/results.json` | `config.metadata.runId`, `stats.startTime`, `stats.duration`, and the usual suite and result fields |
 | `profile-postflight_codex.json` | `runId`, `capturedAt`, `exitCode` (must be the number 0), `box.containerId`, `box.startedAt`, `box.imageId` |
-| `codex-auth/parent-result.json` (`06` only) | `runId`, `code` (must be `OK`), `leakScanCoverage` (must be `proven`), `leaks` (0 or an empty list), `undecodable` (0 or an empty list), `cleanup` (a non-empty object whose every value is `true`) |
+| `codex-auth/parent-result.json` (`06` only) | `runId`, `code` (must be `OK`), `leakScanCoverage` (must be `proven`), `leaks` (0 or an empty list), `undecodable` (0 or an empty list), `cleanup` (an object with exactly the six keys `credentialPersisted`, `credentialRemoved`, `linksRemoved`, `sourceUnregistered`, `robotDeleted`, `folderDeleted`, each `true`; none missing, none added) |
 
 The preflight, report and postflight (and the parent result) must carry one run
 id, and no two gates may share a run id. The postflight's Box identity must equal
