@@ -142,6 +142,82 @@ function reportSet(change = {}, extra = {}) {
     return Object.fromEntries(SIX_GATES.map((id) => [id, playwrightReport(id, { mutate: change[id], extraTitles: extra[id] })]));
 }
 
+// --- frozen source inventories and explorer-release-bundle manifests -----------------------------
+//
+// Workspace W hosts the official and spec 06 cohorts; WO hosts the spec 03 cohort. Their inventories list the
+// same sources (the same names, commits and roles) under different roots. Explorer and the other workspace
+// checkouts are deployed sources inside the workspace; Ploinky is a deployed source outside it; the sources the
+// Box image supplies are provenance references outside it. AchillesCLI is never listed.
+const WORKSPACES = {
+    W: { root: '/work/W', inventoryPath: '/ev/inventory/W.json' },
+    WO: { root: '/work/WO', inventoryPath: '/ev/inventory/WO.json' },
+};
+const WORKSPACE_OF = { 'official-release': 'W', 'copilot-live-skills': 'W', 'optional-defaults-and-activation': 'WO' };
+const SOURCE_PROVENANCE = ['achillesAgentLib', 'mcp-sdk', 'Ploinky-Worker'];
+
+function inventoryFor(workspace, mutate) {
+    const { root } = WORKSPACES[workspace];
+    const inside = (name, digit) => [name, { root: `${root}/${name}`, commit: digit.repeat(40), role: 'deployed-source' }];
+    const inventory = {
+        schemaVersion: 1, kind: 'explorer-source-inventory', roboTeam: { repository: 'explorer', path: 'roboTeamAgent' },
+        repositories: Object.fromEntries([
+            ['explorer', { root: `${root}/AssistOSExplorer`, commit: '2'.repeat(40), role: 'deployed-source' }],
+            inside('copilot-agents', '3'), inside('webmeet', '4'), inside('OnlyOfficeAgent', '5'), inside('UmamiAgent', '6'),
+            inside('local-llms', '8'), inside('AdvancedLanguageAgent', 'c'), inside('DocumentationSkills', 'd'),
+            ['ploinky', { root: '/src/ploinky', commit: CANDIDATE.sourceSha, role: 'deployed-source' }],
+            ['achillesAgentLib', { root: '/src/achillesAgentLib', commit: SELECTIONS.achillesAgentLib.commit, role: 'provenance-reference' }],
+            ['mcp-sdk', { root: '/src/MCPSDK', commit: SELECTIONS['mcp-sdk'].commit, role: 'provenance-reference' }],
+            ['Ploinky-Worker', { root: '/src/Ploinky-Worker', commit: 'e'.repeat(40), role: 'provenance-reference' }],
+        ]),
+    };
+    mutate?.(inventory);
+    return inventory;
+}
+
+const inventoryBytesFor = (workspace, mutate) => Buffer.from(JSON.stringify(inventoryFor(workspace, mutate), null, 2));
+
+// The explorer-release-bundle manifest that pins an inventory file by canonical path and SHA-256.
+function manifestFor(inventoryBytes, inventoryPath, digest = ENGINE_ID.arm64) {
+    return {
+        schemaVersion: 1, kind: 'explorer-release-bundle',
+        sourceInventory: { path: inventoryPath, sha256: hash(inventoryBytes) },
+        images: { ploinkyBox: { digest } },
+    };
+}
+
+// The three cohorts' manifest and inventory inputs. `change[cohort]` may hold:
+//   inventory(inv)  edits the inventory object before it is hashed, so manifest and bytes agree;
+//   raw             replaces the inventory bytes before they are hashed, so manifest and bytes agree;
+//   tamper(bytes)   changes the bytes handed to the producer after the manifest pinned the originals;
+//   realpath        the canonical path handed to the producer (the manifest keeps the default path);
+//   manifest(m)     edits the manifest, or returns a replacement manifest.
+function cohortInputsSet(change = {}) {
+    return Object.fromEntries(Object.keys(COHORTS).map((cohort) => {
+        const workspace = WORKSPACE_OF[cohort];
+        const edit = change[cohort] || {};
+        const pinned = edit.raw ?? inventoryBytesFor(workspace, edit.inventory);
+        const defaultPath = WORKSPACES[workspace].inventoryPath;
+        const manifest = manifestFor(pinned, defaultPath);
+        return [cohort, {
+            manifest: edit.manifest?.(manifest) ?? manifest,
+            inventoryBytes: edit.tamper ? edit.tamper(pinned) : pinned,
+            inventoryRealpath: edit.realpath ?? defaultPath,
+        }];
+    }));
+}
+
+// What the runner's verifier returns for a cohort's inventory and what both preflight and postflight record.
+function sourceEvidenceFor(gateId) {
+    const workspace = WORKSPACE_OF[COHORT_OF[gateId]];
+    const inventory = inventoryFor(workspace);
+    return {
+        releaseBundle: { schemaVersion: 1, kind: 'explorer-release-bundle', sourceInventorySha256: hash(inventoryBytesFor(workspace)) },
+        repositories: Object.fromEntries(Object.entries(inventory.repositories).map(([name, entry]) => [name,
+            { name, repositoryPath: entry.root, commit: entry.commit, role: entry.role, ...(name === 'webmeet' ? { ignored: true } : {}) }])),
+        workspaceSourceMount: { source: WORKSPACES[workspace].root },
+    };
+}
+
 function boxIdentity(gateId) {
     const { containerId, startedAt } = COHORTS[COHORT_OF[gateId]];
     return { containerId, startedAt, imageId: ENGINE_ID.arm64 };
@@ -154,10 +230,7 @@ function preflightFor(gateId, mutate) {
         generationMaxAgeMs: 30 * MIN,
         imageCreatedAt: '2026-10-25T00:00:00.000Z',
         box: { ...boxIdentity(gateId), name: 'ploinky-box-test' },
-        repositories: {
-            achillesAgentLib: { commit: SELECTIONS.achillesAgentLib.commit, ignored: true }, ploinky: { commit: CANDIDATE.sourceSha },
-            achillesCLI: { commit: '1'.repeat(40) }, explorer: { commit: '2'.repeat(40) },
-        },
+        ...sourceEvidenceFor(gateId),
         runId: runIdOf(gateId), spec: GATE_SELECTIONS[gateId].spec, grep: 'ignored by the receipt', capturedAt: iso(startOf(gateId) - 5000),
     };
     mutate?.(preflight);
@@ -165,7 +238,8 @@ function preflightFor(gateId, mutate) {
 }
 
 function postflightFor(gateId, mutate) {
-    const postflight = { runId: runIdOf(gateId), box: boxIdentity(gateId), capturedAt: iso(endOf(gateId) + 2000), exitCode: 0 };
+    const { releaseBundle, repositories } = sourceEvidenceFor(gateId);
+    const postflight = { runId: runIdOf(gateId), box: boxIdentity(gateId), releaseBundle, repositories, capturedAt: iso(endOf(gateId) + 2000), exitCode: 0 };
     mutate?.(postflight);
     return Buffer.from(JSON.stringify(postflight, null, 2));
 }
@@ -194,22 +268,10 @@ function evidenceSet(change = {}, extra = {}) {
     return Object.fromEntries(SIX_GATES.map((id) => [id, gateEvidence(id, { ...change[id], extraTitles: extra[id] })]));
 }
 
-function releaseManifest() {
-    return {
-        repositories: {
-            achillesAgentLib: { commit: SELECTIONS.achillesAgentLib.commit },
-            ploinky: { commit: CANDIDATE.sourceSha },
-            achillesCLI: { commit: '1'.repeat(40) },
-            explorer: { commit: '2'.repeat(40) },
-        },
-        images: { ploinkyBox: { digest: ENGINE_ID.arm64 } },
-    };
-}
-
 const imageInspect = (architecture = 'arm64') => [{ Id: ENGINE_ID[architecture], Os: 'linux', Architecture: architecture }];
 
 const receiptInputs = (change = {}) => ({
-    candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: SELECTIONS['mcp-sdk'].commit,
+    candidateDigest: `sha256:${'1'.repeat(64)}`, cohortInputs: cohortInputsSet(), imageInspect: imageInspect(),
     gates: evidenceSet(), ...change,
 });
 
@@ -534,22 +596,35 @@ const withTimes = (startMs, durationMs, { captured = startMs - 1000, finished = 
 const buildWith = (id, change) => buildAcceptanceReceipt(receiptInputs({ gates: { ...evidenceSet(), [id]: gateEvidence(id, change) } }));
 const withGate = (id, edit) => { const gates = evidenceSet(); edit(gates[id]); return buildAcceptanceReceipt(receiptInputs({ gates })); };
 
-test('the receipt producer builds the bounded data-only v2 receipt from reports, preflights, postflights, manifest, and image evidence', async (t) => {
+test('the receipt producer builds the bounded data-only v2 receipt from reports, preflights, postflights, manifests, source inventories, and image evidence', async (t) => {
     const f = await fixture(t);
     const receipt = receiptFor(f.candidateDigest);
     assert.equal(RECEIPT_SCHEMA, 'ploinky.box.acceptance-receipt/v2');
     assert.equal(receipt.schema, RECEIPT_SCHEMA);
-    assert.deepEqual(Object.keys(receipt).sort(), ['candidate', 'cohorts', 'engine_image_ids', 'gates', 'revisions', 'schema']);
+    assert.deepEqual(Object.keys(receipt).sort(), ['candidate', 'cohorts', 'engine_image_ids', 'gates', 'revisions', 'schema', 'sources']);
     assert.equal(canonicalReceiptText(receipt), canonicalReceiptText(JSON.parse(canonicalReceiptText(receipt))));
     assert.doesNotThrow(() => parseCanonicalReceipt(canonicalReceiptText(receipt)));
     assert.deepEqual(receipt.candidate, { digest: f.candidateDigest });
+    // No revision is typed: the three revisions are the commits of their inventoried sources.
     assert.deepEqual(receipt.revisions, {
-        achilles_agent_lib: SELECTIONS.achillesAgentLib.commit, achilles_cli: '1'.repeat(40), explorer: '2'.repeat(40),
-        mcp_sdk_commit: SELECTIONS['mcp-sdk'].commit, ploinky: CANDIDATE.sourceSha,
+        achilles_agent_lib: SELECTIONS.achillesAgentLib.commit, mcp_sdk_commit: SELECTIONS['mcp-sdk'].commit, ploinky: CANDIDATE.sourceSha,
     });
+    // `sources` is the complete root-free map of the inventory: eleven entries, no root, no AchillesCLI.
+    assert.deepEqual(Object.keys(receipt.sources).sort(), Object.keys(inventoryFor('W').repositories).sort());
+    assert.equal(Object.keys(receipt.sources).length, 12);
+    assert.deepEqual(receipt.sources.ploinky, { commit: CANDIDATE.sourceSha, role: 'deployed-source' });
+    assert.deepEqual(receipt.sources.explorer, { commit: '2'.repeat(40), role: 'deployed-source' });
+    for (const name of SOURCE_PROVENANCE) assert.equal(receipt.sources[name].role, 'provenance-reference', name);
+    for (const entry of Object.values(receipt.sources)) assert.deepEqual(Object.keys(entry).sort(), ['commit', 'role']);
+    assert.ok(!/\/work\/|\/src\/|achilles-?cli/i.test(canonicalReceiptText(receipt)), 'the receipt holds no root and no AchillesCLI source');
     assert.deepEqual(receipt.engine_image_ids, { arm64: ENGINE_ID.arm64 });
     // Three cohorts named like the acceptance ledger, with the Box generation observed in the preflights.
-    assert.deepEqual(receipt.cohorts, Object.fromEntries(Object.entries(COHORTS).map(([id, c]) => [id, { container_id: c.containerId, started_at: c.startedAt }])));
+    // Each cohort also records the SHA-256 of the frozen inventory it ran against (W for the official and spec 06 cohorts, WO for spec 03).
+    assert.deepEqual(receipt.cohorts, Object.fromEntries(Object.entries(COHORTS).map(([id, c]) => [id, {
+        container_id: c.containerId, started_at: c.startedAt, source_inventory_sha256: hash(inventoryBytesFor(WORKSPACE_OF[id])),
+    }])));
+    assert.notEqual(receipt.cohorts['official-release'].source_inventory_sha256, receipt.cohorts['optional-defaults-and-activation'].source_inventory_sha256);
+    assert.equal(receipt.cohorts['official-release'].source_inventory_sha256, receipt.cohorts['copilot-live-skills'].source_inventory_sha256);
     // Six gates in the recording order 05, 06, 03, 50, 30-public, 30-media (not the execution order).
     assert.deepEqual(receipt.gates.map(({ id }) => id), SIX_GATES);
     assert.deepEqual([...PHASES], SIX_GATES);
@@ -586,7 +661,7 @@ test('the receipt producer builds the bounded data-only v2 receipt from reports,
 
 test('Podman and Docker image evidence both produce the same receipt, with the engine image ID normalized', () => {
     const bare = ENGINE_ID.arm64.slice('sha256:'.length);
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), mcpSdkCommit: '7'.repeat(40), gates: evidenceSet() };
+    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, cohortInputs: cohortInputsSet(), gates: evidenceSet() };
     // Podman reports the bare 64-hex ID next to Digest, RepoDigests, and History.
     const podman = [{
         Id: bare, Digest: `sha256:${'d'.repeat(64)}`, RepoDigests: [`${IMAGE}@sha256:${'d'.repeat(64)}`],
@@ -629,7 +704,7 @@ test('a failed, skipped, retried, flaky, missing, duplicated, or mis-selected ga
     for (const [label, mutate] of Object.entries(bad)) {
         assert.throws(() => summarizePlaywrightReport(playwrightReport(id, { mutate }), id), label);
         assert.throws(() => buildAcceptanceReceipt({
-            candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40),
+            candidateDigest: `sha256:${'1'.repeat(64)}`, cohortInputs: cohortInputsSet(), imageInspect: imageInspect(),
             gates: { ...evidenceSet(), [id]: gateEvidence(id, { report: mutate }) },
         }), label);
     }
@@ -637,7 +712,7 @@ test('a failed, skipped, retried, flaky, missing, duplicated, or mis-selected ga
     // A report for another gate's selection cannot stand in for this gate.
     assert.throws(() => summarizePlaywrightReport(playwrightReport('webmeet-room-chat'), id));
     const gates = evidenceSet();
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40) };
+    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, cohortInputs: cohortInputsSet(), imageInspect: imageInspect() };
     for (const gate of SIX_GATES) {
         const { [gate]: _omitted, ...rest } = gates;
         assert.throws(() => buildAcceptanceReceipt({ ...base, gates: rest }), new RegExp(gate));
@@ -647,7 +722,7 @@ test('a failed, skipped, retried, flaky, missing, duplicated, or mis-selected ga
 });
 
 test('all six gates are required; the prerequisite phases may hold several passed tests', () => {
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40) };
+    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, cohortInputs: cohortInputsSet(), imageInspect: imageInspect() };
     // Omitting any of the six gates, including 06 and each spec-30 gate, is refused and names the gate.
     for (const phase of ['copilot-folder-launch', 'copilot-live-skills', 'optional-agents', 'onlyoffice-confidential', 'webmeet-public-room', 'webmeet-room-chat']) {
         const { [phase]: _omitted, ...rest } = evidenceSet();
@@ -689,26 +764,224 @@ test('the old spec 03 title is not the pinned test', () => {
     assert.throws(() => summarizePlaywrightReport(playwrightReport('optional-agents', { extraTitles: ['Scribe also enables'], mutate: rename(OLD_SPEC_03_TITLE) }), 'optional-agents'), /pinned test/);
 });
 
-test('the producer rejects a manifest, image evidence, or revision that does not fit together', () => {
-    const base = receiptInputs({ candidateDigest: `sha256:${'1'.repeat(64)}`, mcpSdkCommit: '7'.repeat(40) });
+test('the producer rejects a manifest, image evidence, or retired input that does not fit together', () => {
+    const base = receiptInputs({ candidateDigest: `sha256:${'1'.repeat(64)}` });
     assert.doesNotThrow(() => buildAcceptanceReceipt(base));
-    const manifest = (change) => { const m = releaseManifest(); change(m); return m; };
     for (const change of [
-        { releaseManifest: manifest((m) => { m.images.ploinkyBox.digest = `sha256:${'0'.repeat(64)}`; }) },
-        { releaseManifest: manifest((m) => { m.repositories.explorer.commit = 'main'; }) },
-        { releaseManifest: manifest((m) => { delete m.repositories.achillesCLI; }) },
-        { releaseManifest: manifest((m) => { m.extra = 1; }) },
-        { releaseManifest: manifest((m) => { m.images.other = { digest: 'x' }; }) },
+        { cohortInputs: cohortInputsSet({ 'official-release': { manifest: (m) => { m.images.ploinkyBox.digest = `sha256:${'0'.repeat(64)}`; } } }) },
+        { cohortInputs: cohortInputsSet({ 'optional-defaults-and-activation': { manifest: (m) => { m.images.other = { digest: 'x' }; } } }) },
+        { cohortInputs: cohortInputsSet({ 'copilot-live-skills': { manifest: (m) => { m.extra = 1; } } }) },
+        { cohortInputs: {} }, { cohortInputs: null },
+        { cohortInputs: Object.fromEntries(Object.entries(cohortInputsSet()).filter(([cohort]) => cohort !== 'copilot-live-skills')) },
+        { cohortInputs: { ...cohortInputsSet(), 'another-cohort': cohortInputsSet()['official-release'] } },
         { imageInspect: [] }, { imageInspect: [...imageInspect(), ...imageInspect()] },
         { imageInspect: [{ ...imageInspect()[0], Architecture: 's390x' }] }, { imageInspect: [{ ...imageInspect()[0], Os: 'windows' }] },
         { imageInspect: [{ ...imageInspect()[0], Id: 'latest' }] },
-        { mcpSdkCommit: 'main' }, { mcpSdkCommit: '' }, { gates: null }, { gates: {} },
+        { gates: null }, { gates: {} },
         { candidateDigest: 'latest' }, { candidateDigest: `${IMAGE}:latest` },
     ]) {
-        assert.throws(() => buildAcceptanceReceipt({ ...base, ...change }), JSON.stringify(change).slice(0, 80));
+        assert.throws(() => buildAcceptanceReceipt({ ...base, ...change }), JSON.stringify(Object.keys(change)));
     }
-    // The retired v1 input is not accepted in place of the per-gate evidence.
-    assert.throws(() => buildAcceptanceReceipt({ ...base, gates: undefined, generation: 'g1', reports: reportSet() }), /gate evidence/);
+    // The inputs of earlier receipt versions are retired: a typed commit, a single manifest, a generation or loose reports.
+    for (const retired of [{ mcpSdkCommit: SELECTIONS['mcp-sdk'].commit }, { releaseManifest: {} }, { generation: 'g1' }, { reports: reportSet() }]) {
+        assert.throws(() => buildAcceptanceReceipt({ ...base, ...retired }), new RegExp(`does not take ${Object.keys(retired)[0]}`), JSON.stringify(Object.keys(retired)));
+    }
+});
+
+// --- frozen source inventory (receipt amendment) ----------------------------------------------
+
+const buildWithInputs = (change) => buildAcceptanceReceipt(receiptInputs({ cohortInputs: cohortInputsSet(change) }));
+const officialCohort = (edit) => ({ 'official-release': edit });
+const everyCohort = (edit) => Object.fromEntries(Object.keys(COHORTS).map((cohort) => [cohort, edit]));
+const legacy421Manifest = () => ({
+    repositories: {
+        achillesAgentLib: { commit: SELECTIONS.achillesAgentLib.commit }, ploinky: { commit: CANDIDATE.sourceSha },
+        achillesCLI: { commit: '1'.repeat(40) }, explorer: { commit: '2'.repeat(40) },
+    },
+    images: { ploinkyBox: { digest: ENGINE_ID.arm64 } },
+});
+
+test('(k) the release manifest of every cohort is an explorer-release-bundle manifest whose digest is the engine image', () => {
+    // Control: the explorer-release-bundle manifests build.
+    assert.doesNotThrow(() => buildWithInputs({}));
+    const refused = {
+        'a 421-shape manifest': [() => buildWithInputs(officialCohort({ manifest: legacy421Manifest })), /versionless legacy release manifest is not accepted/],
+        'a 421-shape manifest in the optional cohort': [() => buildWithInputs({ 'optional-defaults-and-activation': { manifest: legacy421Manifest } }), /cohort optional-defaults-and-activation: a versionless legacy release manifest/],
+        'schemaVersion 2': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.schemaVersion = 2; } })), /unsupported release manifest schemaVersion/],
+        'schemaVersion as text': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.schemaVersion = '1'; } })), /unsupported release manifest schemaVersion/],
+        'another kind': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.kind = 'copilot-421-bundle'; } })), /release manifest kind must be explorer-release-bundle/],
+        'an extra manifest key': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.extra = 1; } })), /release manifest must contain exactly images, kind, schemaVersion, sourceInventory/],
+        'an extra sourceInventory key': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.sourceInventory.note = 'x'; } })), /release manifest sourceInventory must contain exactly path, sha256/],
+        'a relative inventory path': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.sourceInventory.path = 'inventory/W.json'; } })), /source inventory path must be an absolute, normalized path/],
+        'a non-normalized inventory path': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.sourceInventory.path = '/ev/inventory/../inventory/W.json'; } })), /source inventory path must be an absolute, normalized path/],
+        'an uppercase inventory hash': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.sourceInventory.sha256 = 'A'.repeat(64); } })), /source inventory sha256 must be a lowercase 64-hex SHA-256/],
+        'an image digest that is not the engine image': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.images.ploinkyBox.digest = ENGINE_ID.amd64; } })), /the engine image ID differs from the release manifest Box digest/],
+        'a mutable image reference': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.images.ploinkyBox.digest = 'latest'; } })), /release manifest image digest must be an immutable sha256 digest/],
+        'an extra image': [() => buildWithInputs(officialCohort({ manifest: (m) => { m.images.other = { digest: ENGINE_ID.arm64 }; } })), /release manifest images must contain exactly ploinkyBox/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+});
+
+test('(l) the inventory is the file its manifest pins, by SHA-256 and by canonical path', () => {
+    assert.doesNotThrow(() => buildWithInputs({}));
+    const refused = {
+        'bytes that differ from the pinned hash': [() => buildWithInputs(officialCohort({ tamper: (bytes) => Buffer.concat([bytes, Buffer.from('\n')]) })), /cohort official-release: the source inventory bytes do not match the release manifest sourceInventory\.sha256/],
+        'one changed character': [() => buildWithInputs(officialCohort({ tamper: (bytes) => Buffer.from(bytes.toString('utf8').replace('"explorer"', '"explorex"')) })), /bytes do not match the release manifest sourceInventory\.sha256/],
+        'bytes that differ in the optional cohort': [() => buildWithInputs({ 'optional-defaults-and-activation': { tamper: (bytes) => Buffer.concat([bytes, Buffer.from(' ')]) } }), /cohort optional-defaults-and-activation: the source inventory bytes do not match/],
+        'a canonical path that differs from the pinned path': [() => buildWithInputs(officialCohort({ realpath: '/ev/inventory/other.json' })), /cohort official-release: the source inventory path differs from the release manifest sourceInventory\.path/],
+        'a path that is only a spelling of the pinned path': [() => buildWithInputs(officialCohort({ realpath: '/ev/inventory//W.json' })), /the source inventory path differs from the release manifest sourceInventory\.path/],
+        'an inventory that is not JSON': [() => buildWithInputs(officialCohort({ raw: Buffer.from('not json') })), /the source inventory is not JSON/],
+        'an empty inventory': [() => buildWithInputs(officialCohort({ raw: Buffer.alloc(0) })), /the source inventory is required/],
+        'an oversized inventory': [() => buildWithInputs(officialCohort({ raw: Buffer.alloc(1024 * 1024 + 1, 0x20) })), /the source inventory is required/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+});
+
+test('(m) an inventory naming AchillesCLI under any spelling is refused, and a lookalike is not mistaken for it', () => {
+    const named = (name) => ({ inventory: (inventory) => { inventory.repositories[name] = { root: '/work/W/cli-checkout', commit: 'f'.repeat(40), role: 'deployed-source' }; } });
+    for (const name of ['AchillesCLI', 'achillesCLI', 'achilles-cli', 'Achilles_CLI', 'ACHILLES.CLI']) {
+        assert.throws(() => buildWithInputs(officialCohort(named(name))), /source inventory must not name an AchillesCLI repository; RoboTeam is owned by explorer\/roboTeamAgent/, name);
+    }
+    // AchillesIDE is another repository: it passes the inventory rules in every cohort and is refused later, because
+    // the preflights were captured against the inventory without it.
+    assert.throws(() => buildWithInputs(everyCohort(named('AchillesIDE'))),
+        (error) => !/AchillesCLI/.test(error.message) && /releaseBundle\.sourceInventorySha256 differs from its cohort's source inventory/.test(error.message));
+});
+
+test('the inventory passes the strict rules of the release verifier, and the sources the image supplies are provenance references', () => {
+    assert.doesNotThrow(() => buildWithInputs({}));
+    const edit = (change) => officialCohort({ inventory: change });
+    const refused = {
+        'a missing explorer': [(inv) => { delete inv.repositories.explorer; }, /source inventory must include the core repository explorer/],
+        'a missing ploinky': [(inv) => { delete inv.repositories.ploinky; }, /source inventory must include the core repository ploinky/],
+        'a missing achillesAgentLib': [(inv) => { delete inv.repositories.achillesAgentLib; }, /source inventory must include the core repository achillesAgentLib/],
+        'ploinky as a provenance reference': [(inv) => { inv.repositories.ploinky.role = 'provenance-reference'; }, /ploinky must be a deployed-source/],
+        'explorer as a provenance reference': [(inv) => { inv.repositories.explorer.role = 'provenance-reference'; }, /explorer must be a deployed-source/],
+        'achillesAgentLib as a deployed source': [(inv) => { inv.repositories.achillesAgentLib.role = 'deployed-source'; }, /achillesAgentLib must be a provenance-reference/],
+        'a missing mcp-sdk': [(inv) => { delete inv.repositories['mcp-sdk']; }, /source inventory must include mcp-sdk/],
+        'mcp-sdk as a deployed source': [(inv) => { inv.repositories['mcp-sdk'].role = 'deployed-source'; }, /mcp-sdk must be a provenance-reference/],
+        'a missing Ploinky-Worker': [(inv) => { delete inv.repositories['Ploinky-Worker']; }, /source inventory must include Ploinky-Worker/],
+        'Ploinky-Worker as a deployed source': [(inv) => { inv.repositories['Ploinky-Worker'].role = 'deployed-source'; }, /Ploinky-Worker must be a provenance-reference/],
+        'a repeated root': [(inv) => { inv.repositories.webmeet.root = inv.repositories.UmamiAgent.root; }, /source inventory repeats the root of webmeet/],
+        'a relative root': [(inv) => { inv.repositories.webmeet.root = 'work/W/webmeet'; }, /webmeet root must be an absolute, normalized path/],
+        'a non-normalized root': [(inv) => { inv.repositories.webmeet.root = '/work/W/./webmeet'; }, /webmeet root must be an absolute, normalized path/],
+        'a short commit': [(inv) => { inv.repositories.webmeet.commit = 'abc123'; }, /webmeet commit must be an exact lowercase 40-hex commit/],
+        'an uppercase commit': [(inv) => { inv.repositories.webmeet.commit = 'A'.repeat(40); }, /webmeet commit must be an exact lowercase 40-hex commit/],
+        'a symbolic commit': [(inv) => { inv.repositories.webmeet.commit = 'main'; }, /webmeet commit must be an exact lowercase 40-hex commit/],
+        'an unknown role': [(inv) => { inv.repositories.webmeet.role = 'mirror'; }, /webmeet role must be one of deployed-source, provenance-reference/],
+        'an extra entry key': [(inv) => { inv.repositories.webmeet.note = 'x'; }, /source inventory repository webmeet must contain exactly commit, role, root/],
+        'a missing entry key': [(inv) => { delete inv.repositories.webmeet.root; }, /source inventory repository webmeet must contain exactly commit, role, root/],
+        'a repository name that is not an identity': [(inv) => { inv.repositories['-bad'] = { root: '/work/W/bad', commit: 'f'.repeat(40), role: 'deployed-source' }; }, /is not a valid identity/],
+        'a RoboTeam owner that is not explorer/roboTeamAgent': [(inv) => { inv.roboTeam.repository = 'roboTeamAgent'; }, /RoboTeam is owned by explorer\/roboTeamAgent/],
+        'an extra inventory key': [(inv) => { inv.note = 'x'; }, /source inventory must contain exactly kind, repositories, roboTeam, schemaVersion/],
+        'schemaVersion 2': [(inv) => { inv.schemaVersion = 2; }, /unsupported source inventory schemaVersion/],
+        'another kind': [(inv) => { inv.kind = 'explorer-release-bundle'; }, /source inventory kind must be explorer-source-inventory/],
+        'more than 64 repositories': [(inv) => { for (let i = 0; i < 53; i += 1) inv.repositories[`extra-${i}`] = { root: `/work/W/extra-${i}`, commit: 'f'.repeat(40), role: 'deployed-source' }; }, /source inventory exceeds 64 repositories/],
+    };
+    for (const [label, [change, expected]] of Object.entries(refused)) assert.throws(() => buildWithInputs(edit(change)), expected, label);
+});
+
+test('(n) a preflight lists exactly the repositories of its cohort inventory', () => {
+    const id = 'onlyoffice-confidential';
+    assert.doesNotThrow(() => buildWith(id, {}));
+    const extra = { name: 'extra', repositoryPath: '/work/W/extra', commit: 'f'.repeat(40), role: 'deployed-source' };
+    const refused = {
+        'a changed commit': [() => buildWith(id, { preflight: (p) => { p.repositories.webmeet.commit = '1'.repeat(40); } }), /the preflight repository webmeet commit differs from the source inventory/],
+        'a changed role': [() => buildWith(id, { preflight: (p) => { p.repositories.webmeet.role = 'provenance-reference'; } }), /the preflight repository webmeet role differs from the source inventory/],
+        'a changed path': [() => buildWith(id, { preflight: (p) => { p.repositories.webmeet.repositoryPath = '/work/W/elsewhere'; } }), /the preflight repository webmeet path differs from the source inventory root/],
+        'a name that is not its key': [() => buildWith(id, { preflight: (p) => { p.repositories.webmeet.name = 'webmeet-2'; } }), /the preflight repository webmeet names another repository/],
+        'an extra entry': [() => buildWith(id, { preflight: (p) => { p.repositories.extra = extra; } }), /the preflight repositories hold extra, which the source inventory does not list/],
+        'an extra AchillesCLI entry': [() => buildWith(id, { preflight: (p) => { p.repositories.achillesCLI = { ...extra, name: 'achillesCLI' }; } }), /hold achillesCLI, which the source inventory does not list/],
+        'a missing entry': [() => buildWith(id, { preflight: (p) => { delete p.repositories['copilot-agents']; } }), /the preflight repositories lack copilot-agents, which the source inventory lists/],
+        'an entry that is not an object': [() => buildWith(id, { preflight: (p) => { p.repositories.webmeet = 'webmeet'; } }), /the preflight repositories lack webmeet/],
+        'a list instead of a map': [() => buildWith(id, { preflight: (p) => { p.repositories = []; } }), /the preflight has no repositories/],
+        'the other workspace\'s map': [() => buildWith('optional-agents', { preflight: (p) => { p.repositories = sourceEvidenceFor(id).repositories; } }), /the preflight repository .* path differs from the source inventory root/],
+        // The postflight repeats what the preflight observed.
+        'a postflight commit that changed': [() => buildWith(id, { postflight: (p) => { p.repositories.webmeet.commit = '1'.repeat(40); } }), /the postflight repositories differ from the preflight/],
+        'a postflight entry that was added': [() => buildWith(id, { postflight: (p) => { p.repositories.extra = extra; } }), /the postflight repositories differ from the preflight/],
+        'a postflight entry that was removed': [() => buildWith(id, { postflight: (p) => { delete p.repositories.UmamiAgent; } }), /the postflight repositories differ from the preflight/],
+        'a postflight without repositories': [() => buildWith(id, { postflight: (p) => { delete p.repositories; } }), /the postflight has no repositories/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+});
+
+test('(o) the release bundle hash of a preflight and a postflight is the hash of its cohort inventory', () => {
+    const id = 'onlyoffice-confidential';
+    assert.doesNotThrow(() => buildWith(id, {}));
+    const other = 'f'.repeat(64);
+    const refused = {
+        'a preflight hash that differs': [() => buildWith(id, { preflight: (p) => { p.releaseBundle.sourceInventorySha256 = other; } }), /the preflight releaseBundle\.sourceInventorySha256 differs from its cohort's source inventory/],
+        'a preflight without a release bundle': [() => buildWith(id, { preflight: (p) => { delete p.releaseBundle; } }), /the preflight has no releaseBundle/],
+        'the hash of the other workspace': [() => buildWith('optional-agents', { preflight: (p) => { p.releaseBundle.sourceInventorySha256 = hash(inventoryBytesFor('W')); } }), /the preflight releaseBundle\.sourceInventorySha256 differs from its cohort's source inventory/],
+        'a postflight hash that differs': [() => buildWith(id, { postflight: (p) => { p.releaseBundle.sourceInventorySha256 = other; } }), /the postflight releaseBundle\.sourceInventorySha256 differs from its cohort's source inventory/],
+        'a postflight without a release bundle': [() => buildWith(id, { postflight: (p) => { delete p.releaseBundle; } }), /the postflight has no releaseBundle/],
+        'a postflight release bundle of another kind': [() => buildWith(id, { postflight: (p) => { p.releaseBundle.kind = 'other'; } }), /the postflight releaseBundle differs from the preflight/],
+        'a postflight release bundle with an extra key': [() => buildWith(id, { postflight: (p) => { p.releaseBundle.extra = true; } }), /the postflight releaseBundle differs from the preflight/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+});
+
+test('(p) the roles of the sources fix where they lie: deployed sources under the workspace mount, references outside it', () => {
+    const id = 'onlyoffice-confidential';
+    const refused = {
+        'a mount that holds no deployed source': [() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = '/work/other'; } }), /deployed-source AdvancedLanguageAgent is not under the workspace source mount/],
+        'the sibling workspace as the mount': [() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = '/work/WO'; } }), /deployed-source .* is not under the workspace source mount/],
+        'a mount that holds a provenance reference': [() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = '/'; } }), /provenance-reference Ploinky-Worker is inside the workspace source mount/],
+        'a mount that holds only the sources outside the workspace': [() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = '/src'; } }), /deployed-source .* is not under the workspace source mount/],
+        'a preflight without a mount': [() => buildWith(id, { preflight: (p) => { delete p.workspaceSourceMount; } }), /the preflight has no workspaceSourceMount\.source/],
+        'a relative mount': [() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = 'work/W'; } }), /the preflight has no workspaceSourceMount\.source/],
+        'a mount equal to a deployed source': [() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = '/work/W/webmeet'; } }), /deployed-source .* is not under the workspace source mount/],
+    };
+    // Control: the default mount (W for the official and spec 06 cohorts, WO for spec 03) builds, and Ploinky lies outside both.
+    assert.doesNotThrow(() => buildWith(id, {}));
+    assert.doesNotThrow(() => buildWith('optional-agents', {}));
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+});
+
+test('(q) the three cohorts list the same sources, though their roots may differ', () => {
+    // Control: W and WO have different roots and different inventory hashes, and build.
+    const receipt = buildWithInputs({});
+    assert.notEqual(receipt.cohorts['official-release'].source_inventory_sha256, receipt.cohorts['optional-defaults-and-activation'].source_inventory_sha256);
+    const optional = (inventory) => ({ 'optional-defaults-and-activation': { inventory } });
+    const different = /cohorts official-release and optional-defaults-and-activation list different sources/;
+    const refused = {
+        'a commit that differs': [() => buildWithInputs(optional((inv) => { inv.repositories.webmeet.commit = '1'.repeat(40); })), different],
+        'a role that differs': [() => buildWithInputs(optional((inv) => { inv.repositories.webmeet.role = 'provenance-reference'; })), different],
+        'a source that is missing': [() => buildWithInputs(optional((inv) => { delete inv.repositories.webmeet; })), different],
+        'a source that is added': [() => buildWithInputs(optional((inv) => { inv.repositories.AchillesIDE = { root: '/work/WO/AchillesIDE', commit: 'f'.repeat(40), role: 'deployed-source' }; })), different],
+        'the spec 06 cohort differing from the official one': [() => buildWithInputs({ 'copilot-live-skills': { inventory: (inv) => { delete inv.repositories['local-llms']; } } }), /cohorts official-release and copilot-live-skills list different sources/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+});
+
+test('(r) no revision is typed: the retired inputs are refused by the producer and by the CLI', async (t) => {
+    const base = receiptInputs();
+    assert.throws(() => buildAcceptanceReceipt({ ...base, mcpSdkCommit: SELECTIONS['mcp-sdk'].commit }), /does not take mcpSdkCommit: every commit comes from the hash-pinned source inventory/);
+    assert.throws(() => buildAcceptanceReceipt({ ...base, releaseManifest: {} }), /does not take releaseManifest/);
+    const f = await fixture(t);
+    const { dir, base: cliBase } = cliFixture(f);
+    const args = evidenceArgs(artifactDirectories(dir));
+    const control = receiptCli(...cliBase, ...args);
+    assert.equal(control.status, 0, control.stderr);
+    const typed = receiptCli(...cliBase, ...args, '--mcp-sdk-commit', SELECTIONS['mcp-sdk'].commit);
+    assert.notEqual(typed.status, 0);
+    assert.match(typed.stderr, /--mcp-sdk-commit was removed in receipt v2: every revision comes from the hash-pinned source inventory/);
+    assert.equal(typed.stdout, '');
+});
+
+test('(s) revisions are derived from sources, and the producer holds no AchillesCLI revision', () => {
+    const receipt = buildAcceptanceReceipt(receiptInputs());
+    assert.doesNotThrow(() => validateAcceptanceReceipt(receipt));
+    for (const [key, name] of [['ploinky', 'ploinky'], ['achilles_agent_lib', 'achillesAgentLib'], ['mcp_sdk_commit', 'mcp-sdk']]) {
+        assert.equal(receipt.revisions[key], receipt.sources[name].commit, key);
+        const forged = structuredClone(receipt);
+        forged.revisions[key] = 'd'.repeat(40);
+        assert.throws(() => validateAcceptanceReceipt(forged), new RegExp(`receipt revision ${key} differs from its sources entry ${name}`), key);
+        assert.throws(() => parseCanonicalReceipt(canonicalReceiptText(forged)), new RegExp(`receipt revision ${key} differs`), key);
+    }
+    // The producer source names no AchillesCLI revision (the static form of `! rg -q achilles_cli images/ploinky-box/acceptance-receipt.mjs`).
+    assert.ok(!read('images/ploinky-box/acceptance-receipt.mjs').includes('achilles_cli'));
+    assert.deepEqual(Object.keys(receipt.revisions).sort(), ['achilles_agent_lib', 'mcp_sdk_commit', 'ploinky']);
 });
 
 test('every gate binds its preflight, report and postflight to one run, one Box identity and the 30-minute generation window', () => {
@@ -747,10 +1020,9 @@ test('every gate binds its preflight, report and postflight to one run, one Box 
         'postflight without a Box': [() => buildWith(id, { postflight: (p) => { delete p.box; } }), /Box identity/],
         // The preflight must describe this candidate under the 30-minute cap.
         'preflight image differs from the engine image': [() => buildWith(id, { preflight: (p) => { p.box.imageId = ENGINE_ID.amd64; } }), /engine image/],
-        'preflight explorer commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.explorer.commit = '5'.repeat(40); } }), /explorer.*manifest/],
-        'preflight ploinky commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.ploinky.commit = '5'.repeat(40); } }), /ploinky.*manifest/],
-        'preflight agentlib commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.achillesAgentLib.commit = '5'.repeat(40); } }), /achillesAgentLib.*manifest/],
-        'preflight achillesCLI commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.achillesCLI.commit = '5'.repeat(40); } }), /achillesCLI.*manifest/],
+        'preflight explorer commit differs from the inventory': [() => buildWith(id, { preflight: (p) => { p.repositories.explorer.commit = '5'.repeat(40); } }), /repository explorer commit differs from the source inventory/],
+        'preflight ploinky commit differs from the inventory': [() => buildWith(id, { preflight: (p) => { p.repositories.ploinky.commit = '5'.repeat(40); } }), /repository ploinky commit differs from the source inventory/],
+        'preflight agentlib commit differs from the inventory': [() => buildWith(id, { preflight: (p) => { p.repositories.achillesAgentLib.commit = '5'.repeat(40); } }), /repository achillesAgentLib commit differs from the source inventory/],
         'preflight without repositories': [() => buildWith(id, { preflight: (p) => { delete p.repositories; } }), /repositories/],
         'separate screen profile': [() => buildWith(id, { preflight: (p) => { p.ledgerCoverage = 'separate-screen-profile-no-ledger-acceptance'; } }), /ledgerCoverage/],
         'separate QA profile': [() => buildWith(id, { preflight: (p) => { p.ledgerCoverage = 'separate-qa-profile-no-local-box-acceptance'; } }), /ledgerCoverage/],
@@ -882,7 +1154,8 @@ test('the receipt validator enforces exact keys, counts, selections, cohorts, ti
         'extra gate key': mutate((r) => { r.gates[0].screenshots = []; }),
         'extra revision': mutate((r) => { r.revisions.other = 'a'.repeat(40); }),
         'missing mcp_sdk_commit': mutate((r) => { delete r.revisions.mcp_sdk_commit; }),
-        'symbolic revision': mutate((r) => { r.revisions.explorer = 'main'; }),
+        'symbolic revision': mutate((r) => { r.revisions.ploinky = 'main'; }),
+        'the retired explorer revision': mutate((r) => { r.revisions.explorer = '2'.repeat(40); }),
         'tag digest': mutate((r) => { r.candidate.digest = 'latest'; }),
         'passed 2': mutate((r) => { r.gates[0].passed = 2; }),
         'passed 0': mutate((r) => { r.gates[0].passed = 0; }),
@@ -917,6 +1190,29 @@ test('the receipt validator enforces exact keys, counts, selections, cohorts, ti
     }
     const refused = {
         'missing cohorts': [(r) => { delete r.cohorts; }, /cohorts/],
+        'a missing sources map': [(r) => { delete r.sources; }, /exactly.*sources/],
+        'a sources entry with a root': [(r) => { r.sources.ploinky.root = '/src/ploinky'; }, /receipt source ploinky must contain exactly commit, role/],
+        'a sources entry with a bad role': [(r) => { r.sources.webmeet.role = 'mirror'; }, /receipt source webmeet role must be one of/],
+        'a sources commit that is not exact': [(r) => { r.sources.webmeet.commit = 'main'; }, /receipt source webmeet commit must be an exact commit/],
+        'ploinky as a provenance reference': [(r) => { r.sources.ploinky.role = 'provenance-reference'; }, /receipt source ploinky must be a deployed-source/],
+        'explorer as a provenance reference': [(r) => { r.sources.explorer.role = 'provenance-reference'; }, /receipt source explorer must be a deployed-source/],
+        'a missing explorer source': [(r) => { delete r.sources.explorer; }, /receipt sources must include the core repository explorer/],
+        'a missing agentlib source': [(r) => { delete r.sources.achillesAgentLib; }, /receipt sources must include the core repository achillesAgentLib/],
+        'a missing mcp-sdk source': [(r) => { delete r.sources['mcp-sdk']; }, /receipt sources must include mcp-sdk/],
+        'a missing Ploinky-Worker source': [(r) => { delete r.sources['Ploinky-Worker']; }, /receipt sources must include Ploinky-Worker/],
+        'agentlib as a deployed source': [(r) => { r.sources.achillesAgentLib.role = 'deployed-source'; }, /receipt source achillesAgentLib must be a provenance-reference/],
+        'mcp-sdk as a deployed source': [(r) => { r.sources['mcp-sdk'].role = 'deployed-source'; }, /receipt source mcp-sdk must be a provenance-reference/],
+        'an AchillesCLI source': [(r) => { r.sources.AchillesCLI = { commit: 'f'.repeat(40), role: 'deployed-source' }; }, /receipt sources must not name an AchillesCLI repository/],
+        'an achillesCLI source': [(r) => { r.sources.achillesCLI = { commit: 'f'.repeat(40), role: 'deployed-source' }; }, /receipt sources must not name an AchillesCLI repository/],
+        'an achilles-cli source': [(r) => { r.sources['achilles-cli'] = { commit: 'f'.repeat(40), role: 'provenance-reference' }; }, /receipt sources must not name an AchillesCLI repository/],
+        'an Achilles_CLI source': [(r) => { r.sources.Achilles_CLI = { commit: 'f'.repeat(40), role: 'provenance-reference' }; }, /receipt sources must not name an AchillesCLI repository/],
+        'a source name that is not an identity': [(r) => { r.sources['../x'] = { commit: 'f'.repeat(40), role: 'deployed-source' }; }, /is not a valid identity/],
+        'more than 64 sources': [(r) => { for (let i = 0; i < 53; i += 1) r.sources[`extra-${i}`] = { commit: 'f'.repeat(40), role: 'deployed-source' }; }, /receipt sources exceed 64 repositories/],
+        'ploinky revision that differs from its source': [(r) => { r.revisions.ploinky = 'd'.repeat(40); }, /receipt revision ploinky differs from its sources entry ploinky/],
+        'agentlib revision that differs from its source': [(r) => { r.revisions.achilles_agent_lib = 'd'.repeat(40); }, /receipt revision achilles_agent_lib differs from its sources entry achillesAgentLib/],
+        'mcp sdk revision that differs from its source': [(r) => { r.revisions.mcp_sdk_commit = 'd'.repeat(40); }, /receipt revision mcp_sdk_commit differs from its sources entry mcp-sdk/],
+        'a cohort without its inventory hash': [(r) => { delete r.cohorts['official-release'].source_inventory_sha256; }, /receipt cohort official-release must contain exactly/],
+        'a malformed inventory hash': [(r) => { r.cohorts['copilot-live-skills'].source_inventory_sha256 = 'abc'; }, /cohort copilot-live-skills: source_inventory_sha256 is malformed/],
         'a missing cohort': [(r) => { delete r.cohorts['optional-defaults-and-activation']; }, /cohorts/],
         'an extra cohort': [(r) => { r.cohorts.extra = structuredClone(r.cohorts['official-release']); r.cohorts.extra.container_id = '8'.repeat(64); }, /cohorts/],
         'the retired optional-agents cohort id': [(r) => { r.cohorts['optional-agents'] = r.cohorts['optional-defaults-and-activation']; delete r.cohorts['optional-defaults-and-activation']; }, /cohorts/],
@@ -975,9 +1271,10 @@ test('the receipt is bound to the candidate digest, source, libraries, and per-a
     const other = `sha256:${'0'.repeat(64)}`;
     for (const [label, env] of Object.entries({
         'candidate digest': withReceipt((r) => { r.candidate.digest = other; }),
-        'ploinky revision': withReceipt((r) => { r.revisions.ploinky = 'd'.repeat(40); }),
-        'agentlib commit': withReceipt((r) => { r.revisions.achilles_agent_lib = 'd'.repeat(40); }),
-        'mcp sdk commit': withReceipt((r) => { r.revisions.mcp_sdk_commit = 'd'.repeat(40); }),
+        // revisions and their sources entry change together, so the receipt is valid and the promotion binding is what refuses it.
+        'ploinky revision': withReceipt((r) => { r.revisions.ploinky = 'd'.repeat(40); r.sources.ploinky.commit = 'd'.repeat(40); }),
+        'agentlib commit': withReceipt((r) => { r.revisions.achilles_agent_lib = 'd'.repeat(40); r.sources.achillesAgentLib.commit = 'd'.repeat(40); }),
+        'mcp sdk commit': withReceipt((r) => { r.revisions.mcp_sdk_commit = 'd'.repeat(40); r.sources['mcp-sdk'].commit = 'd'.repeat(40); }),
         'engine image id': withReceipt((r) => { r.engine_image_ids.arm64 = other; }),
         'engine image id of the other architecture': withReceipt((r) => { r.engine_image_ids = { amd64: ENGINE_ID.arm64 }; }),
         'failed gate': withReceipt((r) => { r.gates[0].failed = 1; }),
@@ -1559,13 +1856,24 @@ const evidenceArgs = (directories) => Object.entries(directories).flatMap(([id, 
 const exactLine = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`);
 const receiptCli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'images/ploinky-box/acceptance-receipt.mjs'), ...args], { encoding: 'utf8', timeout: 30000 });
 
+// The CLI inputs: the image evidence, and for each cohort a manifest file that pins its inventory file by canonical path.
 function cliFixture(f) {
-    const dir = path.join(f.root, 'cli'); fs.mkdirSync(dir);
-    writeJson(path.join(dir, 'manifest.json'), releaseManifest());
+    fs.mkdirSync(path.join(f.root, 'cli'));
+    const dir = fs.realpathSync(path.join(f.root, 'cli'));
     writeJson(path.join(dir, 'inspect.json'), imageInspect());
-    const base = ['build', '--candidate-digest', f.candidateDigest, '--release-manifest', path.join(dir, 'manifest.json'),
-        '--image-inspect', path.join(dir, 'inspect.json'), '--mcp-sdk-commit', SELECTIONS['mcp-sdk'].commit];
-    return { dir, base };
+    const manifestFiles = {};
+    const inventoryFiles = {};
+    for (const cohort of Object.keys(COHORTS)) {
+        const workspace = WORKSPACE_OF[cohort];
+        inventoryFiles[cohort] = path.join(dir, `inventory-${workspace}.json`);
+        manifestFiles[cohort] = path.join(dir, `manifest-${cohort}.json`);
+        const bytes = inventoryBytesFor(workspace);
+        fs.writeFileSync(inventoryFiles[cohort], bytes);
+        writeJson(manifestFiles[cohort], manifestFor(bytes, inventoryFiles[cohort]));
+    }
+    const cohortArgs = Object.keys(COHORTS).flatMap((cohort) => ['--release-manifest', `${cohort}=${manifestFiles[cohort]}`, '--source-inventory', `${cohort}=${inventoryFiles[cohort]}`]);
+    const base = ['build', '--candidate-digest', f.candidateDigest, '--image-inspect', path.join(dir, 'inspect.json'), ...cohortArgs];
+    return { dir, base, cohortArgs, manifestFiles, inventoryFiles };
 }
 
 test('the receipt producer CLI output is accepted as written by validate and by the workflow inputs', async (t) => {
@@ -1601,7 +1909,8 @@ test('the receipt producer CLI binds each gate to one artifact directory and ref
         assert.equal(result.stdout, '', `${label} must write no receipt`);
     };
     // The retired v1 option and unknown options are refused rather than ignored.
-    refused('--generation', [...args, '--generation', 'generation-20261002-1'], /--generation/);
+    refused('--generation', [...args, '--generation', 'generation-20261002-1'], /--generation was removed/);
+    refused('--mcp-sdk-commit', [...args, '--mcp-sdk-commit', SELECTIONS['mcp-sdk'].commit], /--mcp-sdk-commit was removed in receipt v2/);
     refused('unknown option', [...args, '--note', 'trust me'], /--note/);
     // Exactly one preflight and one report per gate, for exactly the six gates.
     refused('duplicate preflight', [...args, '--preflight', `copilot-folder-launch=${path.join(directories['copilot-folder-launch'], 'profile-preflight_codex.json')}`], /once per gate/);
@@ -1641,6 +1950,48 @@ test('the receipt producer CLI binds each gate to one artifact directory and ref
     // A swapped postflight is a different run, and the CLI reports it as such.
     fs.writeFileSync(postflight, fs.readFileSync(linked));
     refused('postflight of another invocation', args, /one run id/);
+});
+
+test('the receipt producer CLI takes one release manifest and one source inventory for each cohort', async (t) => {
+    const f = await fixture(t);
+    const { dir, base, cohortArgs, manifestFiles, inventoryFiles } = cliFixture(f);
+    const head = base.slice(0, base.length - cohortArgs.length);
+    const args = evidenceArgs(artifactDirectories(dir));
+    const refused = (label, cohortOptions, expected) => {
+        const result = receiptCli(...head, ...cohortOptions, ...args);
+        assert.notEqual(result.status, 0, label);
+        assert.match(result.stderr, expected, label);
+        assert.equal(result.stdout, '', `${label} must write no receipt`);
+    };
+    const without = (flag, cohort) => cohortArgs.filter((value, index, all) => !(value.startsWith(`${cohort}=`) && all[index - 1] === flag) && !(value === flag && all[index + 1].startsWith(`${cohort}=`)));
+    assert.equal(receiptCli(...head, ...cohortArgs, ...args).status, 0, 'the control build must pass');
+    // One of each, for each cohort.
+    refused('no inventory for the optional cohort', without('--source-inventory', 'optional-defaults-and-activation'), /--source-inventory is required for cohort optional-defaults-and-activation/);
+    refused('no manifest for spec 06', without('--release-manifest', 'copilot-live-skills'), /--release-manifest is required for cohort copilot-live-skills/);
+    refused('a second manifest for a cohort', [...cohortArgs, '--release-manifest', `official-release=${manifestFiles['official-release']}`], /--release-manifest must be <cohort>=<path>, once per cohort/);
+    refused('a second inventory for a cohort', [...cohortArgs, '--source-inventory', `official-release=${inventoryFiles['official-release']}`], /--source-inventory must be <cohort>=<path>, once per cohort/);
+    refused('an unknown cohort', [...cohortArgs, '--source-inventory', `elsewhere=${inventoryFiles['official-release']}`], /unknown cohort elsewhere/);
+    refused('the old single manifest', [...without('--release-manifest', 'official-release'), '--release-manifest', manifestFiles['official-release']], /--release-manifest must be <cohort>=<path>, once per cohort/);
+    // The inventory must be the file the manifest pins, by canonical path and by bytes.
+    const copy = path.join(dir, 'inventory-copy.json');
+    fs.copyFileSync(inventoryFiles['official-release'], copy);
+    refused('a copy of the pinned inventory', cohortArgs.map((value) => (value === `official-release=${inventoryFiles['official-release']}` ? `official-release=${copy}` : value)),
+        /cohort official-release: the source inventory path differs from the release manifest sourceInventory\.path/);
+    const pinned = fs.readFileSync(inventoryFiles['optional-defaults-and-activation']);
+    fs.appendFileSync(inventoryFiles['optional-defaults-and-activation'], '\n');
+    refused('an inventory edited after it was pinned', cohortArgs, /cohort optional-defaults-and-activation: the source inventory bytes do not match the release manifest sourceInventory\.sha256/);
+    fs.writeFileSync(inventoryFiles['optional-defaults-and-activation'], pinned);
+    // A symbolic link is not the pinned file, and a manifest must be JSON.
+    const linked = path.join(dir, 'inventory-link.json');
+    fs.symlinkSync(inventoryFiles['official-release'], linked);
+    refused('a symlinked inventory', cohortArgs.map((value) => (value === `official-release=${inventoryFiles['official-release']}` ? `official-release=${linked}` : value)), /regular file/);
+    const manifest = fs.readFileSync(manifestFiles['copilot-live-skills']);
+    fs.writeFileSync(manifestFiles['copilot-live-skills'], 'not json');
+    refused('a manifest that is not JSON', cohortArgs, /cohort copilot-live-skills: the release manifest is not JSON/);
+    fs.writeFileSync(manifestFiles['copilot-live-skills'], JSON.stringify(legacy421Manifest()));
+    refused('a 421-shape manifest file', cohortArgs, /cohort copilot-live-skills: a versionless legacy release manifest is not accepted/);
+    fs.writeFileSync(manifestFiles['copilot-live-skills'], manifest);
+    assert.equal(receiptCli(...head, ...cohortArgs, ...args).status, 0, 'the restored inputs build again');
 });
 
 test('the receipt producer CLI reads the parent result only from a real codex-auth directory', async (t) => {
