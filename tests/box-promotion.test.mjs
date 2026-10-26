@@ -2045,6 +2045,10 @@ test('the repository publication instructions describe the promotion path and it
     assert.match(readme, /six gates/);
     assert.match(readme, /three cohorts/);
     assert.match(readme, /profile-preflight_codex\.json/);
+    assert.match(readme, /--source-inventory/);
+    assert.match(readme, /sourceInventorySha256/);
+    assert.match(readme, /no revision is typed by the operator/i);
+    assert.match(readme, /explorer-release-bundle/);
     assert.match(readme, /refs\/heads\/main/);
     assert.match(readme, /child process/);
     assert.match(readme, /canonical/);

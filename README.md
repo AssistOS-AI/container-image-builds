@@ -697,11 +697,11 @@ The receipt is bounded (16 KiB), data-only JSON of schema
 `ploinky.box.acceptance-receipt/v2`, in canonical form (keys sorted at every
 level, no whitespace); the workflow rejects any other text, so the stored
 evidence is exactly the validated value. A v1 receipt is refused. The receipt
-binds the candidate digest, the Ploinky, Explorer, AgentLib and AchillesCLI
-revisions with an explicit `mcp_sdk_commit`, the per-architecture engine image
-ID, the observed Box generations of exactly three cohorts, and one entry per
-gate. All six gates are required, and the receipt lists the six gates in this
-recording order:
+binds the candidate digest, the three revisions `ploinky`, `achilles_agent_lib`
+and `mcp_sdk_commit`, the complete root-free map of the frozen source inventory
+(`sources`), the per-architecture engine image ID, the observed Box generations
+of exactly three cohorts, and one entry per gate. All six gates are required, and
+the receipt lists the six gates in this recording order:
 
 | Gate id | Spec | Cohort | Counts |
 | --- | --- | --- | --- |
@@ -720,11 +720,36 @@ of its report, of its preflight and of its postflight, and its `started_at` and
 is the current one, `OnlyOffice, Scribe, STT, and Umami start disabled and can be
 enabled through Marketplace`.
 
+**Sources, not typed revisions.** No revision is typed by the operator:
+`--mcp-sdk-commit` and `--generation` are refused as retired. Each cohort has an
+`explorer-release-bundle` manifest (`schemaVersion` 1, `kind`
+`explorer-release-bundle`, `images.ploinkyBox.digest`, and `sourceInventory`
+with an absolute canonical `path` and the file's `sha256`) that pins a frozen
+source inventory file (`kind` `explorer-source-inventory`). `build` takes
+`--release-manifest <cohort>=<file>` and `--source-inventory <cohort>=<file>`,
+once for each of the three cohorts, and requires for each: the manifest's image
+digest equals the engine image ID; the inventory's canonical real path equals
+`sourceInventory.path` and its SHA-256 equals `sourceInventory.sha256`; and the
+inventory passes the rules of Ploinky's `verifyExplorerReleaseBundle.mjs`
+(exact keys, RoboTeam owned by `explorer/roboTeamAgent`, at most 64
+repositories, the core repositories `achillesAgentLib`, `explorer` and
+`ploinky`, repository names that are valid identities and none an AchillesCLI
+alias, absolute canonical unique roots, exact 40-hex commits, the roles
+`deployed-source` and `provenance-reference`, and `ploinky` and `explorer` as
+deployed sources). The receipt adds that `achillesAgentLib`, `mcp-sdk` and
+`Ploinky-Worker` exist with the role `provenance-reference`. The receipt
+records the inventory as `sources`, a map from name to `{ commit, role }` (no
+roots), and derives `revisions` from it; the validator requires each revision to
+equal its `sources` entry (`ploinky`, `achillesAgentLib` and `mcp-sdk`). The
+three cohorts' root-free maps must be identical (their roots may differ, so
+their hashes may), and each cohort records `source_inventory_sha256`.
+
 **Three cohorts, not one generation.** The cohort IDs are the acceptance ledger's
 (a note for the receipt consumer: the receipt also requires the separate `06`
 profile, which the ledger keeps outside the official cohort). Each cohort is its
 own fresh Box generation, so the three `container_id` values must differ, and a
-`cohorts` entry holds only the generation's `container_id` and `started_at`:
+`cohorts` entry holds the generation's `container_id` and `started_at` and the
+`source_inventory_sha256` of the inventory it ran against:
 
 | Cohort | Gates | Rule |
 | --- | --- | --- |
@@ -752,12 +777,14 @@ keys are ignored):
 
 | Artifact | Keys read |
 | --- | --- |
-| `profile-preflight_codex.json` | `runId`, `capturedAt`, `ledgerCoverage` (must be `selected-ledger-identities`), `generationMaxAgeMs` (an integer, at most 1 800 000), `box.containerId`, `box.startedAt`, `box.imageId` (must equal the engine image ID), `repositories.{achillesAgentLib, ploinky, achillesCLI, explorer}.commit` (must equal the release manifest) |
+| `profile-preflight_codex.json` | `runId`, `capturedAt`, `ledgerCoverage` (must be `selected-ledger-identities`), `generationMaxAgeMs` (an integer, at most 1 800 000), `box.containerId`, `box.startedAt`, `box.imageId` (must equal the engine image ID), `releaseBundle.sourceInventorySha256` (must equal the cohort's inventory hash), `workspaceSourceMount.source`, and `repositories`: the complete map, which must equal the cohort's inventory exactly (the same key set, each entry's `name` equal to its key, `repositoryPath` equal to the inventory `root`, and `commit` and `role` matching; no subset, no extra entry) |
 | `test-results/results.json` | `config.metadata.runId`, `stats.startTime`, `stats.duration`, and the usual suite and result fields |
-| `profile-postflight_codex.json` | `runId`, `capturedAt`, `exitCode` (must be the number 0), `box.containerId`, `box.startedAt`, `box.imageId` |
+| `profile-postflight_codex.json` | `runId`, `capturedAt`, `exitCode` (must be the number 0), `box.containerId`, `box.startedAt`, `box.imageId`, and `releaseBundle` and `repositories`, which must equal the preflight's (and `releaseBundle.sourceInventorySha256` must equal the cohort's hash) |
 | `codex-auth/parent-result.json` (`06` only) | `runId`, `code` (must be `OK`), `leakScanCoverage` (must be `proven`), `leaks` (0 or an empty list), `undecodable` (0 or an empty list), `cleanup` (an object with exactly the six keys `credentialPersisted`, `credentialRemoved`, `linksRemoved`, `sourceUnregistered`, `robotDeleted`, `folderDeleted`, each `true`; none missing, none added) |
 
-The preflight, report and postflight (and the parent result) must carry one run
+Where the sources lie is part of the evidence: every `deployed-source` except
+`ploinky` must lie under the preflight's `workspaceSourceMount.source`, and every
+`provenance-reference` must lie outside it. The preflight, report and postflight (and the parent result) must carry one run
 id, and no two gates may share a run id. The postflight's Box identity must equal
 the preflight's. The preflight must be captured no later than the report's
 `stats.startTime`, and the postflight no earlier than the report's start plus its
@@ -772,20 +799,26 @@ added keys are tolerated.
 
 `build` writes the canonical text with no trailing newline, and neither
 `validate` nor the workflow accepts one, so the output file is exactly the text
-to dispatch. Produce it from the saved artifact directories, the release manifest
-and the engine's `image inspect` output of the Box image the acceptance fixture
-ran. The retired `--generation` option is refused. Both the Docker shape (`Id` as
+to dispatch. Produce it from the saved artifact directories, the manifest and
+frozen inventory of each cohort and the engine's `image inspect` output of the
+Box image the acceptance fixture ran (run `build` where the inventories are, at
+the same paths). The retired `--generation` and `--mcp-sdk-commit` options are
+refused. Both the Docker shape (`Id` as
 `sha256:<hex>`) and the Podman shape (a bare 64-hex `Id`, next to `Digest`,
 `RepoDigests` and `History`) are accepted, and the ID is normalized to
 `sha256:<hex>` the way Ploinky's `normalizeImageId` does before it is compared
-with the release manifest's Box digest and stored:
+with each release manifest's Box digest and stored:
 
 ```sh
 node images/ploinky-box/acceptance-receipt.mjs build \
   --candidate-digest "$PLAN_ACCEPTED_INDEX_DIGEST" \
-  --release-manifest "$EVIDENCE/release_manifest.json" \
   --image-inspect "$EVIDENCE/box-image-inspect.json" \
-  --mcp-sdk-commit "$PLAN_MCP_SDK_SHA" \
+  --release-manifest official-release="$EVIDENCE/manifest/W/standard-release.json" \
+  --source-inventory official-release="$EVIDENCE/inventory/W.json" \
+  --release-manifest copilot-live-skills="$EVIDENCE/manifest/W/standard-release.json" \
+  --source-inventory copilot-live-skills="$EVIDENCE/inventory/W.json" \
+  --release-manifest optional-defaults-and-activation="$EVIDENCE/manifest/WO/standard-release.json" \
+  --source-inventory optional-defaults-and-activation="$EVIDENCE/inventory/WO.json" \
   --report copilot-folder-launch="$EVIDENCE/official/05/test-results/results.json" \
   --preflight copilot-folder-launch="$EVIDENCE/official/05/profile-preflight_codex.json" \
   --report copilot-live-skills="$EVIDENCE/c5/06/test-results/results.json" \
@@ -803,12 +836,13 @@ node images/ploinky-box/acceptance-receipt.mjs build \
 
 The workflow checks that the receipt names the promoted digest, that its Ploinky
 revision is `source_sha`, that its AgentLib and MCP SDK commits are the frozen
-library-input commits, and that each engine image ID equals the verified
+library-input commits (the unchanged candidate binding), and that each engine image ID equals the verified
 `configDigest` of that architecture's image. It also validates the receipt's own
 shape, cohorts and timing, and records the receipt's SHA-256 and its cohorts in
 `promotion-verification.json` (schema `ploinky.box.promotion-verification/v2`).
 It cannot prove that the receipt was built from real reports or that a browser
-run took place: the Explorer and AchillesCLI commits are checked only for format.
+run took place: the other sources (Explorer and the rest of the inventory) are
+only format-checked by the validator.
 The dispatch is the authorized operator's release attestation, so retain and
 inspect the raw artifact directories named by the receipt (their SHA-256 digests
 are in it) before dispatching. Pass the receipt as a structured argument, for
