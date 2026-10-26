@@ -44,7 +44,7 @@ on:
         required: true
         type: string
       acceptance_receipt_json:
-        description: Bounded ploinky.box.acceptance-receipt/v1 JSON from images/ploinky-box/acceptance-receipt.mjs
+        description: Bounded ploinky.box.acceptance-receipt/v2 JSON (six gates in three cohorts, each bound to its preflight and postflight) from images/ploinky-box/acceptance-receipt.mjs
         required: true
         type: string
 

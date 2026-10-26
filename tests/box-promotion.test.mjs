@@ -441,6 +441,11 @@ test('a complete candidate verifies from its own context and records the promoti
     assert.notEqual(record.promotion.runId, record.candidate.runId);
     assert.notEqual(record.promotion.sha, record.candidate.imageDefinitionsSha);
     assert.equal(record.receipt.sha256, hash(f.env.ACCEPTANCE_RECEIPT_JSON));
+    // The verification record is schema v2: it records the receipt's hash and its observed cohorts, not a typed generation.
+    assert.equal(record.schema, 'ploinky.box.promotion-verification/v2');
+    assert.deepEqual(record.receipt, { sha256: hash(f.env.ACCEPTANCE_RECEIPT_JSON), cohorts: JSON.parse(f.env.ACCEPTANCE_RECEIPT_JSON).cohorts });
+    assert.deepEqual(Object.keys(record.receipt.cohorts).sort(), ['copilot-live-skills', 'official-release', 'optional-defaults-and-activation']);
+    assert.equal(readJson(path.join(f.evidence, 'promotion-verification.json')).schema, 'ploinky.box.promotion-verification/v2');
     assert.equal(record.index.sha256, hash(f.indexBytes));
     // Registry access is read-only: one raw inspect of the immutable digest, nothing else.
     assert.deepEqual(f.calls, [['docker', 'buildx', 'imagetools', 'inspect', '--raw', `${IMAGE}@${f.candidateDigest}`]]);
@@ -1039,6 +1044,11 @@ test('the promotion workflow shares the publish concurrency group and cannot bui
     assert.deepEqual([...inputs.matchAll(/^ {6}([a-z_]+):$/gm)].map((m) => m[1]),
         ['candidate_run_id', 'candidate_run_attempt', 'candidate_digest', 'source_sha', 'image_definitions_sha', 'acceptance_receipt_json']);
     assert.equal([...inputs.matchAll(/required: true/g)].length, 6);
+    // The receipt input is described as the v2 receipt, not the retired v1.
+    const receiptInput = inputs.match(/acceptance_receipt_json:\n {8}description: (.*)\n/)?.[1] || '';
+    assert.match(receiptInput, /ploinky\.box\.acceptance-receipt\/v2/);
+    assert.match(receiptInput, /six gates in three cohorts/);
+    assert.doesNotMatch(receiptInput, /receipt\/v1/);
     assert.doesNotMatch(inputs, /default:/);
 });
 

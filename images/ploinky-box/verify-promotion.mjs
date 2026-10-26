@@ -320,7 +320,7 @@ export async function verifyCandidateForPromotion({ inputs, receiptText, evidenc
     }
 
     const record = {
-        schema: 'ploinky.box.promotion-verification/v1',
+        schema: 'ploinky.box.promotion-verification/v2',
         candidate: {
             digest: inputs.digest, runId: inputs.runId, runAttempt: inputs.runAttempt, sourceSha: inputs.sourceSha,
             imageDefinitionsSha: inputs.imageDefinitionsSha, libraries: saved.libraries,
@@ -328,7 +328,7 @@ export async function verifyCandidateForPromotion({ inputs, receiptText, evidenc
             verifierSha256: saved.verifierSha256,
         },
         index: { sha256: sha256(raw) },
-        receipt: { sha256: sha256(Buffer.from(receiptText)), generation: receipt.generation },
+        receipt: { sha256: sha256(Buffer.from(receiptText)), cohorts: receipt.cohorts },
         promotion: { runId: promotion.runId, runAttempt: promotion.attempt, sha: promotion.sha, ref: promotion.ref },
     };
     fs.writeFileSync(path.join(evidenceDir, 'acceptance-receipt.json'), receiptText);
