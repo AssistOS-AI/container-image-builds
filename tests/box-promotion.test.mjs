@@ -74,12 +74,47 @@ function libraryEvidence() {
     return { provenance, smoke, selfTest };
 }
 
+// --- receipt v2 evidence ---------------------------------------------------------------------
+//
+// Three Box generations (cohorts) and six gate invocations, each with its own artifact directory:
+// `profile-preflight_codex.json`, `test-results/results.json`, `profile-postflight_codex.json`, and for
+// spec 06 also `codex-auth/parent-result.json`. Times are offsets from the cohort's Box start.
+const MIN = 60_000;
+const COHORTS = {
+    'official-release': { containerId: '1'.repeat(64), startedAt: '2026-10-26T10:00:00.000Z' },
+    'copilot-live-skills': { containerId: '2'.repeat(64), startedAt: '2026-10-26T09:00:00.000Z' },
+    'optional-defaults-and-activation': { containerId: '3'.repeat(64), startedAt: '2026-10-26T08:00:00.000Z' },
+};
+const COHORT_OF = {
+    'copilot-folder-launch': 'official-release', 'webmeet-public-room': 'official-release', 'webmeet-room-chat': 'official-release',
+    'onlyoffice-confidential': 'official-release', 'copilot-live-skills': 'copilot-live-skills', 'optional-agents': 'optional-defaults-and-activation',
+};
+// Execution order of the official cohort is 05, 30-public, 30-media, 50; the receipt lists 05, 06, 03, 50, 30-public, 30-media.
+const GATE_TIMES = {
+    'copilot-folder-launch': { start: 2 * MIN, duration: 30_000 },
+    'webmeet-public-room': { start: 6 * MIN, duration: 20_000 },
+    'webmeet-room-chat': { start: 9 * MIN, duration: 25_000 },
+    'onlyoffice-confidential': { start: 13 * MIN, duration: 3 * MIN },
+    'copilot-live-skills': { start: 5 * MIN, duration: 15 * MIN },
+    'optional-agents': { start: 3 * MIN, duration: 10 * MIN },
+};
+const OFFICIAL_ORDER = ['copilot-folder-launch', 'webmeet-public-room', 'webmeet-room-chat', 'onlyoffice-confidential'];
+const SIX_GATES = ['copilot-folder-launch', 'copilot-live-skills', 'optional-agents', 'onlyoffice-confidential', 'webmeet-public-room', 'webmeet-room-chat'];
+const CURRENT_SPEC_03_TITLE = 'OnlyOffice, Scribe, STT, and Umami start disabled and can be enabled through Marketplace';
+const OLD_SPEC_03_TITLE = 'OnlyOffice, Scribe, and STT start disabled and can be enabled through Marketplace';
+const runIdOf = (gateId) => `run-${gateId}`;
+const cohortStartMs = (gateId) => Date.parse(COHORTS[COHORT_OF[gateId]].startedAt);
+const iso = (ms) => new Date(ms).toISOString();
+const startOf = (gateId) => cohortStartMs(gateId) + GATE_TIMES[gateId].start;
+const endOf = (gateId) => startOf(gateId) + GATE_TIMES[gateId].duration;
+
 function playwrightReport(gateId, change = {}) {
     const { spec, test: title } = GATE_SELECTIONS[gateId];
     const file = path.posix.basename(spec);
+    const startTime = change.startTime ?? iso(startOf(gateId));
     const result = { workerIndex: 0, parallelIndex: 0, status: 'passed', duration: 10, errors: [], stdout: [], stderr: [], retry: 0, startTime: '2026-10-02T10:00:00.000Z', attachments: [] };
     const report = {
-        config: { projects: [{ id: 'chromium', name: 'chromium', retries: 0, testDir: '/x/specs' }] },
+        config: { projects: [{ id: 'chromium', name: 'chromium', retries: 0, testDir: '/x/specs' }], metadata: { runId: change.runId ?? runIdOf(gateId) } },
         suites: [{
             title: file, file, column: 0, line: 0, specs: [],
             suites: [{
@@ -90,7 +125,7 @@ function playwrightReport(gateId, change = {}) {
                 }],
             }],
         }],
-        errors: [], stats: { startTime: '2026-10-02T10:00:00.000Z', duration: 10, expected: 1, skipped: 0, unexpected: 0, flaky: 0 },
+        errors: [], stats: { startTime, duration: change.duration ?? GATE_TIMES[gateId].duration, expected: 1, skipped: 0, unexpected: 0, flaky: 0 },
     };
     // Prerequisite phases may hold more than one test.
     for (const [index, extra] of (change.extraTitles || []).entries()) {
@@ -104,7 +139,59 @@ function playwrightReport(gateId, change = {}) {
 }
 
 function reportSet(change = {}, extra = {}) {
-    return Object.fromEntries(REQUIRED_GATES.map((id) => [id, playwrightReport(id, { mutate: change[id], extraTitles: extra[id] })]));
+    return Object.fromEntries(SIX_GATES.map((id) => [id, playwrightReport(id, { mutate: change[id], extraTitles: extra[id] })]));
+}
+
+function boxIdentity(gateId) {
+    const { containerId, startedAt } = COHORTS[COHORT_OF[gateId]];
+    return { containerId, startedAt, imageId: ENGINE_ID.arm64 };
+}
+
+function preflightFor(gateId, mutate) {
+    const preflight = {
+        imageAgePolicy: 'common-explicit-pins; common-image-age-disabled; generation<=30m; additional-profile-age-checks-retained',
+        ledgerCoverage: 'selected-ledger-identities',
+        generationMaxAgeMs: 30 * MIN,
+        imageCreatedAt: '2026-10-25T00:00:00.000Z',
+        box: { ...boxIdentity(gateId), name: 'ploinky-box-test' },
+        repositories: {
+            achillesAgentLib: { commit: SELECTIONS.achillesAgentLib.commit, ignored: true }, ploinky: { commit: CANDIDATE.sourceSha },
+            achillesCLI: { commit: '1'.repeat(40) }, explorer: { commit: '2'.repeat(40) },
+        },
+        runId: runIdOf(gateId), spec: GATE_SELECTIONS[gateId].spec, grep: 'ignored by the receipt', capturedAt: iso(startOf(gateId) - 5000),
+    };
+    mutate?.(preflight);
+    return Buffer.from(JSON.stringify(preflight, null, 2));
+}
+
+function postflightFor(gateId, mutate) {
+    const postflight = { runId: runIdOf(gateId), box: boxIdentity(gateId), capturedAt: iso(endOf(gateId) + 2000), exitCode: 0 };
+    mutate?.(postflight);
+    return Buffer.from(JSON.stringify(postflight, null, 2));
+}
+
+function parentResultFor(gateId, mutate) {
+    const parent = {
+        runId: runIdOf(gateId), code: 'OK', leakScanCoverage: 'proven', leaks: 0, undecodable: [],
+        cleanup: { credentialPersisted: true, credentialRemoved: true, linksRemoved: true, sourceUnregistered: true, robotDeleted: true, folderDeleted: true },
+    };
+    mutate?.(parent);
+    return Buffer.from(JSON.stringify(parent));
+}
+
+// The evidence of one gate invocation. `change` mutates the parsed artifact before it is serialized.
+function gateEvidence(gateId, change = {}) {
+    const evidence = {
+        report: playwrightReport(gateId, { mutate: change.report, extraTitles: change.extraTitles, runId: change.runId, startTime: change.startTime, duration: change.duration }),
+        preflight: preflightFor(gateId, change.preflight),
+        postflight: postflightFor(gateId, change.postflight),
+    };
+    if (gateId === 'copilot-live-skills') evidence.parentResult = parentResultFor(gateId, change.parent);
+    return evidence;
+}
+
+function evidenceSet(change = {}, extra = {}) {
+    return Object.fromEntries(SIX_GATES.map((id) => [id, gateEvidence(id, { ...change[id], extraTitles: extra[id] })]));
 }
 
 function releaseManifest() {
@@ -121,11 +208,13 @@ function releaseManifest() {
 
 const imageInspect = (architecture = 'arm64') => [{ Id: ENGINE_ID[architecture], Os: 'linux', Architecture: architecture }];
 
+const receiptInputs = (change = {}) => ({
+    candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: SELECTIONS['mcp-sdk'].commit,
+    gates: evidenceSet(), ...change,
+});
+
 function receiptFor(candidateDigest, change = {}) {
-    return buildAcceptanceReceipt({
-        candidateDigest, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: SELECTIONS['mcp-sdk'].commit,
-        generation: 'generation-20261002-1', reports: reportSet(change),
-    });
+    return buildAcceptanceReceipt({ ...receiptInputs({ candidateDigest }), gates: evidenceSet(change) });
 }
 
 // A complete candidate: both native evidence sets, the exact index, the
@@ -279,7 +368,7 @@ test('inputs must be exact: a tag, a short digest, a symbolic revision, and a ma
         { ACCEPTANCE_RECEIPT_JSON: JSON.stringify(JSON.parse(f.env.ACCEPTANCE_RECEIPT_JSON), null, 2) },
         { ACCEPTANCE_RECEIPT_JSON: `${f.env.ACCEPTANCE_RECEIPT_JSON}\n` },
         { ACCEPTANCE_RECEIPT_JSON: JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(f.env.ACCEPTANCE_RECEIPT_JSON)).reverse())) },
-        { ACCEPTANCE_RECEIPT_JSON: f.env.ACCEPTANCE_RECEIPT_JSON.replace('"generation":', '"generation":"shadowed","generation":') },
+        { ACCEPTANCE_RECEIPT_JSON: f.env.ACCEPTANCE_RECEIPT_JSON.replace('"cohorts":', '"cohorts":"shadowed","cohorts":') },
     ]) {
         assert.throws(() => validateInputs({ ...f.env, ...change }), JSON.stringify(change).slice(0, 80));
     }
@@ -430,14 +519,22 @@ test('library, source, or image-definition identities that differ from the candi
     await f.verify();
 });
 
-// --- acceptance receipt -----------------------------------------------------------------------
+// --- acceptance receipt (v2) ------------------------------------------------------------------
 
-test('the receipt producer builds the bounded data-only receipt from reports, manifest, and image evidence', async (t) => {
+const withTimes = (startMs, durationMs, { captured = startMs - 1000, finished = startMs + durationMs + 1000 } = {}) => ({
+    startTime: iso(startMs), duration: durationMs,
+    preflight: (p) => { p.capturedAt = typeof captured === 'string' ? captured : iso(captured); },
+    postflight: (p) => { p.capturedAt = typeof finished === 'string' ? finished : iso(finished); },
+});
+const buildWith = (id, change) => buildAcceptanceReceipt(receiptInputs({ gates: { ...evidenceSet(), [id]: gateEvidence(id, change) } }));
+const withGate = (id, edit) => { const gates = evidenceSet(); edit(gates[id]); return buildAcceptanceReceipt(receiptInputs({ gates })); };
+
+test('the receipt producer builds the bounded data-only v2 receipt from reports, preflights, postflights, manifest, and image evidence', async (t) => {
     const f = await fixture(t);
     const receipt = receiptFor(f.candidateDigest);
-    assert.equal(RECEIPT_SCHEMA, 'ploinky.box.acceptance-receipt/v1');
+    assert.equal(RECEIPT_SCHEMA, 'ploinky.box.acceptance-receipt/v2');
     assert.equal(receipt.schema, RECEIPT_SCHEMA);
-    assert.deepEqual(Object.keys(receipt).sort(), ['candidate', 'engine_image_ids', 'gates', 'generation', 'revisions', 'schema']);
+    assert.deepEqual(Object.keys(receipt).sort(), ['candidate', 'cohorts', 'engine_image_ids', 'gates', 'revisions', 'schema']);
     assert.equal(canonicalReceiptText(receipt), canonicalReceiptText(JSON.parse(canonicalReceiptText(receipt))));
     assert.doesNotThrow(() => parseCanonicalReceipt(canonicalReceiptText(receipt)));
     assert.deepEqual(receipt.candidate, { digest: f.candidateDigest });
@@ -446,27 +543,45 @@ test('the receipt producer builds the bounded data-only receipt from reports, ma
         mcp_sdk_commit: SELECTIONS['mcp-sdk'].commit, ploinky: CANDIDATE.sourceSha,
     });
     assert.deepEqual(receipt.engine_image_ids, { arm64: ENGINE_ID.arm64 });
-    // All five phases, in the mandatory order 05, 06, 03, 50, 30.
-    assert.deepEqual(receipt.gates.map(({ id }) => id), ['copilot-folder-launch', 'copilot-live-skills', 'optional-agents', 'onlyoffice-confidential', 'webmeet-room-chat']);
-    assert.deepEqual([...PHASES], receipt.gates.map(({ id }) => id));
-    assert.deepEqual([...RELEASE_GATES], ['copilot-folder-launch', 'onlyoffice-confidential', 'webmeet-room-chat']);
+    // Three cohorts named like the acceptance ledger, with the Box generation observed in the preflights.
+    assert.deepEqual(receipt.cohorts, Object.fromEntries(Object.entries(COHORTS).map(([id, c]) => [id, { container_id: c.containerId, started_at: c.startedAt }])));
+    // Six gates in the recording order 05, 06, 03, 50, 30-public, 30-media (not the execution order).
+    assert.deepEqual(receipt.gates.map(({ id }) => id), SIX_GATES);
+    assert.deepEqual([...PHASES], SIX_GATES);
+    assert.deepEqual([...REQUIRED_GATES], SIX_GATES);
+    assert.deepEqual([...RELEASE_GATES], ['copilot-folder-launch', 'onlyoffice-confidential', 'webmeet-public-room', 'webmeet-room-chat']);
+    const evidence = evidenceSet();
     for (const gate of receipt.gates) {
         assert.deepEqual({ passed: gate.passed, failed: gate.failed, skipped: gate.skipped, retried: gate.retried, flaky: gate.flaky },
             { passed: 1, failed: 0, skipped: 0, retried: 0, flaky: 0 });
         assert.equal(gate.spec, GATE_SELECTIONS[gate.id].spec);
+        assert.equal(gate.cohort, COHORT_OF[gate.id]);
+        assert.equal(gate.cohort, GATE_SELECTIONS[gate.id].cohort);
         assert.deepEqual(gate.tests, [GATE_SELECTIONS[gate.id].test]);
-        assert.equal(gate.report_sha256, hash(reportSet()[gate.id]));
+        assert.equal(gate.report_sha256, hash(evidence[gate.id].report));
+        assert.equal(gate.preflight_sha256, hash(evidence[gate.id].preflight));
+        assert.equal(gate.postflight_sha256, hash(evidence[gate.id].postflight));
+        // The parent result is recorded for spec 06 only.
+        assert.deepEqual(Object.keys(gate).sort(), [
+            'cohort', 'failed', 'finished_at', 'flaky', 'id', 'passed', 'postflight_sha256', 'preflight_sha256', 'report_sha256', 'retried', 'skipped',
+            'spec', 'started_at', 'tests', ...(gate.id === 'copilot-live-skills' ? ['parent_result_sha256'] : [])].sort());
+        // started_at is the report's start; finished_at is the postflight's capture time.
+        assert.equal(gate.started_at, iso(startOf(gate.id)));
+        assert.equal(gate.finished_at, iso(endOf(gate.id) + 2000));
     }
+    assert.equal(receipt.gates.find(({ id }) => id === 'copilot-live-skills').parent_result_sha256, hash(evidence['copilot-live-skills'].parentResult));
     assert.ok(Buffer.byteLength(JSON.stringify(receipt)) < MAX_RECEIPT_BYTES);
     assert.deepEqual(validateAcceptanceReceipt(receipt), receipt);
     assert.deepEqual(GATE_SELECTIONS['copilot-folder-launch'].spec, 'specs/05-copilot-folder-launch.spec.mjs');
     assert.match(GATE_SELECTIONS['onlyoffice-confidential'].test, /Confidential document saves through callback, drains, and reopens after targeted restart/);
     assert.match(GATE_SELECTIONS['webmeet-room-chat'].test, /two Explorer accounts can join one room and exchange chat/);
+    assert.equal(GATE_SELECTIONS['webmeet-public-room'].test, 'standalone loader serves the authenticated dashboard and a guest invitation');
+    assert.equal(GATE_SELECTIONS['webmeet-public-room'].spec, 'specs/30-webmeet-room-chat.spec.mjs');
 });
 
 test('Podman and Docker image evidence both produce the same receipt, with the engine image ID normalized', () => {
     const bare = ENGINE_ID.arm64.slice('sha256:'.length);
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), mcpSdkCommit: '7'.repeat(40), generation: 'g1', reports: reportSet() };
+    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), mcpSdkCommit: '7'.repeat(40), gates: evidenceSet() };
     // Podman reports the bare 64-hex ID next to Digest, RepoDigests, and History.
     const podman = [{
         Id: bare, Digest: `sha256:${'d'.repeat(64)}`, RepoDigests: [`${IMAGE}@sha256:${'d'.repeat(64)}`],
@@ -510,48 +625,67 @@ test('a failed, skipped, retried, flaky, missing, duplicated, or mis-selected ga
         assert.throws(() => summarizePlaywrightReport(playwrightReport(id, { mutate }), id), label);
         assert.throws(() => buildAcceptanceReceipt({
             candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40),
-            generation: 'g1', reports: { ...reportSet(), [id]: playwrightReport(id, { mutate }) },
+            gates: { ...evidenceSet(), [id]: gateEvidence(id, { report: mutate }) },
         }), label);
     }
     assert.throws(() => summarizePlaywrightReport(Buffer.from('{'), id));
     // A report for another gate's selection cannot stand in for this gate.
     assert.throws(() => summarizePlaywrightReport(playwrightReport('webmeet-room-chat'), id));
-    const reports = reportSet();
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40), generation: 'g1' };
-    for (const gate of REQUIRED_GATES) {
-        const { [gate]: _omitted, ...rest } = reports;
-        assert.throws(() => buildAcceptanceReceipt({ ...base, reports: rest }), new RegExp(gate));
+    const gates = evidenceSet();
+    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40) };
+    for (const gate of SIX_GATES) {
+        const { [gate]: _omitted, ...rest } = gates;
+        assert.throws(() => buildAcceptanceReceipt({ ...base, gates: rest }), new RegExp(gate));
     }
-    assert.throws(() => buildAcceptanceReceipt({ ...base, reports: { ...reports, 'copilot-folder-launch': reports['webmeet-room-chat'] } }));
-    assert.throws(() => buildAcceptanceReceipt({ ...base, reports: { ...reports, unknown: reports['webmeet-room-chat'] } }));
+    assert.throws(() => buildAcceptanceReceipt({ ...base, gates: { ...gates, 'copilot-folder-launch': gates['webmeet-room-chat'] } }));
+    assert.throws(() => buildAcceptanceReceipt({ ...base, gates: { ...gates, unknown: gates['webmeet-room-chat'] } }));
 });
 
-test('all five acceptance phases are required; the prerequisite phases may hold several passed tests', () => {
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40), generation: 'g1' };
-    for (const phase of PHASES) {
-        const { [phase]: _omitted, ...rest } = reportSet();
-        assert.throws(() => buildAcceptanceReceipt({ ...base, reports: rest }), new RegExp(phase), `${phase} is optional`);
+test('all six gates are required; the prerequisite phases may hold several passed tests', () => {
+    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40) };
+    // Omitting any of the six gates, including 06 and each spec-30 gate, is refused and names the gate.
+    for (const phase of ['copilot-folder-launch', 'copilot-live-skills', 'optional-agents', 'onlyoffice-confidential', 'webmeet-public-room', 'webmeet-room-chat']) {
+        const { [phase]: _omitted, ...rest } = evidenceSet();
+        assert.throws(() => buildAcceptanceReceipt({ ...base, gates: rest }), new RegExp(`required gate ${phase} has no evidence`), `${phase} is optional`);
     }
-    const receipt = buildAcceptanceReceipt({ ...base, reports: reportSet({}, { 'optional-agents': ['Scribe also enables', 'STT also enables'] }) });
+    assert.doesNotThrow(() => buildAcceptanceReceipt({ ...base, gates: evidenceSet() }));
+    const receipt = buildAcceptanceReceipt({ ...base, gates: evidenceSet({}, { 'optional-agents': ['Scribe also enables', 'STT also enables'] }) });
     const gate = receipt.gates.find(({ id }) => id === 'optional-agents');
     assert.equal(gate.passed, 3);
     assert.deepEqual(gate.tests, [GATE_SELECTIONS['optional-agents'].test, 'STT also enables', 'Scribe also enables'].sort());
     assert.doesNotThrow(() => parseCanonicalReceipt(canonicalReceiptText(receipt)));
     // Every selected test of a prerequisite phase must pass, and the pinned one must be among them.
     const skipSecond = (r) => { const t = r.suites[0].suites[0].specs[1].tests[0]; t.status = 'skipped'; t.results[0].status = 'skipped'; r.stats.expected -= 1; r.stats.skipped += 1; };
-    assert.throws(() => buildAcceptanceReceipt({ ...base, reports: reportSet({ 'optional-agents': skipSecond }, { 'optional-agents': ['Scribe also enables'] }) }), /optional-agents/);
+    assert.throws(() => buildAcceptanceReceipt({ ...base, gates: evidenceSet({ 'optional-agents': { report: skipSecond } }, { 'optional-agents': ['Scribe also enables'] }) }), /optional-agents/);
     const dropPinned = (r) => { r.suites[0].suites[0].specs.shift(); r.stats.expected -= 1; };
-    assert.throws(() => buildAcceptanceReceipt({ ...base, reports: reportSet({ 'optional-agents': dropPinned }, { 'optional-agents': ['Scribe also enables'] }) }), /pinned test/);
+    assert.throws(() => buildAcceptanceReceipt({ ...base, gates: evidenceSet({ 'optional-agents': { report: dropPinned } }, { 'optional-agents': ['Scribe also enables'] }) }), /pinned test/);
     // A repeated title, another spec file, or a retry inside a prerequisite phase is rejected.
     assert.throws(() => summarizePlaywrightReport(playwrightReport('optional-agents', { extraTitles: [GATE_SELECTIONS['optional-agents'].test] }), 'optional-agents'), /repeats/);
     assert.throws(() => summarizePlaywrightReport(playwrightReport('optional-agents', { extraTitles: ['x'], mutate: (r) => { r.suites[0].suites[0].specs[1].file = '04-marketplace-lifecycle.spec.mjs'; } }), 'optional-agents'), /another spec file/);
     assert.throws(() => summarizePlaywrightReport(playwrightReport('copilot-live-skills', { mutate: (r) => { r.suites[0].suites[0].specs[0].tests[0].results[0].retry = 1; } }), 'copilot-live-skills'), /retried/);
-    // The three release gates stay one-test selections even when a report holds more.
+    // The four release gates stay one-test selections even when a report holds more.
     assert.throws(() => summarizePlaywrightReport(playwrightReport('webmeet-room-chat', { extraTitles: ['another'] }), 'webmeet-room-chat'));
+    assert.throws(() => summarizePlaywrightReport(playwrightReport('webmeet-public-room', { extraTitles: ['another'] }), 'webmeet-public-room'));
+});
+
+test('a spec 03 report with the current title is accepted as the pinned test', () => {
+    const rename = (title) => (r) => { r.suites[0].suites[0].specs[0].title = title; };
+    const current = summarizePlaywrightReport(playwrightReport('optional-agents', { mutate: rename(CURRENT_SPEC_03_TITLE) }), 'optional-agents');
+    assert.deepEqual(current.tests, [CURRENT_SPEC_03_TITLE]);
+    assert.equal(GATE_SELECTIONS['optional-agents'].test, CURRENT_SPEC_03_TITLE);
+    assert.doesNotThrow(() => buildWith('optional-agents', { report: rename(CURRENT_SPEC_03_TITLE) }));
+});
+
+test('the old spec 03 title is not the pinned test', () => {
+    const rename = (title) => (r) => { r.suites[0].suites[0].specs[0].title = title; };
+    assert.throws(() => summarizePlaywrightReport(playwrightReport('optional-agents', { mutate: rename(OLD_SPEC_03_TITLE) }), 'optional-agents'), /pinned test/);
+    assert.throws(() => buildWith('optional-agents', { report: rename(OLD_SPEC_03_TITLE) }), /pinned test/);
+    // The old title cannot stand in even next to extra tests.
+    assert.throws(() => summarizePlaywrightReport(playwrightReport('optional-agents', { extraTitles: ['Scribe also enables'], mutate: rename(OLD_SPEC_03_TITLE) }), 'optional-agents'), /pinned test/);
 });
 
 test('the producer rejects a manifest, image evidence, or revision that does not fit together', () => {
-    const base = { candidateDigest: `sha256:${'1'.repeat(64)}`, releaseManifest: releaseManifest(), imageInspect: imageInspect(), mcpSdkCommit: '7'.repeat(40), generation: 'g1', reports: reportSet() };
+    const base = receiptInputs({ candidateDigest: `sha256:${'1'.repeat(64)}`, mcpSdkCommit: '7'.repeat(40) });
     assert.doesNotThrow(() => buildAcceptanceReceipt(base));
     const manifest = (change) => { const m = releaseManifest(); change(m); return m; };
     for (const change of [
@@ -563,21 +697,151 @@ test('the producer rejects a manifest, image evidence, or revision that does not
         { imageInspect: [] }, { imageInspect: [...imageInspect(), ...imageInspect()] },
         { imageInspect: [{ ...imageInspect()[0], Architecture: 's390x' }] }, { imageInspect: [{ ...imageInspect()[0], Os: 'windows' }] },
         { imageInspect: [{ ...imageInspect()[0], Id: 'latest' }] },
-        { mcpSdkCommit: 'main' }, { mcpSdkCommit: '' }, { generation: '' }, { generation: 'a b' }, { generation: 'x'.repeat(200) },
+        { mcpSdkCommit: 'main' }, { mcpSdkCommit: '' }, { gates: null }, { gates: {} },
         { candidateDigest: 'latest' }, { candidateDigest: `${IMAGE}:latest` },
     ]) {
         assert.throws(() => buildAcceptanceReceipt({ ...base, ...change }), JSON.stringify(change).slice(0, 80));
     }
+    // The retired v1 input is not accepted in place of the per-gate evidence.
+    assert.throws(() => buildAcceptanceReceipt({ ...base, gates: undefined, generation: 'g1', reports: reportSet() }), /gate evidence/);
 });
 
-test('the receipt validator enforces exact keys, counts, selections, and distinct reports', () => {
+test('every gate binds its preflight, report and postflight to one run, one Box identity and the 30-minute generation window', () => {
+    // Control: the unmutated evidence builds, so each refusal below comes from its one mutation.
+    assert.doesNotThrow(() => buildAcceptanceReceipt(receiptInputs()));
+    const id = 'onlyoffice-confidential';
+    const cohortEnd = cohortStartMs(id) + 30 * MIN;
+    const wrong = (p) => { p.runId = 'run-another'; };
+    const refused = {
+        // A preflight (or postflight) of another invocation is a different run.
+        'swapped preflight': [() => withGate(id, (g) => { g.preflight = evidenceSet()['copilot-folder-launch'].preflight; }), /one run id/],
+        'swapped postflight': [() => withGate(id, (g) => { g.postflight = evidenceSet()['copilot-folder-launch'].postflight; }), /one run id/],
+        'preflight run id differs from the report': [() => buildWith(id, { preflight: wrong }), /one run id/],
+        'postflight run id differs from the report': [() => buildWith(id, { postflight: wrong }), /one run id/],
+        'report run id differs': [() => buildWith(id, { runId: 'run-another' }), /one run id/],
+        'report without a run id': [() => buildWith(id, { report: (r) => { delete r.config.metadata; } }), /run id/],
+        'preflight without a run id': [() => buildWith(id, { preflight: (p) => { delete p.runId; } }), /run id/],
+        'postflight without a run id': [() => buildWith(id, { postflight: (p) => { delete p.runId; } }), /run id/],
+        'a run id shared by two gates': [() => buildWith('webmeet-room-chat', { runId: runIdOf('webmeet-public-room'), preflight: (p) => { p.runId = runIdOf('webmeet-public-room'); }, postflight: (p) => { p.runId = runIdOf('webmeet-public-room'); } }), /distinct run id/],
+        // The postflight is the terminal verdict.
+        'missing postflight': [() => withGate(id, (g) => { delete g.postflight; }), new RegExp(`gate ${id}: .*postflight`)],
+        'missing preflight': [() => withGate(id, (g) => { delete g.preflight; }), new RegExp(`gate ${id}: .*preflight`)],
+        'missing report': [() => withGate(id, (g) => { delete g.report; }), new RegExp(`gate ${id}: .*report`)],
+        'postflight exit code 1': [() => buildWith(id, { postflight: (p) => { p.exitCode = 1; } }), /exitCode/],
+        'postflight exit code as text': [() => buildWith(id, { postflight: (p) => { p.exitCode = '0'; } }), /exitCode/],
+        'postflight without an exit code': [() => buildWith(id, { postflight: (p) => { delete p.exitCode; } }), /exitCode/],
+        'postflight before the report finished': [() => buildWith(id, { postflight: (p) => { p.capturedAt = iso(endOf(id) - 1); } }), /before the report finished/],
+        'late postflight, 1 ms past 30 minutes': [() => buildWith(id, { postflight: (p) => { p.capturedAt = iso(cohortEnd + 1); } }), /within 30 minutes/],
+        'late postflight, a fraction of a millisecond past 30 minutes': [() => buildWith(id, { postflight: (p) => { p.capturedAt = `${iso(cohortEnd).slice(0, -1)}0001Z`; } }), /within 30 minutes/],
+        'preflight captured after the test started': [() => buildWith(id, { preflight: (p) => { p.capturedAt = iso(startOf(id) + 1); } }), /preflight was captured after/],
+        // The Box must not change between the preflight and the postflight.
+        'postflight container': [() => buildWith(id, { postflight: (p) => { p.box.containerId = '9'.repeat(64); } }), /Box identity/],
+        'postflight start time': [() => buildWith(id, { postflight: (p) => { p.box.startedAt = '2026-10-26T10:00:00.001Z'; } }), /Box identity/],
+        'postflight image': [() => buildWith(id, { postflight: (p) => { p.box.imageId = ENGINE_ID.amd64; } }), /Box identity/],
+        'postflight without a Box': [() => buildWith(id, { postflight: (p) => { delete p.box; } }), /Box identity/],
+        // The preflight must describe this candidate under the 30-minute cap.
+        'preflight image differs from the engine image': [() => buildWith(id, { preflight: (p) => { p.box.imageId = ENGINE_ID.amd64; } }), /engine image/],
+        'preflight explorer commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.explorer.commit = '5'.repeat(40); } }), /explorer.*manifest/],
+        'preflight ploinky commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.ploinky.commit = '5'.repeat(40); } }), /ploinky.*manifest/],
+        'preflight agentlib commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.achillesAgentLib.commit = '5'.repeat(40); } }), /achillesAgentLib.*manifest/],
+        'preflight achillesCLI commit differs from the manifest': [() => buildWith(id, { preflight: (p) => { p.repositories.achillesCLI.commit = '5'.repeat(40); } }), /achillesCLI.*manifest/],
+        'preflight without repositories': [() => buildWith(id, { preflight: (p) => { delete p.repositories; } }), /repositories/],
+        'separate screen profile': [() => buildWith(id, { preflight: (p) => { p.ledgerCoverage = 'separate-screen-profile-no-ledger-acceptance'; } }), /ledgerCoverage/],
+        'separate QA profile': [() => buildWith(id, { preflight: (p) => { p.ledgerCoverage = 'separate-qa-profile-no-local-box-acceptance'; } }), /ledgerCoverage/],
+        'generation cap 1 800 001': [() => buildWith(id, { preflight: (p) => { p.generationMaxAgeMs = 1_800_001; } }), /generationMaxAgeMs/],
+        'generation cap as text': [() => buildWith(id, { preflight: (p) => { p.generationMaxAgeMs = '1800000'; } }), /generationMaxAgeMs/],
+        'preflight container id malformed': [() => buildWith(id, { preflight: (p) => { p.box.containerId = 'abc'; } }), /containerId/],
+        'preflight Box start malformed': [() => buildWith(id, { preflight: (p) => { p.box.startedAt = 'yesterday'; } }), /startedAt/],
+        'preflight is not JSON': [() => withGate(id, (g) => { g.preflight = Buffer.from('{'); }), /preflight.*JSON/],
+        'unexpected parent result on another gate': [() => withGate(id, (g) => { g.parentResult = parentResultFor(id); }), /parent result/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+    // The boundary: exactly 30 minutes after the cohort start passes, with the postflight as the finish.
+    const exact = buildWith(id, { postflight: (p) => { p.capturedAt = iso(cohortEnd); } });
+    assert.equal(exact.gates.find((gate) => gate.id === id).finished_at, iso(cohortEnd));
+    assert.equal(buildWith(id, { preflight: (p) => { p.generationMaxAgeMs = 1_800_000; } }).gates.length, 6);
+    // finished_at rounds a fractional capture time up: 30:00.0000 + 0.1 ms is 30:00.001 and is refused; 29:59.9999 rounds to 30:00.000 and passes.
+    const justUnder = `${iso(cohortEnd - 1).slice(0, -1)}9999Z`;
+    assert.equal(buildWith(id, { postflight: (p) => { p.capturedAt = justUnder; } }).gates.find((gate) => gate.id === id).finished_at, iso(cohortEnd));
+    // Without the rounding a fractional capture time would parse (and be recorded) earlier than it happened.
+    assert.equal(buildWith(id, { postflight: (p) => { p.capturedAt = `${iso(endOf(id) + 2000).slice(0, -1)}0001Z`; } }).gates.find((gate) => gate.id === id).finished_at, iso(endOf(id) + 2001));
+});
+
+test('spec 06 also needs a parent result that proves the leak scan and complete cleanup for the same run', () => {
+    const id = 'copilot-live-skills';
+    assert.doesNotThrow(() => buildWith(id, {}));
+    const refused = {
+        'missing parent result': [() => withGate(id, (g) => { delete g.parentResult; }), /parent result/],
+        'parent result is not JSON': [() => withGate(id, (g) => { g.parentResult = Buffer.from('not json'); }), /parent result.*JSON/],
+        'failed parent result': [() => buildWith(id, { parent: (p) => { p.code = 'CLEANUP_INCOMPLETE'; } }), /code/],
+        'parent result without a code': [() => buildWith(id, { parent: (p) => { delete p.code; } }), /code/],
+        'unproven leak scan coverage': [() => buildWith(id, { parent: (p) => { p.leakScanCoverage = 'unproven'; } }), /leakScanCoverage/],
+        'missing leak scan coverage': [() => buildWith(id, { parent: (p) => { delete p.leakScanCoverage; } }), /leakScanCoverage/],
+        'a leak': [() => buildWith(id, { parent: (p) => { p.leaks = 1; } }), /leaks/],
+        'leaks as a list': [() => buildWith(id, { parent: (p) => { p.leaks = ['ACCESS_TOKEN']; } }), /leaks/],
+        'missing leak count': [() => buildWith(id, { parent: (p) => { delete p.leaks; } }), /leaks/],
+        'an undecodable file': [() => buildWith(id, { parent: (p) => { p.undecodable = ['results.json']; } }), /undecodable/],
+        'undecodable count': [() => buildWith(id, { parent: (p) => { p.undecodable = 2; } }), /undecodable/],
+        'missing undecodable list': [() => buildWith(id, { parent: (p) => { delete p.undecodable; } }), /undecodable/],
+        'a cleanup flag false': [() => buildWith(id, { parent: (p) => { p.cleanup.robotDeleted = false; } }), /cleanup/],
+        'a cleanup flag not boolean': [() => buildWith(id, { parent: (p) => { p.cleanup.folderDeleted = 'true'; } }), /cleanup/],
+        'no cleanup flags': [() => buildWith(id, { parent: (p) => { p.cleanup = {}; } }), /cleanup/],
+        'cleanup as a summary string': [() => buildWith(id, { parent: (p) => { p.cleanup = 'complete'; } }), /cleanup/],
+        'missing cleanup': [() => buildWith(id, { parent: (p) => { delete p.cleanup; } }), /cleanup/],
+        'parent result of another run': [() => buildWith(id, { parent: (p) => { p.runId = 'run-another'; } }), /one run id/],
+        'parent result without a run id': [() => buildWith(id, { parent: (p) => { delete p.runId; } }), /run id/],
+    };
+    for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
+    // Extra keys of the parent line are tolerated; only the named keys are read.
+    assert.doesNotThrow(() => buildWith(id, { parent: (p) => { p.command = 'run'; p.exitCode = 0; p.artifactDirectory = '/x'; } }));
+});
+
+test('the cohorts are read from the preflights: one generation per cohort, a different one for each cohort', () => {
+    // Two official gates on different Box generations are refused.
+    const other = (p) => { p.box.containerId = '4'.repeat(64); };
+    assert.throws(() => buildWith('webmeet-room-chat', { preflight: other, postflight: other }), /cohort official-release.*same Box generation/);
+    const later = (p) => { p.box.startedAt = '2026-10-26T10:00:00.001Z'; };
+    assert.throws(() => buildWith('webmeet-room-chat', { preflight: later, postflight: later }), /cohort official-release.*same Box generation/);
+    // Cohorts that share a Box container are refused.
+    const shared = (p) => { p.box.containerId = COHORTS['official-release'].containerId; };
+    for (const id of ['copilot-live-skills', 'optional-agents']) {
+        assert.throws(() => buildWith(id, { preflight: shared, postflight: shared }), /cohorts .* share|distinct Box/);
+    }
+    // 06 and 03 on one generation are refused.
+    const as03 = (p) => { p.box.containerId = COHORTS['optional-defaults-and-activation'].containerId; };
+    assert.throws(() => buildWith('copilot-live-skills', { preflight: as03, postflight: as03 }), /distinct Box|share/);
+    // Each cohort ID is the ledger's.
+    const receipt = receiptFor(`sha256:${'1'.repeat(64)}`);
+    assert.deepEqual(Object.keys(receipt.cohorts).sort(), ['copilot-live-skills', 'official-release', 'optional-defaults-and-activation']);
+});
+
+test('the official cohort runs 05, 30-public, 30-media, 50 in that order without overlap', () => {
+    const [first, second, third, fourth] = OFFICIAL_ORDER;
+    // Control: the default timing is the canonical order.
+    assert.deepEqual(OFFICIAL_ORDER.map((id) => startOf(id)), [...OFFICIAL_ORDER.map((id) => startOf(id))].sort((a, b) => a - b));
+    assert.doesNotThrow(() => buildAcceptanceReceipt(receiptInputs()));
+    // 30-public starts before 05 has finished.
+    assert.throws(() => buildWith(second, withTimes(endOf(first) - 1000, 20_000)), /without overlap/);
+    // 50 runs before 30-media: the recording order of the receipt is not the execution order.
+    assert.throws(() => buildWith(fourth, withTimes(startOf(third) - 60_000, 30_000)), /without overlap/);
+    // 30-media before 30-public.
+    assert.throws(() => buildWith(third, withTimes(startOf(first) + 30_000, 10_000)), /without overlap/);
+    // Touching is not overlapping: a gate may start exactly when the previous finished.
+    const previous = buildAcceptanceReceipt(receiptInputs()).gates.find((gate) => gate.id === first).finished_at;
+    assert.doesNotThrow(() => buildWith(second, withTimes(Date.parse(previous), 20_000)));
+    // 06 and 03 are in their own cohorts, so their timing does not interact with the official sequence.
+    assert.doesNotThrow(() => buildWith('copilot-live-skills', withTimes(cohortStartMs('copilot-live-skills') + MIN, 5 * MIN)));
+});
+
+test('the receipt validator enforces exact keys, counts, selections, cohorts, timing, and distinct evidence', () => {
     const digest = `sha256:${'1'.repeat(64)}`;
     const good = receiptFor(digest);
     assert.doesNotThrow(() => validateAcceptanceReceipt(good));
     const mutate = (change) => { const r = structuredClone(good); change(r); return r; };
     for (const [label, receipt] of Object.entries({
-        schema: mutate((r) => { r.schema = 'ploinky.box.acceptance-receipt/v2'; }),
+        'schema v1': mutate((r) => { r.schema = 'ploinky.box.acceptance-receipt/v1'; }),
         'extra key': mutate((r) => { r.note = 'trust me'; }),
+        'v1 generation key': mutate((r) => { r.generation = 'generation-20261002-1'; }),
         'extra gate key': mutate((r) => { r.gates[0].screenshots = []; }),
         'extra revision': mutate((r) => { r.revisions.other = 'a'.repeat(40); }),
         'missing mcp_sdk_commit': mutate((r) => { delete r.revisions.mcp_sdk_commit; }),
@@ -611,13 +875,60 @@ test('the receipt validator enforces exact keys, counts, selections, and distinc
         'no engine id': mutate((r) => { r.engine_image_ids = {}; }),
         'unknown arch': mutate((r) => { r.engine_image_ids = { s390x: `sha256:${'1'.repeat(64)}` }; }),
         'bad engine id': mutate((r) => { r.engine_image_ids.arm64 = 'sha256:abc'; }),
-        'empty generation': mutate((r) => { r.generation = ''; }),
-        'oversized generation': mutate((r) => { r.generation = 'g'.repeat(500); }),
     })) {
         assert.throws(() => validateAcceptanceReceipt(receipt), label);
     }
+    const refused = {
+        'missing cohorts': [(r) => { delete r.cohorts; }, /cohorts/],
+        'a missing cohort': [(r) => { delete r.cohorts['optional-defaults-and-activation']; }, /cohorts/],
+        'an extra cohort': [(r) => { r.cohorts.extra = structuredClone(r.cohorts['official-release']); r.cohorts.extra.container_id = '8'.repeat(64); }, /cohorts/],
+        'the retired optional-agents cohort id': [(r) => { r.cohorts['optional-agents'] = r.cohorts['optional-defaults-and-activation']; delete r.cohorts['optional-defaults-and-activation']; }, /cohorts/],
+        'cohorts sharing a container': [(r) => { r.cohorts['copilot-live-skills'].container_id = r.cohorts['official-release'].container_id; }, /distinct/],
+        'a malformed container id': [(r) => { r.cohorts['official-release'].container_id = 'abc'; }, /container_id/],
+        'a cohort start that does not round-trip': [(r) => { r.cohorts['official-release'].started_at = '2026-10-26T10:00:00Z'; }, /started_at/],
+        'a gate in the wrong cohort': [(r) => { r.gates[0].cohort = 'copilot-live-skills'; }, /cohort/],
+        'a gate without a cohort': [(r) => { delete r.gates[0].cohort; }, /exactly/],
+        'a gate timestamp that does not round-trip': [(r) => { r.gates[0].started_at = '2026-10-26 10:02:00'; }, /started_at/],
+        'a gate that starts before its cohort': [(r) => { r.gates[0].started_at = '2026-10-26T09:59:59.999Z'; }, /before its cohort/],
+        'a gate that finishes before it starts': [(r) => { r.gates[0].finished_at = '2026-10-26T10:01:59.999Z'; }, /before it started/],
+        'a release gate finishing 30 minutes and 1 ms after its cohort': [(r) => { r.gates[3].finished_at = '2026-10-26T10:30:00.001Z'; }, /within 30 minutes/],
+        'a prerequisite gate finishing 30 minutes and 1 ms after its cohort': [(r) => { r.gates[1].finished_at = '2026-10-26T09:30:00.001Z'; }, /within 30 minutes/],
+        'a missing preflight hash': [(r) => { delete r.gates[0].preflight_sha256; }, /exactly/],
+        'a malformed preflight hash': [(r) => { r.gates[0].preflight_sha256 = 'abc'; }, /preflight digest/],
+        'a reused preflight': [(r) => { r.gates[1].preflight_sha256 = r.gates[0].preflight_sha256; }, /preflight digest is shared/],
+        'a missing postflight hash': [(r) => { delete r.gates[0].postflight_sha256; }, /exactly/],
+        'a reused postflight': [(r) => { r.gates[1].postflight_sha256 = r.gates[0].postflight_sha256; }, /postflight digest is shared/],
+        'spec 06 without its parent result hash': [(r) => { delete r.gates[1].parent_result_sha256; }, /exactly/],
+        'a malformed parent result hash': [(r) => { r.gates[1].parent_result_sha256 = 'abc'; }, /parent result digest/],
+        'a parent result hash on another gate': [(r) => { r.gates[0].parent_result_sha256 = 'a'.repeat(64); }, /exactly/],
+        'official gates that overlap': [(r) => { r.gates[4].started_at = '2026-10-26T10:02:30.000Z'; }, /without overlap/],
+        'official gates out of execution order': [(r) => { [r.gates[3].started_at, r.gates[3].finished_at] = ['2026-10-26T10:07:00.000Z', '2026-10-26T10:08:00.000Z']; }, /without overlap/],
+    };
+    for (const [label, [change, expected]] of Object.entries(refused)) assert.throws(() => validateAcceptanceReceipt(mutate(change)), expected, label);
+    // Exactly 30 minutes passes at the validator as well; a prerequisite cohort is checked like the official one.
+    assert.doesNotThrow(() => validateAcceptanceReceipt(mutate((r) => { r.gates[3].finished_at = '2026-10-26T10:30:00.000Z'; })));
+    assert.doesNotThrow(() => validateAcceptanceReceipt(mutate((r) => { r.gates[1].finished_at = '2026-10-26T09:30:00.000Z'; })));
     assert.throws(() => validateAcceptanceReceipt(null));
     assert.throws(() => validateAcceptanceReceipt([]));
+});
+
+test('a v1 receipt is refused by the validator, the canonical parser and the workflow inputs', async (t) => {
+    const f = await fixture(t);
+    const v2 = JSON.parse(f.env.ACCEPTANCE_RECEIPT_JSON);
+    // The v1 shape: one generation string, five gates without cohorts or timing evidence.
+    const v1 = {
+        schema: 'ploinky.box.acceptance-receipt/v1', candidate: v2.candidate, revisions: v2.revisions, generation: 'generation-20261002-1',
+        engine_image_ids: v2.engine_image_ids,
+        gates: v2.gates.filter(({ id }) => id !== 'webmeet-public-room').map(({ id, spec, tests, passed, failed, skipped, retried, flaky, report_sha256 }) => ({ id, spec, tests, passed, failed, skipped, retried, flaky, report_sha256 })),
+    };
+    const text = canonicalReceiptText(v1);
+    assert.throws(() => validateAcceptanceReceipt(v1), /schema/);
+    assert.throws(() => parseCanonicalReceipt(text), /schema/);
+    assert.throws(() => validateInputs({ ...f.env, ACCEPTANCE_RECEIPT_JSON: text }), /schema/);
+    // The v1 schema string alone on an otherwise v2 receipt is refused too.
+    assert.throws(() => validateAcceptanceReceipt({ ...v2, schema: 'ploinky.box.acceptance-receipt/v1' }), /schema/);
+    // Control: the v2 receipt is accepted.
+    assert.doesNotThrow(() => validateInputs(f.env));
 });
 
 test('the receipt is bound to the candidate digest, source, libraries, and per-architecture engine image', async (t) => {
@@ -1133,7 +1444,7 @@ test('the receipt text is stored exactly as validated: canonical, or rejected', 
     assert.doesNotThrow(() => parseCanonicalReceipt(text));
     const pretty = JSON.stringify(JSON.parse(text), null, 1);
     const reordered = JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(text)).reverse()));
-    const duplicate = text.replace('"generation":', '"generation":"shadowed","generation":');
+    const duplicate = text.replace('"cohorts":', '"cohorts":"shadowed","cohorts":');
     for (const bad of [pretty, reordered, duplicate, `${text}\n`, ` ${text}`]) {
         assert.throws(() => parseCanonicalReceipt(bad), /canonical|JSON/);
         await assert.rejects(f.verify({ env: { ...f.env, ACCEPTANCE_RECEIPT_JSON: bad } }));
@@ -1181,29 +1492,112 @@ test('saved native evidence whose config digest is not its raw image-inspect ID 
     await assert.rejects(f.verify({ imageDefinitionsRoot: definitions, env: { ...f.env, ACCEPTANCE_RECEIPT_JSON: canonicalReceiptText(receipt) } }), /image-inspect|config digest/i);
 });
 
-test('the receipt producer CLI output is accepted as written by validate and by the workflow inputs', async (t) => {
-    const f = await fixture(t);
+// One artifact directory per gate invocation, as `run-playwright` and the C5 parent leave them.
+function artifactDirectories(root, evidence = evidenceSet()) {
+    const directories = {};
+    for (const [id, files] of Object.entries(evidence)) {
+        const dir = path.join(root, 'artifacts', id);
+        fs.mkdirSync(path.join(dir, 'test-results'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'test-results/results.json'), files.report);
+        fs.writeFileSync(path.join(dir, 'profile-preflight_codex.json'), files.preflight);
+        if (files.postflight) fs.writeFileSync(path.join(dir, 'profile-postflight_codex.json'), files.postflight);
+        if (files.parentResult) {
+            fs.mkdirSync(path.join(dir, 'codex-auth'));
+            fs.writeFileSync(path.join(dir, 'codex-auth/parent-result.json'), files.parentResult);
+        }
+        directories[id] = dir;
+    }
+    return directories;
+}
+
+const evidenceArgs = (directories) => Object.entries(directories).flatMap(([id, dir]) => [
+    '--report', `${id}=${path.join(dir, 'test-results/results.json')}`, '--preflight', `${id}=${path.join(dir, 'profile-preflight_codex.json')}`,
+]);
+
+const receiptCli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'images/ploinky-box/acceptance-receipt.mjs'), ...args], { encoding: 'utf8', timeout: 30000 });
+
+function cliFixture(f) {
     const dir = path.join(f.root, 'cli'); fs.mkdirSync(dir);
     writeJson(path.join(dir, 'manifest.json'), releaseManifest());
     writeJson(path.join(dir, 'inspect.json'), imageInspect());
-    const reportArgs = [];
-    for (const [id, bytes] of Object.entries(reportSet())) { fs.writeFileSync(path.join(dir, `${id}.json`), bytes); reportArgs.push('--report', `${id}=${path.join(dir, `${id}.json`)}`); }
-    const cli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'images/ploinky-box/acceptance-receipt.mjs'), ...args], { encoding: 'utf8', timeout: 30000 });
-    const built = cli('build', '--candidate-digest', f.candidateDigest, '--release-manifest', path.join(dir, 'manifest.json'),
-        '--image-inspect', path.join(dir, 'inspect.json'), '--mcp-sdk-commit', SELECTIONS['mcp-sdk'].commit, '--generation', 'generation-20261002-1', ...reportArgs);
+    const base = ['build', '--candidate-digest', f.candidateDigest, '--release-manifest', path.join(dir, 'manifest.json'),
+        '--image-inspect', path.join(dir, 'inspect.json'), '--mcp-sdk-commit', SELECTIONS['mcp-sdk'].commit];
+    return { dir, base };
+}
+
+test('the receipt producer CLI output is accepted as written by validate and by the workflow inputs', async (t) => {
+    const f = await fixture(t);
+    const { dir, base } = cliFixture(f);
+    const built = receiptCli(...base, ...evidenceArgs(artifactDirectories(dir)));
     assert.equal(built.status, 0, built.stderr);
     // The exact bytes of the output file, as a structured process argument or a validated file.
     const file = path.join(dir, 'acceptance-receipt.json');
     fs.writeFileSync(file, built.stdout);
-    assert.equal(cli('validate', file).status, 0);
+    assert.equal(receiptCli('validate', file).status, 0);
+    assert.match(receiptCli('validate', file).stdout, /receipt is well formed and canonical/);
     assert.doesNotThrow(() => validateInputs({ ...f.env, ACCEPTANCE_RECEIPT_JSON: fs.readFileSync(file, 'utf8') }));
     assert.equal(fs.readFileSync(file, 'utf8'), f.env.ACCEPTANCE_RECEIPT_JSON);
     await f.verify({ env: { ...f.env, ACCEPTANCE_RECEIPT_JSON: fs.readFileSync(file, 'utf8') } });
     // One rule everywhere: no trailing newline is emitted, and none is accepted by either path.
     assert.ok(!built.stdout.endsWith('\n'));
     fs.writeFileSync(file, `${built.stdout}\n`);
-    assert.notEqual(cli('validate', file).status, 0);
+    assert.notEqual(receiptCli('validate', file).status, 0);
     assert.throws(() => validateInputs({ ...f.env, ACCEPTANCE_RECEIPT_JSON: `${built.stdout}\n` }), /canonical/);
+});
+
+test('the receipt producer CLI binds each gate to one artifact directory and refuses missing or foreign evidence', async (t) => {
+    const f = await fixture(t);
+    const { dir, base } = cliFixture(f);
+    const directories = artifactDirectories(dir);
+    const args = evidenceArgs(directories);
+    assert.equal(receiptCli(...base, ...args).status, 0, 'the control build must pass');
+    const refused = (label, extra, expected) => {
+        const result = receiptCli(...base, ...extra);
+        assert.notEqual(result.status, 0, label);
+        assert.match(result.stderr, expected, label);
+        assert.equal(result.stdout, '', `${label} must write no receipt`);
+    };
+    // The retired v1 option and unknown options are refused rather than ignored.
+    refused('--generation', [...args, '--generation', 'generation-20261002-1'], /--generation/);
+    refused('unknown option', [...args, '--note', 'trust me'], /--note/);
+    // Exactly one preflight and one report per gate, for exactly the six gates.
+    refused('duplicate preflight', [...args, '--preflight', `copilot-folder-launch=${path.join(directories['copilot-folder-launch'], 'profile-preflight_codex.json')}`], /once per gate/);
+    const withoutPreflight = (skip) => Object.entries(directories).flatMap(([id, dir]) => [
+        '--report', `${id}=${path.join(dir, 'test-results/results.json')}`,
+        ...(id === skip ? [] : ['--preflight', `${id}=${path.join(dir, 'profile-preflight_codex.json')}`]),
+    ]);
+    refused('no preflight', withoutPreflight('onlyoffice-confidential'), /onlyoffice-confidential/);
+    // The postflight and the parent result are read from the preflight's own directory.
+    const postflight = path.join(directories['onlyoffice-confidential'], 'profile-postflight_codex.json');
+    const kept = fs.readFileSync(postflight);
+    fs.rmSync(postflight);
+    refused('missing postflight', args, /gate onlyoffice-confidential: .*postflight/);
+    fs.writeFileSync(postflight, kept);
+    const parent = path.join(directories['copilot-live-skills'], 'codex-auth/parent-result.json');
+    const parentBytes = fs.readFileSync(parent);
+    fs.rmSync(parent);
+    refused('missing parent result', args, /gate copilot-live-skills: .*parent result/);
+    fs.writeFileSync(parent, parentBytes);
+    // A report from another directory, or another file name, is not the report of that invocation.
+    const elsewhere = path.join(dir, 'elsewhere'); fs.mkdirSync(elsewhere);
+    fs.copyFileSync(path.join(directories['onlyoffice-confidential'], 'test-results/results.json'), path.join(elsewhere, 'results.json'));
+    refused('report outside the artifact directory', args.map((value) => value.startsWith('onlyoffice-confidential=') && value.endsWith('results.json') ? `onlyoffice-confidential=${path.join(elsewhere, 'results.json')}` : value), /gate onlyoffice-confidential: .*artifact directory/);
+    // A preflight under another name is refused too.
+    const renamed = path.join(directories['onlyoffice-confidential'], 'preflight.json');
+    fs.copyFileSync(path.join(directories['onlyoffice-confidential'], 'profile-preflight_codex.json'), renamed);
+    refused('renamed preflight', args.map((value) => value.startsWith('onlyoffice-confidential=') && value.endsWith('preflight_codex.json') ? `onlyoffice-confidential=${renamed}` : value), /profile-preflight_codex\.json/);
+    // A symbolic link is not evidence.
+    const linked = path.join(directories['copilot-folder-launch'], 'profile-postflight_codex.json');
+    const linkedBytes = fs.readFileSync(linked);
+    fs.rmSync(linked);
+    fs.symlinkSync(path.join(directories['onlyoffice-confidential'], 'profile-postflight_codex.json'), linked);
+    refused('symlinked postflight', args, /regular file/);
+    fs.rmSync(linked);
+    fs.writeFileSync(linked, linkedBytes);
+    assert.equal(receiptCli(...base, ...args).status, 0, 'the restored evidence builds again');
+    // A swapped postflight is a different run, and the CLI reports it as such.
+    fs.writeFileSync(postflight, fs.readFileSync(linked));
+    refused('postflight of another invocation', args, /one run id/);
 });
 
 test('the repository publication instructions describe the promotion path and its limits', () => {

@@ -1,29 +1,42 @@
 // Producer and validator of the bounded browser-acceptance receipt that the
 // promotion-only workflow takes as its operator attestation.
 //
-// The receipt is a small, data-only JSON document in canonical form (sorted keys,
-// no whitespace). The producer builds it from three saved inputs of one local
-// acceptance run: the Playwright JSON reports of the five acceptance phases, the
-// release manifest, and the engine's `image inspect` (Docker or Podman) of the Box
-// image that run deployed. It refuses to produce a receipt unless every phase
-// report shows only passed tests: exactly one for each of the three release gates,
-// at least one for the two prerequisite phases, and in every case no failed,
-// skipped, retried, or flaky test.
+// The receipt (schema v2) is a small, data-only JSON document in canonical form
+// (sorted keys, no whitespace). The producer builds it from the saved evidence of
+// six gate invocations, the release manifest, and the engine's `image inspect`
+// (Docker or Podman) of the Box image those runs deployed. Each invocation leaves
+// one artifact directory holding `profile-preflight_codex.json` (written before
+// the browser starts), `test-results/results.json` (the Playwright JSON report),
+// `profile-postflight_codex.json` (written as the runner's last action, and only
+// after a fully successful run) and, for spec 06, `codex-auth/parent-result.json`
+// (the C5 parent's verdict). The producer refuses to produce a receipt unless every
+// report shows only passed tests (exactly one for each of the four release gates,
+// at least one for the two prerequisite gates, and in every case no failed,
+// skipped, retried, or flaky test) and unless the preflight, report and
+// postflight of every gate share one run id and one Box identity.
+//
+// The Box generation is observed, not typed: each cohort's container ID and start
+// time come from its preflights. The six gates fall into three cohorts, which use
+// the acceptance ledger's cohort IDs: `official-release` (05, 30-public, 30-media
+// and 50, executed in that order without overlap on one generation),
+// `copilot-live-skills` (06) and `optional-defaults-and-activation` (03). Every
+// cohort is its own fresh Box generation, and every gate finishes within 30
+// minutes of its cohort's Box start.
 //
 // What this does NOT do: neither the producer nor the validator can prove that
 // the saved reports describe a real browser run, or that the receipt was built
-// from them. The workflow validates the receipt's identity, counts, and
-// selections and binds it to the candidate (digest, revisions, per-architecture
-// engine image). Its truth rests on the authorized operator who retained and
-// inspected the raw reports (their SHA-256 digests are recorded here) before
-// dispatching the promotion.
+// from them. The workflow validates the receipt's identity, counts, selections,
+// cohorts and timing and binds it to the candidate (digest, revisions,
+// per-architecture engine image). Its truth rests on the authorized operator who
+// retained and inspected the raw evidence (their SHA-256 digests are recorded
+// here) before dispatching the promotion.
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const RECEIPT_SCHEMA = 'ploinky.box.acceptance-receipt/v1';
+export const RECEIPT_SCHEMA = 'ploinky.box.acceptance-receipt/v2';
 export const MAX_RECEIPT_BYTES = 16 * 1024;
 const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;
@@ -31,9 +44,15 @@ const ARCHITECTURES = ['amd64', 'arm64'];
 const COMMIT = /^[0-9a-f]{40}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
-const GENERATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const CANONICAL_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/;
 const REVISION_KEYS = ['achilles_agent_lib', 'achilles_cli', 'explorer', 'mcp_sdk_commit', 'ploinky'];
-const GATE_KEYS = ['failed', 'flaky', 'id', 'passed', 'report_sha256', 'retried', 'skipped', 'spec', 'tests'];
+const GATE_KEYS = ['cohort', 'failed', 'finished_at', 'flaky', 'id', 'passed', 'postflight_sha256', 'preflight_sha256', 'report_sha256', 'retried', 'skipped', 'spec', 'started_at', 'tests'];
+const PARENT_RESULT_KEY = 'parent_result_sha256';
+const COHORT_KEYS = ['container_id', 'started_at'];
+const MAX_EVIDENCE_BYTES = 1024 * 1024;
+const MAX_GENERATION_AGE_MS = 1_800_000;
 const MAX_PREREQUISITE_TESTS = 20;
 const MAX_TITLE_LENGTH = 300;
 // The manifest component names are the ones the Ploinky release verifier accepts.
@@ -41,34 +60,54 @@ const MANIFEST_REVISIONS = {
     achillesAgentLib: 'achilles_agent_lib', achillesCLI: 'achilles_cli', explorer: 'explorer', ploinky: 'ploinky',
 };
 
-// Each gate is one spec file and the exact title of its release test. The three
-// release gates (05, 50, 30) are one-test selections. The two prerequisite phases
-// (06 live skills, 03 Marketplace activation) run before them and may hold more
-// than one test; their receipt records every selected title and the count.
-// PHASES is the mandatory order of the five-phase acceptance sequence.
+// Each gate is one spec file, the exact title of its test and the cohort (Box
+// generation) it runs in. The four release gates (05, 50, 30-public, 30-media) are
+// one-test selections. The two prerequisite gates (06 live skills, 03 Marketplace
+// activation) may hold more than one test; their receipt records every selected
+// title and the count. Cohort IDs are the acceptance ledger's.
+export const COHORT_IDS = Object.freeze(['official-release', 'copilot-live-skills', 'optional-defaults-and-activation']);
 export const GATE_SELECTIONS = Object.freeze({
     'copilot-folder-launch': Object.freeze({
-        kind: 'release', spec: 'specs/05-copilot-folder-launch.spec.mjs', test: 'opens a working Copilot from a newly created folder',
+        kind: 'release', cohort: 'official-release', spec: 'specs/05-copilot-folder-launch.spec.mjs', test: 'opens a working Copilot from a newly created folder',
     }),
     'copilot-live-skills': Object.freeze({
-        kind: 'prerequisite', spec: 'specs/06-copilot-live-skills.spec.mjs',
+        kind: 'prerequisite', cohort: 'copilot-live-skills', spec: 'specs/06-copilot-live-skills.spec.mjs',
         test: 'one native conversation consumes local edits, additions, disable, re-enable and deletion',
     }),
     'optional-agents': Object.freeze({
-        kind: 'prerequisite', spec: 'specs/03-optional-agents.spec.mjs',
-        test: 'OnlyOffice, Scribe, and STT start disabled and can be enabled through Marketplace',
+        kind: 'prerequisite', cohort: 'optional-defaults-and-activation', spec: 'specs/03-optional-agents.spec.mjs',
+        test: 'OnlyOffice, Scribe, STT, and Umami start disabled and can be enabled through Marketplace',
     }),
     'onlyoffice-confidential': Object.freeze({
-        kind: 'release', spec: 'specs/50-onlyoffice-dpu.spec.mjs',
+        kind: 'release', cohort: 'official-release', spec: 'specs/50-onlyoffice-dpu.spec.mjs',
         test: 'Explorer-created Confidential document saves through callback, drains, and reopens after targeted restart',
     }),
+    'webmeet-public-room': Object.freeze({
+        kind: 'release', cohort: 'official-release', spec: 'specs/30-webmeet-room-chat.spec.mjs',
+        test: 'standalone loader serves the authenticated dashboard and a guest invitation',
+    }),
     'webmeet-room-chat': Object.freeze({
-        kind: 'release', spec: 'specs/30-webmeet-room-chat.spec.mjs', test: 'two Explorer accounts can join one room and exchange chat',
+        kind: 'release', cohort: 'official-release', spec: 'specs/30-webmeet-room-chat.spec.mjs', test: 'two Explorer accounts can join one room and exchange chat',
     }),
 });
-export const PHASES = Object.freeze(['copilot-folder-launch', 'copilot-live-skills', 'optional-agents', 'onlyoffice-confidential', 'webmeet-room-chat']);
+// PHASES is the order the receipt records its gates in: 05, 06, 03, 50, 30-public, 30-media. It is a
+// recording order, not the execution order. The official cohort runs 05, 30-public, 30-media, 50 on one
+// Box generation, one gate after the other without overlap (OFFICIAL_EXECUTION_ORDER); 06 and 03 each
+// run on their own fresh generation.
+export const PHASES = Object.freeze(['copilot-folder-launch', 'copilot-live-skills', 'optional-agents', 'onlyoffice-confidential', 'webmeet-public-room', 'webmeet-room-chat']);
+export const OFFICIAL_EXECUTION_ORDER = Object.freeze(['copilot-folder-launch', 'webmeet-public-room', 'webmeet-room-chat', 'onlyoffice-confidential']);
 export const REQUIRED_GATES = PHASES;
 export const RELEASE_GATES = Object.freeze(PHASES.filter((id) => GATE_SELECTIONS[id].kind === 'release'));
+// Every gate must finish within this long of its cohort's Box start (the generation cap of the acceptance profile).
+export const COHORT_WINDOW_MS = 30 * 60_000;
+const OFFICIAL_COHORT = 'official-release';
+const PARENT_RESULT_GATE = 'copilot-live-skills';
+
+// File names inside the artifact directory of one gate invocation.
+export const PREFLIGHT_FILE = 'profile-preflight_codex.json';
+export const POSTFLIGHT_FILE = 'profile-postflight_codex.json';
+export const REPORT_FILE = 'test-results/results.json';
+export const PARENT_RESULT_FILE = 'codex-auth/parent-result.json';
 
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -76,6 +115,29 @@ const isPlainObject = (value) => value !== null && typeof value === 'object' && 
 function exactKeys(value, keys, label) {
     assert.ok(isPlainObject(value), `${label} must be an object`);
     assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), `${label} must contain exactly ${[...keys].sort().join(', ')}`);
+}
+
+/**
+ * Milliseconds since the epoch of an ISO-8601 UTC instant with at most nine fractional digits. Digits
+ * beyond the millisecond are rounded `up` (a capture or finish time must never be recorded earlier than
+ * it happened) or `down` (a start time must never be recorded later).
+ */
+function instantMs(text, label, rounding) {
+    const match = typeof text === 'string' ? ISO_INSTANT.exec(text) : null;
+    assert.ok(match, `${label} is not an ISO-8601 UTC timestamp`);
+    const fraction = (match[2] ?? '').padEnd(9, '0');
+    const whole = `${match[1]}.${fraction.slice(0, 3)}Z`;
+    const milliseconds = Date.parse(whole);
+    assert.ok(Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === whole, `${label} is not a valid timestamp`);
+    return milliseconds + (rounding === 'up' && /[1-9]/.test(fraction.slice(3)) ? 1 : 0);
+}
+
+/** A receipt timestamp: milliseconds, `Z`, and exactly the text `Date` would print. */
+function canonicalInstantMs(text, label) {
+    assert.ok(typeof text === 'string' && CANONICAL_INSTANT.test(text), `${label} is not a canonical ISO timestamp`);
+    const milliseconds = Date.parse(text);
+    assert.ok(Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === text, `${label} is not a canonical ISO timestamp`);
+    return milliseconds;
 }
 
 /**
@@ -132,7 +194,13 @@ export function summarizePlaywrightReport(report, gateId) {
         { expected: titles.length, unexpected: 0, flaky: 0, skipped: 0 }, `gate ${gateId}: report stats do not match the passed tests`);
     assert.deepEqual(counts, { passed: titles.length, failed: 0, skipped: 0, retried: 0, flaky: 0 },
         `gate ${gateId}: every selected test must pass, with no failed, skipped, retried, or flaky test`);
-    return { ...counts, spec: selection.spec, tests: [...titles].sort() };
+    // The run this report belongs to and when it ran: Playwright's `config.metadata.runId` (set from SMOKE_RUN_ID)
+    // and its `stats.startTime` and `stats.duration`. A fractional duration rounds up to the next millisecond.
+    const runId = parsed.config?.metadata?.runId;
+    assert.ok(typeof runId === 'string' && RUN_ID.test(runId), `gate ${gateId}: the report has no run id (config.metadata.runId)`);
+    const startMs = instantMs(stats.startTime, `gate ${gateId}: the report stats.startTime`, 'down');
+    assert.ok(typeof stats.duration === 'number' && Number.isFinite(stats.duration) && stats.duration >= 0, `gate ${gateId}: the report stats.duration is malformed`);
+    return { ...counts, spec: selection.spec, tests: [...titles].sort(), runId, startMs, endMs: startMs + Math.ceil(stats.duration) };
 }
 
 function validateManifest(manifest) {
@@ -169,15 +237,81 @@ export function engineImageId(image) {
     return ids[0];
 }
 
+const toBytes = (value) => (Buffer.isBuffer(value) ? value : Buffer.from(String(value)));
+
+/** One of the small JSON artifacts of a gate invocation, parsed as a plain object. */
+function parseEvidence(value, gateId, label) {
+    assert.ok(value !== undefined && value !== null, `gate ${gateId}: the ${label} is required`);
+    const bytes = toBytes(value);
+    assert.ok(bytes.length > 0 && bytes.length <= MAX_EVIDENCE_BYTES, `gate ${gateId}: the ${label} size is out of bounds`);
+    let parsed;
+    try { parsed = JSON.parse(bytes.toString('utf8')); } catch { assert.fail(`gate ${gateId}: the ${label} is not JSON`); }
+    assert.ok(isPlainObject(parsed), `gate ${gateId}: the ${label} must be a JSON object`);
+    return { bytes, value: parsed };
+}
+
+function runIdOf(evidence, gateId, label) {
+    assert.ok(typeof evidence.runId === 'string' && RUN_ID.test(evidence.runId), `gate ${gateId}: the ${label} has no run id (runId)`);
+    return evidence.runId;
+}
+
+/** The Box generation a preflight or postflight observed: `box.containerId`, `box.startedAt` and `box.imageId`. */
+function readBox(evidence, gateId, label) {
+    assert.ok(isPlainObject(evidence.box), `gate ${gateId}: the ${label} has no Box identity (box)`);
+    const { containerId, startedAt, imageId } = evidence.box;
+    assert.ok(typeof containerId === 'string' && HEX64.test(containerId), `gate ${gateId}: the ${label} box.containerId is malformed`);
+    const startedAtMs = instantMs(startedAt, `gate ${gateId}: the ${label} box.startedAt`, 'down');
+    assert.ok(typeof imageId === 'string', `gate ${gateId}: the ${label} box.imageId is malformed`);
+    return { containerId, startedAtMs, imageId: engineImageId({ Id: imageId }) };
+}
+
+/** The preflight must describe this candidate under the 30-minute generation cap; it returns the Box it observed. */
+function checkPreflight(preflight, gateId, manifest, imageId) {
+    assert.equal(preflight.ledgerCoverage, 'selected-ledger-identities', `gate ${gateId}: the preflight ledgerCoverage is not selected-ledger-identities`);
+    assert.ok(Number.isInteger(preflight.generationMaxAgeMs) && preflight.generationMaxAgeMs > 0, `gate ${gateId}: the preflight generationMaxAgeMs must be a positive integer`);
+    assert.ok(preflight.generationMaxAgeMs <= MAX_GENERATION_AGE_MS, `gate ${gateId}: the preflight generationMaxAgeMs exceeds the ${MAX_GENERATION_AGE_MS} ms generation cap`);
+    const box = readBox(preflight, gateId, 'preflight');
+    assert.equal(box.imageId, imageId, `gate ${gateId}: the preflight Box image is not the engine image`);
+    assert.ok(isPlainObject(preflight.repositories), `gate ${gateId}: the preflight has no repositories`);
+    for (const name of Object.keys(MANIFEST_REVISIONS)) {
+        const commit = preflight.repositories[name]?.commit;
+        assert.ok(typeof commit === 'string' && COMMIT.test(commit), `gate ${gateId}: the preflight has no ${name} commit`);
+        assert.equal(commit, manifest.revisions[MANIFEST_REVISIONS[name]], `gate ${gateId}: the preflight ${name} commit differs from the release manifest`);
+    }
+    return box;
+}
+
+/**
+ * The C5 parent's verdict for spec 06: code OK, a proven leak scan with no leaks and no undecodable files,
+ * and every cleanup flag true. `leaks` and `undecodable` may be a count or a list; only zero or empty passes.
+ */
+function checkParentResult(parent, gateId) {
+    const none = (value) => value === 0 || (Array.isArray(value) && value.length === 0);
+    assert.equal(parent.code, 'OK', `gate ${gateId}: the parent result code is not OK`);
+    assert.equal(parent.leakScanCoverage, 'proven', `gate ${gateId}: the parent result leakScanCoverage is not proven`);
+    assert.ok(none(parent.leaks), `gate ${gateId}: the parent result does not report zero leaks`);
+    assert.ok(none(parent.undecodable), `gate ${gateId}: the parent result does not report zero undecodable files`);
+    assert.ok(isPlainObject(parent.cleanup) && Object.keys(parent.cleanup).length > 0 && Object.values(parent.cleanup).every((flag) => flag === true),
+        `gate ${gateId}: the parent result cleanup flags are not all true`);
+}
+
 /**
  * Build the receipt for one acceptance run.
+ *
+ * `gates` holds, for each of the six gates, the raw bytes of the Playwright JSON `report`, the `preflight`
+ * (`profile-preflight_codex.json`), the `postflight` (`profile-postflight_codex.json`) and, for spec 06 only,
+ * the `parentResult` (`codex-auth/parent-result.json`). Per gate the producer requires one run id across all of
+ * them, a postflight with `exitCode` 0 on the Box the preflight observed, a preflight captured before the
+ * test started and a postflight captured after the report finished. `finished_at` is the postflight's capture
+ * time (rounded up to the millisecond). Gates of one cohort must share one Box generation, and cohorts must
+ * use different generations.
  *
  * `imageInspect` is the engine's `image inspect` array for the Box image the
  * acceptance fixture deployed; its image ID must be the release manifest's Box
  * digest. That is the engine-observed image ID of one architecture, never the
  * registry index digest.
  */
-export function buildAcceptanceReceipt({ candidateDigest, releaseManifest, imageInspect, mcpSdkCommit, generation, reports }) {
+export function buildAcceptanceReceipt({ candidateDigest, releaseManifest, imageInspect, mcpSdkCommit, gates }) {
     assert.match(candidateDigest, DIGEST, 'the candidate must be an immutable sha256 digest, not a tag');
     const manifest = validateManifest(releaseManifest);
     assert.ok(Array.isArray(imageInspect) && imageInspect.length === 1, 'image evidence must hold exactly one image');
@@ -187,52 +321,110 @@ export function buildAcceptanceReceipt({ candidateDigest, releaseManifest, image
     const imageId = engineImageId(image);
     assert.equal(imageId, manifest.engineImageId, 'the engine image ID differs from the release manifest Box digest');
     assert.match(mcpSdkCommit, COMMIT, 'mcp_sdk_commit must be an exact commit');
-    assert.match(generation, GENERATION, 'the generation identifier is malformed');
-    assert.ok(isPlainObject(reports), 'gate reports are required');
-    for (const id of Object.keys(reports)) assert.ok(GATE_SELECTIONS[id], `unknown gate ${id}`);
-    for (const id of REQUIRED_GATES) assert.ok(reports[id], `required gate ${id} has no report`);
-    const gates = PHASES.map((id) => {
-        const bytes = Buffer.isBuffer(reports[id]) ? reports[id] : Buffer.from(String(reports[id]));
-        const { passed, failed, skipped, retried, flaky, spec, tests } = summarizePlaywrightReport(bytes, id);
-        return { id, spec, tests, passed, failed, skipped, retried, flaky, report_sha256: sha256(bytes) };
+    assert.ok(isPlainObject(gates), 'gate evidence is required');
+    for (const id of Object.keys(gates)) assert.ok(GATE_SELECTIONS[id], `unknown gate ${id}`);
+    for (const id of REQUIRED_GATES) assert.ok(isPlainObject(gates[id]), `required gate ${id} has no evidence`);
+    const observed = PHASES.map((id) => {
+        const evidence = gates[id];
+        assert.ok(evidence.report !== undefined && evidence.report !== null, `gate ${id}: the report is required`);
+        const reportBytes = toBytes(evidence.report);
+        const { passed, failed, skipped, retried, flaky, spec, tests, runId, startMs, endMs } = summarizePlaywrightReport(reportBytes, id);
+        const preflight = parseEvidence(evidence.preflight, id, `preflight (${PREFLIGHT_FILE})`);
+        const postflight = parseEvidence(evidence.postflight, id, `postflight (${POSTFLIGHT_FILE})`);
+        const needsParent = id === PARENT_RESULT_GATE;
+        assert.ok(needsParent || evidence.parentResult === undefined, `gate ${id}: a parent result belongs to spec 06 only`);
+        const parent = needsParent ? parseEvidence(evidence.parentResult, id, `parent result (${PARENT_RESULT_FILE})`) : null;
+        // One run: the report, preflight, postflight (and parent result) name the same run id.
+        const runIds = [runId, runIdOf(preflight.value, id, 'preflight'), runIdOf(postflight.value, id, 'postflight'), ...(parent ? [runIdOf(parent.value, id, 'parent result')] : [])];
+        assert.ok(runIds.every((value) => value === runIds[0]),
+            `gate ${id}: the report, preflight, postflight${parent ? ' and parent result' : ''} do not share one run id`);
+        const box = checkPreflight(preflight.value, id, manifest, imageId);
+        // The terminal verdict: the runner writes the postflight last, and only after exit code 0.
+        assert.strictEqual(postflight.value.exitCode, 0, `gate ${id}: the postflight exitCode is not 0`);
+        const after = readBox(postflight.value, id, 'postflight');
+        assert.ok(after.containerId === box.containerId && after.startedAtMs === box.startedAtMs && after.imageId === box.imageId,
+            `gate ${id}: the postflight Box identity differs from the preflight`);
+        assert.ok(instantMs(preflight.value.capturedAt, `gate ${id}: the preflight capturedAt`, 'up') <= startMs, `gate ${id}: the preflight was captured after the test started`);
+        const finishedMs = instantMs(postflight.value.capturedAt, `gate ${id}: the postflight capturedAt`, 'up');
+        assert.ok(finishedMs >= endMs, `gate ${id}: the postflight was captured before the report finished`);
+        if (parent) checkParentResult(parent.value, id);
+        const entry = {
+            id, cohort: GATE_SELECTIONS[id].cohort, spec, tests, passed, failed, skipped, retried, flaky, report_sha256: sha256(reportBytes),
+            preflight_sha256: sha256(preflight.bytes), postflight_sha256: sha256(postflight.bytes),
+            started_at: new Date(startMs).toISOString(), finished_at: new Date(finishedMs).toISOString(),
+            ...(parent ? { [PARENT_RESULT_KEY]: sha256(parent.bytes) } : {}),
+        };
+        return { entry, box, runId };
     });
+    // Every invocation is its own run.
+    for (const [index, { runId }] of observed.entries()) {
+        const other = observed.findIndex((candidate, at) => at > index && candidate.runId === runId);
+        assert.ok(other < 0, `gates ${PHASES[index]} and ${PHASES[other]} share one run id; every invocation needs a distinct run id`);
+    }
+    // Every cohort is one Box generation, read from its gates' preflights.
+    const cohorts = {};
+    for (const cohort of COHORT_IDS) {
+        const members = observed.filter(({ entry }) => entry.cohort === cohort);
+        const [first] = members;
+        assert.ok(members.every(({ box }) => box.containerId === first.box.containerId && box.startedAtMs === first.box.startedAtMs),
+            `cohort ${cohort}: its gates were not observed on the same Box generation (container and start time)`);
+        cohorts[cohort] = { container_id: first.box.containerId, started_at: new Date(first.box.startedAtMs).toISOString() };
+    }
     return validateAcceptanceReceipt({
         schema: RECEIPT_SCHEMA,
         candidate: { digest: candidateDigest },
         revisions: { ...manifest.revisions, mcp_sdk_commit: mcpSdkCommit },
-        generation,
+        cohorts,
         engine_image_ids: { [image.Architecture]: imageId },
-        gates,
+        gates: observed.map(({ entry }) => entry),
     });
 }
 
 /**
- * Validate a receipt's own shape, counts, and gate selections. The checks that
+ * Validate a receipt's own shape, counts, gate selections, cohorts and timing. The checks that
  * bind it to a candidate (digest, revisions, engine image IDs) are made by the
  * promotion verifier against the candidate's evidence.
  */
 export function validateAcceptanceReceipt(receipt) {
-    exactKeys(receipt, ['candidate', 'engine_image_ids', 'gates', 'generation', 'revisions', 'schema'], 'receipt');
-    assert.equal(receipt.schema, RECEIPT_SCHEMA, 'receipt schema is not supported');
+    assert.ok(isPlainObject(receipt), 'receipt must be an object');
+    assert.equal(receipt.schema, RECEIPT_SCHEMA, `receipt schema is not supported: only ${RECEIPT_SCHEMA} is accepted, and a v1 receipt must be rebuilt from the per-gate evidence`);
+    exactKeys(receipt, ['candidate', 'cohorts', 'engine_image_ids', 'gates', 'revisions', 'schema'], 'receipt');
     exactKeys(receipt.candidate, ['digest'], 'receipt candidate');
     assert.match(receipt.candidate.digest, DIGEST, 'receipt candidate must be an immutable sha256 digest');
     exactKeys(receipt.revisions, REVISION_KEYS, 'receipt revisions');
     for (const key of REVISION_KEYS) assert.match(receipt.revisions[key], COMMIT, `receipt revision ${key} must be an exact commit`);
-    assert.ok(typeof receipt.generation === 'string' && GENERATION.test(receipt.generation), 'receipt generation is malformed');
     assert.ok(isPlainObject(receipt.engine_image_ids), 'receipt engine_image_ids must be an object');
     const architectures = Object.keys(receipt.engine_image_ids);
     assert.ok(architectures.length > 0 && architectures.every((arch) => ARCHITECTURES.includes(arch)), 'receipt engine image IDs must name amd64 and/or arm64');
     for (const arch of architectures) assert.match(receipt.engine_image_ids[arch], DIGEST, `receipt engine image ID for ${arch} is malformed`);
+    // Exactly the three cohorts, each a distinct Box generation with a canonical start time.
+    exactKeys(receipt.cohorts, COHORT_IDS, 'receipt cohorts');
+    const cohortStart = {};
+    for (const cohort of COHORT_IDS) {
+        exactKeys(receipt.cohorts[cohort], COHORT_KEYS, `receipt cohort ${cohort}`);
+        assert.match(receipt.cohorts[cohort].container_id, HEX64, `cohort ${cohort}: container_id is malformed`);
+        cohortStart[cohort] = canonicalInstantMs(receipt.cohorts[cohort].started_at, `cohort ${cohort}: started_at`);
+    }
+    for (const [index, cohort] of COHORT_IDS.entries()) {
+        for (const other of COHORT_IDS.slice(index + 1)) {
+            assert.notEqual(receipt.cohorts[cohort].container_id, receipt.cohorts[other].container_id,
+                `cohorts ${cohort} and ${other} share one Box container; every cohort needs its own distinct Box generation`);
+        }
+    }
     assert.ok(Array.isArray(receipt.gates) && receipt.gates.length <= PHASES.length, 'receipt gates are malformed');
     const seen = new Set();
-    const reportHashes = new Set();
+    const hashes = { report_sha256: new Set(), preflight_sha256: new Set(), postflight_sha256: new Set() };
+    const timing = {};
     for (const gate of receipt.gates) {
-        exactKeys(gate, GATE_KEYS, 'receipt gate');
+        assert.ok(isPlainObject(gate), 'receipt gate must be an object');
         const selection = GATE_SELECTIONS[gate.id];
         assert.ok(selection, `receipt names an unknown gate ${gate.id}`);
+        // Spec 06 alone records the parent result's digest.
+        exactKeys(gate, gate.id === PARENT_RESULT_GATE ? [...GATE_KEYS, PARENT_RESULT_KEY] : GATE_KEYS, 'receipt gate');
         assert.ok(!seen.has(gate.id), `receipt names gate ${gate.id} twice`);
         seen.add(gate.id);
         assert.equal(gate.spec, selection.spec, `gate ${gate.id}: spec is not the required selection`);
+        assert.equal(gate.cohort, selection.cohort, `gate ${gate.id}: cohort is not the required selection`);
         assert.ok(Array.isArray(gate.tests) && gate.tests.length >= 1 && gate.tests.length <= MAX_PREREQUISITE_TESTS
             && gate.tests.every((title) => typeof title === 'string' && title.length > 0 && title.length <= MAX_TITLE_LENGTH)
             && new Set(gate.tests).size === gate.tests.length, `gate ${gate.id}: tests are malformed`);
@@ -243,12 +435,29 @@ export function validateAcceptanceReceipt(receipt) {
         for (const [field, expected] of [['passed', passed], ['failed', 0], ['skipped', 0], ['retried', 0], ['flaky', 0]]) {
             assert.ok(Number.isInteger(gate[field]) && gate[field] === expected, `gate ${gate.id}: ${field} must be exactly ${expected}`);
         }
-        assert.match(gate.report_sha256, HEX64, `gate ${gate.id}: report digest is malformed`);
-        assert.ok(!reportHashes.has(gate.report_sha256), `gate ${gate.id}: report digest is shared with another gate`);
-        reportHashes.add(gate.report_sha256);
+        for (const [field, label] of [['report_sha256', 'report'], ['preflight_sha256', 'preflight'], ['postflight_sha256', 'postflight']]) {
+            assert.match(gate[field], HEX64, `gate ${gate.id}: ${label} digest is malformed`);
+            assert.ok(!hashes[field].has(gate[field]), `gate ${gate.id}: ${label} digest is shared with another gate`);
+            hashes[field].add(gate[field]);
+        }
+        if (gate.id === PARENT_RESULT_GATE) assert.match(gate[PARENT_RESULT_KEY], HEX64, `gate ${gate.id}: parent result digest is malformed`);
+        // The gate ran inside its cohort's 30-minute window, measured from the Box start.
+        const startedMs = canonicalInstantMs(gate.started_at, `gate ${gate.id}: started_at`);
+        const finishedMs = canonicalInstantMs(gate.finished_at, `gate ${gate.id}: finished_at`);
+        const windowStart = cohortStart[selection.cohort];
+        assert.ok(startedMs >= windowStart, `gate ${gate.id}: started_at is before its cohort started`);
+        assert.ok(finishedMs >= startedMs, `gate ${gate.id}: finished_at is before it started`);
+        assert.ok(finishedMs <= windowStart + COHORT_WINDOW_MS, `gate ${gate.id}: finished_at is not within 30 minutes of its cohort start`);
+        timing[gate.id] = { startedMs, finishedMs };
     }
     for (const id of REQUIRED_GATES) assert.ok(seen.has(id), `required gate ${id} is missing`);
     assert.deepEqual(receipt.gates.map(({ id }) => id), [...PHASES], 'receipt gates are not in the mandatory phase order');
+    // The official cohort executes 05, 30-public, 30-media, 50 one after the other: each starts when, or after, the previous finished.
+    for (const [index, id] of OFFICIAL_EXECUTION_ORDER.slice(1).entries()) {
+        const previous = OFFICIAL_EXECUTION_ORDER[index];
+        assert.ok(timing[id].startedMs >= timing[previous].finishedMs,
+            `${OFFICIAL_COHORT} gate ${id} starts before gate ${previous} finished; the gates must run in the order ${OFFICIAL_EXECUTION_ORDER.join(', ')} without overlap`);
+    }
     return receipt;
 }
 
@@ -283,29 +492,79 @@ function readBounded(file, limit, label) {
     return fs.readFileSync(file);
 }
 
-function option(args, name, { multiple = false } = {}) {
-    const values = [];
-    for (let i = 0; i < args.length; i += 1) if (args[i] === name) values.push(args[i + 1]);
-    assert.ok(multiple ? values.length > 0 : values.length === 1, `${name} is required${multiple ? '' : ' exactly once'}`);
-    return multiple ? values : values[0];
+/** A file the artifact directory may lack: absent is `undefined`, anything else must be a bounded regular file. */
+function readOptional(file, limit, label) {
+    try { fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
+    return readBounded(file, limit, label);
+}
+
+/**
+ * Read one gate's evidence from its artifact directory. The preflight names the directory; the report must be
+ * `test-results/results.json` in the same directory, and the postflight (and for spec 06 the parent result) are
+ * read from it too. A missing postflight or parent result is left out so that the producer refuses the gate.
+ */
+export function readGateEvidence(id, { reportPath, preflightPath }) {
+    assert.ok(GATE_SELECTIONS[id], `unknown gate ${id}`);
+    assert.equal(path.basename(preflightPath), PREFLIGHT_FILE, `gate ${id}: the preflight must be named ${PREFLIGHT_FILE}`);
+    const directory = fs.realpathSync(path.dirname(preflightPath));
+    assert.ok(path.basename(reportPath) === path.basename(REPORT_FILE) && fs.realpathSync(path.dirname(reportPath)) === path.join(directory, path.dirname(REPORT_FILE)),
+        `gate ${id}: the report must be ${REPORT_FILE} in the artifact directory of its preflight`);
+    return {
+        report: readBounded(reportPath, MAX_INPUT_BYTES, `gate ${id}: report`),
+        preflight: readBounded(path.join(directory, PREFLIGHT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: preflight`),
+        postflight: readOptional(path.join(directory, POSTFLIGHT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: postflight`),
+        ...(id === PARENT_RESULT_GATE ? { parentResult: readOptional(path.join(directory, PARENT_RESULT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: parent result`) } : {}),
+    };
+}
+
+const BUILD_OPTIONS = ['--candidate-digest', '--release-manifest', '--image-inspect', '--mcp-sdk-commit', '--report', '--preflight'];
+
+/** Option/value pairs only: an unknown option, including the retired `--generation`, is an error, never ignored. */
+function buildOptions(args) {
+    const values = new Map(BUILD_OPTIONS.map((name) => [name, []]));
+    for (let i = 0; i < args.length; i += 2) {
+        const name = args[i];
+        assert.ok(name !== '--generation', '--generation was removed in receipt v2: the Box generation of each cohort is read from the --preflight evidence');
+        assert.ok(values.has(name), `unknown option ${name}`);
+        assert.ok(i + 1 < args.length, `${name} needs a value`);
+        values.get(name).push(args[i + 1]);
+    }
+    return values;
+}
+
+function gateFiles(entries, name) {
+    const files = {};
+    for (const entry of entries) {
+        const [id, file] = entry.split(/=(.*)/s);
+        assert.ok(id && file && !(id in files), `${name} must be <gate-id>=<path>, once per gate: ${entry}`);
+        assert.ok(GATE_SELECTIONS[id], `unknown gate ${id}`);
+        files[id] = file;
+    }
+    return files;
 }
 
 function main() {
     const [command, ...args] = process.argv.slice(2);
     if (command === 'build') {
-        const reports = {};
-        for (const entry of option(args, '--report', { multiple: true })) {
-            const [id, file] = entry.split(/=(.*)/s);
-            assert.ok(id && file && !(id in reports), `--report must be <gate-id>=<path>, once per gate: ${entry}`);
-            reports[id] = readBounded(file, MAX_INPUT_BYTES, `report ${id}`);
+        const options = buildOptions(args);
+        const single = (name) => {
+            assert.ok(options.get(name).length === 1, `${name} is required exactly once`);
+            return options.get(name)[0];
+        };
+        const reports = gateFiles(options.get('--report'), '--report');
+        const preflights = gateFiles(options.get('--preflight'), '--preflight');
+        const gates = {};
+        for (const id of REQUIRED_GATES) {
+            assert.ok(reports[id], `required gate ${id} has no --report`);
+            assert.ok(preflights[id], `required gate ${id} has no --preflight`);
+            gates[id] = readGateEvidence(id, { reportPath: reports[id], preflightPath: preflights[id] });
         }
         const receipt = buildAcceptanceReceipt({
-            candidateDigest: option(args, '--candidate-digest'),
-            releaseManifest: JSON.parse(readBounded(option(args, '--release-manifest'), MAX_MANIFEST_BYTES, 'release manifest')),
-            imageInspect: JSON.parse(readBounded(option(args, '--image-inspect'), MAX_MANIFEST_BYTES, 'image evidence')),
-            mcpSdkCommit: option(args, '--mcp-sdk-commit'),
-            generation: option(args, '--generation'),
-            reports,
+            candidateDigest: single('--candidate-digest'),
+            releaseManifest: JSON.parse(readBounded(single('--release-manifest'), MAX_MANIFEST_BYTES, 'release manifest')),
+            imageInspect: JSON.parse(readBounded(single('--image-inspect'), MAX_MANIFEST_BYTES, 'image evidence')),
+            mcpSdkCommit: single('--mcp-sdk-commit'),
+            gates,
         });
         const text = canonicalReceiptText(receipt);
         assert.ok(Buffer.byteLength(text) <= MAX_RECEIPT_BYTES, 'receipt exceeds its size bound');
@@ -315,7 +574,7 @@ function main() {
         parseCanonicalReceipt(readBounded(args[0], MAX_RECEIPT_BYTES, 'receipt').toString('utf8'));
         process.stdout.write('receipt is well formed and canonical\n');
     } else {
-        throw new Error('usage: acceptance-receipt.mjs build --candidate-digest <sha256:..> --release-manifest <file> --image-inspect <file> --mcp-sdk-commit <sha> --generation <id> --report <gate-id>=<playwright-json> ... | validate <file>');
+        throw new Error('usage: acceptance-receipt.mjs build --candidate-digest <sha256:..> --release-manifest <file> --image-inspect <file> --mcp-sdk-commit <sha> --report <gate-id>=<artifact-dir>/test-results/results.json --preflight <gate-id>=<artifact-dir>/profile-preflight_codex.json ... (once per gate, six gates) | validate <file>');
     }
 }
 
