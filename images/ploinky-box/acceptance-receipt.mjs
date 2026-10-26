@@ -773,6 +773,24 @@ function cohortFiles(entries, name) {
     return files;
 }
 
+/**
+ * CLI only: every root of an inventory must be its own canonical real path, because `build` runs on the host
+ * where the inventory was verified, at the same paths. The runner's verifier already requires this when it proves
+ * the inventory; this re-checks it here. An inventory that is not JSON, or an entry the shape rules refuse, is left
+ * to the producer, which refuses it with its reason.
+ */
+function assertCanonicalRoots(inventoryBytes, cohort) {
+    let inventory;
+    try { inventory = JSON.parse(inventoryBytes.toString('utf8')); } catch { return; }
+    if (!isPlainObject(inventory) || !isPlainObject(inventory.repositories)) return;
+    for (const [name, entry] of Object.entries(inventory.repositories)) {
+        if (!isPlainObject(entry) || typeof entry.root !== 'string') continue;
+        let real;
+        try { real = fs.realpathSync(entry.root); } catch { assert.fail(`cohort ${cohort}: the root of ${name} cannot be resolved on this host`); }
+        assert.equal(real, entry.root, `cohort ${cohort}: the root of ${name} is not its canonical real path`);
+    }
+}
+
 /** Read each cohort's manifest and inventory; the inventory's canonical path is what the manifest must pin. */
 function readCohortInputFiles(manifestFiles, inventoryFiles) {
     return Object.fromEntries(COHORT_IDS.map((cohort) => {
@@ -782,6 +800,7 @@ function readCohortInputFiles(manifestFiles, inventoryFiles) {
             throw error;
         }
         const inventoryBytes = readBounded(inventoryFiles[cohort], MAX_EVIDENCE_BYTES, `cohort ${cohort}: source inventory`);
+        assertCanonicalRoots(inventoryBytes, cohort);
         return [cohort, { manifest, inventoryBytes, inventoryRealpath: fs.realpathSync(inventoryFiles[cohort]) }];
     }));
 }

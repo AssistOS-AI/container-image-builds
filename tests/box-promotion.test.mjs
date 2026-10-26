@@ -152,6 +152,8 @@ const WORKSPACES = {
     W: { root: '/work/W', inventoryPath: '/ev/inventory/W.json' },
     WO: { root: '/work/WO', inventoryPath: '/ev/inventory/WO.json' },
 };
+// The directory of the sources outside every workspace (Ploinky and the sources the image supplies).
+const SOURCE_ROOT = { value: '/src' };
 const WORKSPACE_OF = { 'official-release': 'W', 'copilot-live-skills': 'W', 'optional-defaults-and-activation': 'WO' };
 const SOURCE_PROVENANCE = ['achillesAgentLib', 'mcp-sdk', 'Ploinky-Worker'];
 
@@ -164,10 +166,10 @@ function inventoryFor(workspace, mutate) {
             ['explorer', { root: `${root}/AssistOSExplorer`, commit: '2'.repeat(40), role: 'deployed-source' }],
             inside('copilot-agents', '3'), inside('webmeet', '4'), inside('OnlyOfficeAgent', '5'), inside('UmamiAgent', '6'),
             inside('local-llms', '8'), inside('AdvancedLanguageAgent', 'c'), inside('DocumentationSkills', 'd'),
-            ['ploinky', { root: '/src/ploinky', commit: CANDIDATE.sourceSha, role: 'deployed-source' }],
-            ['achillesAgentLib', { root: '/src/achillesAgentLib', commit: SELECTIONS.achillesAgentLib.commit, role: 'provenance-reference' }],
-            ['mcp-sdk', { root: '/src/MCPSDK', commit: SELECTIONS['mcp-sdk'].commit, role: 'provenance-reference' }],
-            ['Ploinky-Worker', { root: '/src/Ploinky-Worker', commit: 'e'.repeat(40), role: 'provenance-reference' }],
+            ['ploinky', { root: `${SOURCE_ROOT.value}/ploinky`, commit: CANDIDATE.sourceSha, role: 'deployed-source' }],
+            ['achillesAgentLib', { root: `${SOURCE_ROOT.value}/achillesAgentLib`, commit: SELECTIONS.achillesAgentLib.commit, role: 'provenance-reference' }],
+            ['mcp-sdk', { root: `${SOURCE_ROOT.value}/MCPSDK`, commit: SELECTIONS['mcp-sdk'].commit, role: 'provenance-reference' }],
+            ['Ploinky-Worker', { root: `${SOURCE_ROOT.value}/Ploinky-Worker`, commit: 'e'.repeat(40), role: 'provenance-reference' }],
         ]),
     };
     mutate?.(inventory);
@@ -204,6 +206,31 @@ function cohortInputsSet(change = {}) {
             inventoryRealpath: edit.realpath ?? defaultPath,
         }];
     }));
+}
+
+// The CLI refuses an inventory root that is not its canonical real path, so CLI tests need real directories. This points
+// the fixtures at real, canonical roots under `directory` (the workspace roots, every repository and the outside sources),
+// and restores the fake roots when the test ends. Tests of one file run one after the other.
+function useRealRoots(t, directory) {
+    const saved = { W: WORKSPACES.W.root, WO: WORKSPACES.WO.root, source: SOURCE_ROOT.value };
+    WORKSPACES.W.root = path.join(directory, 'work/W');
+    WORKSPACES.WO.root = path.join(directory, 'work/WO');
+    SOURCE_ROOT.value = path.join(directory, 'src');
+    t.after(() => { WORKSPACES.W.root = saved.W; WORKSPACES.WO.root = saved.WO; SOURCE_ROOT.value = saved.source; });
+    for (const workspace of Object.keys(WORKSPACES)) {
+        fs.mkdirSync(WORKSPACES[workspace].root, { recursive: true });
+        for (const entry of Object.values(inventoryFor(workspace).repositories)) fs.mkdirSync(entry.root, { recursive: true });
+    }
+}
+
+// The preflight and postflight source keys for an inventory that `mutate` edited (for cohorts built on that inventory).
+function sourceEvidenceForInventory(workspace, mutate) {
+    const inventory = inventoryFor(workspace, mutate);
+    return {
+        releaseBundle: { schemaVersion: 1, kind: 'explorer-release-bundle', sourceInventorySha256: hash(Buffer.from(JSON.stringify(inventory, null, 2))) },
+        repositories: Object.fromEntries(Object.entries(inventory.repositories).map(([name, entry]) => [name,
+            { name, repositoryPath: entry.root, commit: entry.commit, role: entry.role }])),
+    };
 }
 
 // What the runner's verifier returns for a cohort's inventory and what both preflight and postflight record.
@@ -767,20 +794,26 @@ test('the old spec 03 title is not the pinned test', () => {
 test('the producer rejects a manifest, image evidence, or retired input that does not fit together', () => {
     const base = receiptInputs({ candidateDigest: `sha256:${'1'.repeat(64)}` });
     assert.doesNotThrow(() => buildAcceptanceReceipt(base));
-    for (const change of [
-        { cohortInputs: cohortInputsSet({ 'official-release': { manifest: (m) => { m.images.ploinkyBox.digest = `sha256:${'0'.repeat(64)}`; } } }) },
-        { cohortInputs: cohortInputsSet({ 'optional-defaults-and-activation': { manifest: (m) => { m.images.other = { digest: 'x' }; } } }) },
-        { cohortInputs: cohortInputsSet({ 'copilot-live-skills': { manifest: (m) => { m.extra = 1; } } }) },
-        { cohortInputs: {} }, { cohortInputs: null },
-        { cohortInputs: Object.fromEntries(Object.entries(cohortInputsSet()).filter(([cohort]) => cohort !== 'copilot-live-skills')) },
-        { cohortInputs: { ...cohortInputsSet(), 'another-cohort': cohortInputsSet()['official-release'] } },
-        { imageInspect: [] }, { imageInspect: [...imageInspect(), ...imageInspect()] },
-        { imageInspect: [{ ...imageInspect()[0], Architecture: 's390x' }] }, { imageInspect: [{ ...imageInspect()[0], Os: 'windows' }] },
-        { imageInspect: [{ ...imageInspect()[0], Id: 'latest' }] },
-        { gates: null }, { gates: {} },
-        { candidateDigest: 'latest' }, { candidateDigest: `${IMAGE}:latest` },
+    const withoutSpec06 = Object.fromEntries(Object.entries(cohortInputsSet()).filter(([cohort]) => cohort !== 'copilot-live-skills'));
+    for (const [label, change, expected] of [
+        ['a manifest digest that is not the engine image', { cohortInputs: cohortInputsSet({ 'official-release': { manifest: (m) => { m.images.ploinkyBox.digest = `sha256:${'0'.repeat(64)}`; } } }) }, /cohort official-release: the engine image ID differs from the release manifest Box digest/],
+        ['an extra image in a manifest', { cohortInputs: cohortInputsSet({ 'optional-defaults-and-activation': { manifest: (m) => { m.images.other = { digest: 'x' }; } } }) }, /cohort optional-defaults-and-activation: release manifest images must contain exactly ploinkyBox/],
+        ['an extra manifest key', { cohortInputs: cohortInputsSet({ 'copilot-live-skills': { manifest: (m) => { m.extra = 1; } } }) }, /cohort copilot-live-skills: release manifest must contain exactly images, kind, schemaVersion, sourceInventory/],
+        ['no cohort inputs', { cohortInputs: {} }, /cohort official-release: the release manifest and the source inventory are required/],
+        ['null cohort inputs', { cohortInputs: null }, /cohort manifests and source inventories are required/],
+        ['a cohort without inputs', { cohortInputs: withoutSpec06 }, /cohort copilot-live-skills: the release manifest and the source inventory are required/],
+        ['an unknown cohort', { cohortInputs: { ...cohortInputsSet(), 'another-cohort': cohortInputsSet()['official-release'] } }, /unknown cohort another-cohort/],
+        ['no image evidence', { imageInspect: [] }, /image evidence must hold exactly one image/],
+        ['two images', { imageInspect: [...imageInspect(), ...imageInspect()] }, /image evidence must hold exactly one image/],
+        ['an unsupported architecture', { imageInspect: [{ ...imageInspect()[0], Architecture: 's390x' }] }, /the engine image has an unsupported architecture/],
+        ['a windows image', { imageInspect: [{ ...imageInspect()[0], Os: 'windows' }] }, /the engine image is not a linux image/],
+        ['an image ID that is not a digest', { imageInspect: [{ ...imageInspect()[0], Id: 'latest' }] }, /the engine image ID must be a sha256 image ID/],
+        ['no gate evidence', { gates: null }, /gate evidence is required/],
+        ['empty gate evidence', { gates: {} }, /required gate copilot-folder-launch has no evidence/],
+        ['a tag as the candidate', { candidateDigest: 'latest' }, /the candidate must be an immutable sha256 digest, not a tag/],
+        ['a tagged reference as the candidate', { candidateDigest: `${IMAGE}:latest` }, /the candidate must be an immutable sha256 digest, not a tag/],
     ]) {
-        assert.throws(() => buildAcceptanceReceipt({ ...base, ...change }), JSON.stringify(Object.keys(change)));
+        assert.throws(() => buildAcceptanceReceipt({ ...base, ...change }), expected, label);
     }
     // The inputs of earlier receipt versions are retired: a typed commit, a single manifest, a generation or loose reports.
     for (const retired of [{ mcpSdkCommit: SELECTIONS['mcp-sdk'].commit }, { releaseManifest: {} }, { generation: 'g1' }, { reports: reportSet() }]) {
@@ -938,6 +971,34 @@ test('(p) the roles of the sources fix where they lie: deployed sources under th
     for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
 });
 
+test('(p) source locations compare whole path components: a sibling that only shares a prefix is not under the mount', () => {
+    const id = 'optional-agents';
+    // Control: the spec 03 cohort runs in WO, whose deployed sources lie under /work/WO.
+    assert.doesNotThrow(() => buildWith(id, {}));
+    // /work/WO/... starts with the text /work/W but is not under /work/W.
+    assert.throws(() => buildWith(id, { preflight: (p) => { p.workspaceSourceMount.source = '/work/W'; } }), /deployed-source .* is not under the workspace source mount/);
+    // The same with inventories that were edited, with their evidence, so only the location rule can refuse them.
+    const buildOptional = (edit) => {
+        const evidence = sourceEvidenceForInventory('WO', edit);
+        const repeat = (p) => { p.releaseBundle = structuredClone(evidence.releaseBundle); p.repositories = structuredClone(evidence.repositories); };
+        const receipt = buildAcceptanceReceipt(receiptInputs({
+            cohortInputs: cohortInputsSet({ 'optional-defaults-and-activation': { inventory: edit } }),
+            gates: { ...evidenceSet(), [id]: gateEvidence(id, { preflight: repeat, postflight: repeat }) },
+        }));
+        assert.equal(receipt.cohorts['optional-defaults-and-activation'].source_inventory_sha256, evidence.releaseBundle.sourceInventorySha256);
+        return receipt;
+    };
+    // A provenance reference in /work/WOx is outside /work/WO even though its path starts with the mount's text.
+    assert.doesNotThrow(() => buildOptional((inv) => { inv.repositories['Ploinky-Worker'].root = '/work/WOx/Ploinky-Worker'; }));
+    // A deployed source in /work/WOx is not under /work/WO.
+    assert.throws(() => buildOptional((inv) => { inv.repositories.webmeet.root = '/work/WOx/webmeet'; }), /deployed-source webmeet is not under the workspace source mount/);
+    // A provenance reference below the mount is refused, and so is one that is the mount itself.
+    assert.throws(() => buildOptional((inv) => { inv.repositories['Ploinky-Worker'].root = '/work/WO/Ploinky-Worker'; }), /provenance-reference Ploinky-Worker is inside the workspace source mount/);
+    assert.throws(() => buildOptional((inv) => { inv.repositories['Ploinky-Worker'].root = '/work/WO'; }), /provenance-reference Ploinky-Worker is inside the workspace source mount/);
+    // A deployed source that is the mount itself is not under it.
+    assert.throws(() => buildOptional((inv) => { inv.repositories.webmeet.root = '/work/WO'; }), /deployed-source webmeet is not under the workspace source mount/);
+});
+
 test('(q) the three cohorts list the same sources, though their roots may differ', () => {
     // Control: W and WO have different roots and different inventory hashes, and build.
     const receipt = buildWithInputs({});
@@ -959,7 +1020,7 @@ test('(r) no revision is typed: the retired inputs are refused by the producer a
     assert.throws(() => buildAcceptanceReceipt({ ...base, mcpSdkCommit: SELECTIONS['mcp-sdk'].commit }), /does not take mcpSdkCommit: every commit comes from the hash-pinned source inventory/);
     assert.throws(() => buildAcceptanceReceipt({ ...base, releaseManifest: {} }), /does not take releaseManifest/);
     const f = await fixture(t);
-    const { dir, base: cliBase } = cliFixture(f);
+    const { dir, base: cliBase } = cliFixture(f, t);
     const args = evidenceArgs(artifactDirectories(dir));
     const control = receiptCli(...cliBase, ...args);
     assert.equal(control.status, 0, control.stderr);
@@ -1857,9 +1918,10 @@ const exactLine = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '
 const receiptCli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'images/ploinky-box/acceptance-receipt.mjs'), ...args], { encoding: 'utf8', timeout: 30000 });
 
 // The CLI inputs: the image evidence, and for each cohort a manifest file that pins its inventory file by canonical path.
-function cliFixture(f) {
+function cliFixture(f, t) {
     fs.mkdirSync(path.join(f.root, 'cli'));
     const dir = fs.realpathSync(path.join(f.root, 'cli'));
+    useRealRoots(t, dir);
     writeJson(path.join(dir, 'inspect.json'), imageInspect());
     const manifestFiles = {};
     const inventoryFiles = {};
@@ -1878,7 +1940,7 @@ function cliFixture(f) {
 
 test('the receipt producer CLI output is accepted as written by validate and by the workflow inputs', async (t) => {
     const f = await fixture(t);
-    const { dir, base } = cliFixture(f);
+    const { dir, base } = cliFixture(f, t);
     const built = receiptCli(...base, ...evidenceArgs(artifactDirectories(dir)));
     assert.equal(built.status, 0, built.stderr);
     // The exact bytes of the output file, as a structured process argument or a validated file.
@@ -1887,7 +1949,9 @@ test('the receipt producer CLI output is accepted as written by validate and by 
     assert.equal(receiptCli('validate', file).status, 0);
     assert.match(receiptCli('validate', file).stdout, /receipt is well formed and canonical/);
     assert.doesNotThrow(() => validateInputs({ ...f.env, ACCEPTANCE_RECEIPT_JSON: fs.readFileSync(file, 'utf8') }));
-    assert.equal(fs.readFileSync(file, 'utf8'), f.env.ACCEPTANCE_RECEIPT_JSON);
+    // The same receipt as the producer builds from the same evidence (the fixtures now sit on the CLI's real roots, so their
+    // inventory hashes are those of the CLI's inventory files, not of the fake-root receipt in f.env).
+    assert.equal(fs.readFileSync(file, 'utf8'), canonicalReceiptText(receiptFor(f.candidateDigest)));
     await f.verify({ env: { ...f.env, ACCEPTANCE_RECEIPT_JSON: fs.readFileSync(file, 'utf8') } });
     // One rule everywhere: no trailing newline is emitted, and none is accepted by either path.
     assert.ok(!built.stdout.endsWith('\n'));
@@ -1898,7 +1962,7 @@ test('the receipt producer CLI output is accepted as written by validate and by 
 
 test('the receipt producer CLI binds each gate to one artifact directory and refuses missing or foreign evidence', async (t) => {
     const f = await fixture(t);
-    const { dir, base } = cliFixture(f);
+    const { dir, base } = cliFixture(f, t);
     const directories = artifactDirectories(dir);
     const args = evidenceArgs(directories);
     assert.equal(receiptCli(...base, ...args).status, 0, 'the control build must pass');
@@ -1954,7 +2018,7 @@ test('the receipt producer CLI binds each gate to one artifact directory and ref
 
 test('the receipt producer CLI takes one release manifest and one source inventory for each cohort', async (t) => {
     const f = await fixture(t);
-    const { dir, base, cohortArgs, manifestFiles, inventoryFiles } = cliFixture(f);
+    const { dir, base, cohortArgs, manifestFiles, inventoryFiles } = cliFixture(f, t);
     const head = base.slice(0, base.length - cohortArgs.length);
     const args = evidenceArgs(artifactDirectories(dir));
     const refused = (label, cohortOptions, expected) => {
@@ -1994,9 +2058,42 @@ test('the receipt producer CLI takes one release manifest and one source invento
     assert.equal(receiptCli(...head, ...cohortArgs, ...args).status, 0, 'the restored inputs build again');
 });
 
+test('the receipt producer CLI refuses an inventory root that is not its canonical real path', async (t) => {
+    const f = await fixture(t);
+    const { dir, base, cohortArgs, manifestFiles, inventoryFiles } = cliFixture(f, t);
+    const head = base.slice(0, base.length - cohortArgs.length);
+    const args = evidenceArgs(artifactDirectories(dir));
+    const control = receiptCli(...head, ...cohortArgs, ...args);
+    assert.equal(control.status, 0, control.stderr);
+    const original = { inventory: fs.readFileSync(inventoryFiles['official-release']), manifest: fs.readFileSync(manifestFiles['official-release']) };
+    // Pin an edited inventory with a new manifest, so the only thing wrong with it is the root.
+    const refused = (label, edit, expected) => {
+        const bytes = inventoryBytesFor('W', edit);
+        fs.writeFileSync(inventoryFiles['official-release'], bytes);
+        writeJson(manifestFiles['official-release'], manifestFor(bytes, inventoryFiles['official-release']));
+        const result = receiptCli(...head, ...cohortArgs, ...args);
+        assert.notEqual(result.status, 0, label);
+        assert.match(result.stderr, expected, label);
+        assert.equal(result.stdout, '', `${label} must write no receipt`);
+    };
+    const notCanonical = /cohort official-release: the root of webmeet is not its canonical real path/;
+    const leaf = path.join(dir, 'link-to-webmeet');
+    fs.symlinkSync(path.join(WORKSPACES.W.root, 'webmeet'), leaf);
+    refused('a root that is a symbolic link', (inv) => { inv.repositories.webmeet.root = leaf; }, notCanonical);
+    const linkedWorkspace = path.join(dir, 'linked-workspace');
+    fs.symlinkSync(WORKSPACES.W.root, linkedWorkspace);
+    refused('a root below a symbolic link', (inv) => { inv.repositories.webmeet.root = path.join(linkedWorkspace, 'webmeet'); }, notCanonical);
+    refused('a root that is not normalized', (inv) => { inv.repositories.webmeet.root = `${WORKSPACES.W.root}/./webmeet`; }, notCanonical);
+    refused('a root that does not exist', (inv) => { inv.repositories.webmeet.root = path.join(WORKSPACES.W.root, 'missing'); }, /cohort official-release: the root of webmeet cannot be resolved on this host/);
+    // The restored inventory builds again, so each refusal above came from its root alone.
+    fs.writeFileSync(inventoryFiles['official-release'], original.inventory);
+    fs.writeFileSync(manifestFiles['official-release'], original.manifest);
+    assert.equal(receiptCli(...head, ...cohortArgs, ...args).status, 0, 'the restored inventory builds again');
+});
+
 test('the receipt producer CLI reads the parent result only from a real codex-auth directory', async (t) => {
     const f = await fixture(t);
-    const { dir, base } = cliFixture(f);
+    const { dir, base } = cliFixture(f, t);
     const directories = artifactDirectories(dir);
     const args = evidenceArgs(directories);
     const auth = path.join(directories['copilot-live-skills'], 'codex-auth');
@@ -2049,6 +2146,8 @@ test('the repository publication instructions describe the promotion path and it
     assert.match(readme, /sourceInventorySha256/);
     assert.match(readme, /no revision is typed by the operator/i);
     assert.match(readme, /explorer-release-bundle/);
+    assert.match(readme, /Every\s+inventory root is a canonical real path/);
+    assert.match(readme, /re-checks `realpath\(root\) === root`/);
     assert.match(readme, /refs\/heads\/main/);
     assert.match(readme, /child process/);
     assert.match(readme, /canonical/);

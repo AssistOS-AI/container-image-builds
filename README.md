@@ -742,7 +742,12 @@ records the inventory as `sources`, a map from name to `{ commit, role }` (no
 roots), and derives `revisions` from it; the validator requires each revision to
 equal its `sources` entry (`ploinky`, `achillesAgentLib` and `mcp-sdk`). The
 three cohorts' root-free maps must be identical (their roots may differ, so
-their hashes may), and each cohort records `source_inventory_sha256`.
+their hashes may), and each cohort records `source_inventory_sha256`. Every
+inventory root is a canonical real path (no symbolic link, no `.` or `..`
+component): the runner's verifier checks this when it proves the inventory, and
+the CLI re-checks `realpath(root) === root` for every root, because `build` runs
+on the host where the inventory was verified, at the same paths. A root that is
+not canonical or cannot be resolved there is refused before anything is built.
 
 **Three cohorts, not one generation.** The cohort IDs are the acceptance ledger's
 (a note for the receipt consumer: the receipt also requires the separate `06`
