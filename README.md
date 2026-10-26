@@ -628,7 +628,7 @@ a queued unrelated promotion or a manual registry write is not prevented.
 | `candidate_run_id`, `candidate_run_attempt` | The successful run and attempt of `publish-ploinky-box-image.yml` that built the candidate |
 | `candidate_digest` | The full immutable index digest, `sha256:` plus 64 hex characters; a tag is rejected |
 | `source_sha`, `image_definitions_sha` | The Ploinky commit and the image-definition commit of that run |
-| `acceptance_receipt_json` | The bounded receipt below |
+| `acceptance_receipt_json` | The bounded v2 receipt below |
 
 The workflow runs only when dispatched from `refs/heads/main`; the first step of
 both jobs refuses any other ref. No Buildx builder is set up (`imagetools` talks
@@ -694,59 +694,126 @@ runs. The candidate tag and artifacts are kept.
 #### Acceptance receipt
 
 The receipt is bounded (16 KiB), data-only JSON of schema
-`ploinky.box.acceptance-receipt/v1`, in canonical form (keys sorted at every
+`ploinky.box.acceptance-receipt/v2`, in canonical form (keys sorted at every
 level, no whitespace); the workflow rejects any other text, so the stored
-evidence is exactly the validated value. It binds the candidate digest, the
-Ploinky, Explorer, AgentLib and AchillesCLI revisions with an explicit
-`mcp_sdk_commit`, the generation, the per-architecture engine image ID, and one
-entry per acceptance phase. All five phases are required, in this order:
+evidence is exactly the validated value. A v1 receipt is refused. The receipt
+binds the candidate digest, the Ploinky, Explorer, AgentLib and AchillesCLI
+revisions with an explicit `mcp_sdk_commit`, the per-architecture engine image
+ID, the observed Box generations of exactly three cohorts, and one entry per
+gate. All six gates are required, and the receipt lists the six gates in this
+recording order:
 
-| Phase id | Spec | Counts |
+| Gate id | Spec | Cohort | Counts |
+| --- | --- | --- | --- |
+| `copilot-folder-launch` | `05` | `official-release` | release gate: exactly 1 passed |
+| `copilot-live-skills` | `06` | `copilot-live-skills` | prerequisite: every selected test passed, at least 1 |
+| `optional-agents` | `03` (Marketplace) | `optional-defaults-and-activation` | prerequisite: every selected test passed, at least 1 |
+| `onlyoffice-confidential` | `50` | `official-release` | release gate: exactly 1 passed |
+| `webmeet-public-room` | `30` (public loader) | `official-release` | release gate: exactly 1 passed |
+| `webmeet-room-chat` | `30` (room chat) | `official-release` | release gate: exactly 1 passed |
+
+Every gate records its cohort, spec, the exact titles of the selected tests
+(`tests`, which must include the pinned title), the `passed`, `failed`,
+`skipped`, `retried` and `flaky` counts (the last four are always 0), the SHA-256
+of its report, of its preflight and of its postflight, and its `started_at` and
+`finished_at`. Spec `06` also records `parent_result_sha256`. The spec `03` title
+is the current one, `OnlyOffice, Scribe, STT, and Umami start disabled and can be
+enabled through Marketplace`.
+
+**Three cohorts, not one generation.** The cohort IDs are the acceptance ledger's
+(a note for the receipt consumer: the receipt also requires the separate `06`
+profile, which the ledger keeps outside the official cohort). Each cohort is its
+own fresh Box generation, so the three `container_id` values must differ, and a
+`cohorts` entry holds only the generation's `container_id` and `started_at`:
+
+| Cohort | Gates | Rule |
 | --- | --- | --- |
-| `copilot-folder-launch` | `05` | release gate: exactly 1 passed |
-| `copilot-live-skills` | `06` | prerequisite: every selected test passed, at least 1 |
-| `optional-agents` | `03` (Marketplace) | prerequisite: every selected test passed, at least 1 |
-| `onlyoffice-confidential` | `50` | release gate: exactly 1 passed |
-| `webmeet-room-chat` | `30` | release gate: exactly 1 passed |
+| `official-release` | `05`, `30` public, `30` room chat, `50` | one fresh Box generation |
+| `copilot-live-skills` | `06` | its own fresh generation |
+| `optional-defaults-and-activation` | `03` | its own fresh generation |
 
-Every entry records its spec, the exact titles of the selected tests (`tests`,
-which must include the pinned title), the `passed`, `failed`, `skipped`,
-`retried` and `flaky` counts (the last four are always 0), and the SHA-256 of its
-report. The five phases are the mandatory sequence; the receipt can record its
-order but not prove it. `build` writes the canonical text with no trailing
-newline, and neither `validate` nor the workflow accepts one, so the output file
-is exactly the text to dispatch. Produce it from the saved Playwright JSON reports, the
-release manifest and the engine's `image inspect` output of the Box image the
-acceptance fixture ran. Both the Docker shape (`Id` as `sha256:<hex>`) and the
-Podman shape (a bare 64-hex `Id`, next to `Digest`, `RepoDigests` and `History`)
-are accepted, and the ID is normalized to `sha256:<hex>` the way Ploinky's
-`normalizeImageId` does before it is compared with the release manifest's Box
-digest and stored:
+The generations are observed, not typed: `build` reads each gate's
+`profile-preflight_codex.json`, requires every gate of a cohort to show the same
+`box.containerId` and `box.startedAt`, and records that pair as the cohort. Every
+gate must finish within 30 minutes of its cohort's `started_at`
+(`cohort.started_at <= gate.started_at <= gate.finished_at <= cohort.started_at +
+30 minutes`; exactly 30 minutes passes, 1 ms more is refused). The listing order
+above is the recording order, not the execution order: the official cohort
+executes `05`, `30` public, `30` room chat, `50` in that order, one gate after
+the other, and the validator refuses a receipt in which a gate starts before the
+previous one finished.
+
+**Evidence contract per gate.** One gate invocation leaves one artifact
+directory. `build` takes `--report <gate>=<dir>/test-results/results.json` and
+`--preflight <gate>=<dir>/profile-preflight_codex.json`, once per gate, and reads
+the postflight and (for `06`) the parent result from the same directory. It
+requires all of the following for every gate, and reads only these keys (extra
+keys are ignored):
+
+| Artifact | Keys read |
+| --- | --- |
+| `profile-preflight_codex.json` | `runId`, `capturedAt`, `ledgerCoverage` (must be `selected-ledger-identities`), `generationMaxAgeMs` (an integer, at most 1 800 000), `box.containerId`, `box.startedAt`, `box.imageId` (must equal the engine image ID), `repositories.{achillesAgentLib, ploinky, achillesCLI, explorer}.commit` (must equal the release manifest) |
+| `test-results/results.json` | `config.metadata.runId`, `stats.startTime`, `stats.duration`, and the usual suite and result fields |
+| `profile-postflight_codex.json` | `runId`, `capturedAt`, `exitCode` (must be the number 0), `box.containerId`, `box.startedAt`, `box.imageId` |
+| `codex-auth/parent-result.json` (`06` only) | `runId`, `code` (must be `OK`), `leakScanCoverage` (must be `proven`), `leaks` (0 or an empty list), `undecodable` (0 or an empty list), `cleanup` (a non-empty object whose every value is `true`) |
+
+The preflight, report and postflight (and the parent result) must carry one run
+id, and no two gates may share a run id. The postflight's Box identity must equal
+the preflight's. The preflight must be captured no later than the report's
+`stats.startTime`, and the postflight no earlier than the report's start plus its
+duration (a fractional duration rounds up to the next millisecond). `finished_at`
+is the postflight's `capturedAt`, rounded up to the millisecond; `started_at` is
+the report's `stats.startTime`. A gate without a postflight (the runner writes
+it last, and only after exit code 0), or with a failed or incomplete parent
+result for `06`, cannot be built. The field names are this repository's reading
+of the Explorer runner's artifacts; keys not listed above are never read, so
+added keys are tolerated.
+
+`build` writes the canonical text with no trailing newline, and neither
+`validate` nor the workflow accepts one, so the output file is exactly the text
+to dispatch. Produce it from the saved artifact directories, the release manifest
+and the engine's `image inspect` output of the Box image the acceptance fixture
+ran. The retired `--generation` option is refused. Both the Docker shape (`Id` as
+`sha256:<hex>`) and the Podman shape (a bare 64-hex `Id`, next to `Digest`,
+`RepoDigests` and `History`) are accepted, and the ID is normalized to
+`sha256:<hex>` the way Ploinky's `normalizeImageId` does before it is compared
+with the release manifest's Box digest and stored:
 
 ```sh
 node images/ploinky-box/acceptance-receipt.mjs build \
   --candidate-digest "$PLAN_ACCEPTED_INDEX_DIGEST" \
   --release-manifest "$EVIDENCE/release_manifest.json" \
   --image-inspect "$EVIDENCE/box-image-inspect.json" \
-  --mcp-sdk-commit "$PLAN_MCP_SDK_SHA" --generation "$GENERATION" \
-  --report copilot-folder-launch="$EVIDENCE/05/results.json" \
-  --report copilot-live-skills="$EVIDENCE/06/results.json" \
-  --report optional-agents="$EVIDENCE/03/results.json" \
-  --report onlyoffice-confidential="$EVIDENCE/50/results.json" \
-  --report webmeet-room-chat="$EVIDENCE/30/results.json" > "$EVIDENCE/acceptance-receipt.json"
+  --mcp-sdk-commit "$PLAN_MCP_SDK_SHA" \
+  --report copilot-folder-launch="$EVIDENCE/official/05/test-results/results.json" \
+  --preflight copilot-folder-launch="$EVIDENCE/official/05/profile-preflight_codex.json" \
+  --report copilot-live-skills="$EVIDENCE/c5/06/test-results/results.json" \
+  --preflight copilot-live-skills="$EVIDENCE/c5/06/profile-preflight_codex.json" \
+  --report optional-agents="$EVIDENCE/optional/03/test-results/results.json" \
+  --preflight optional-agents="$EVIDENCE/optional/03/profile-preflight_codex.json" \
+  --report onlyoffice-confidential="$EVIDENCE/official/50/test-results/results.json" \
+  --preflight onlyoffice-confidential="$EVIDENCE/official/50/profile-preflight_codex.json" \
+  --report webmeet-public-room="$EVIDENCE/official/30-public/test-results/results.json" \
+  --preflight webmeet-public-room="$EVIDENCE/official/30-public/profile-preflight_codex.json" \
+  --report webmeet-room-chat="$EVIDENCE/official/30-media/test-results/results.json" \
+  --preflight webmeet-room-chat="$EVIDENCE/official/30-media/profile-preflight_codex.json" \
+  > "$EVIDENCE/acceptance-receipt.json"
 ```
 
 The workflow checks that the receipt names the promoted digest, that its Ploinky
 revision is `source_sha`, that its AgentLib and MCP SDK commits are the frozen
 library-input commits, and that each engine image ID equals the verified
-`configDigest` of that architecture's image. It cannot prove that the receipt
-was built from real reports or that a browser run took place: the Explorer and
-AchillesCLI commits are checked only for format. The dispatch is the authorized
-operator's release attestation, so retain and inspect the raw reports named by
-the receipt (their SHA-256 digests are in it) before dispatching. Pass the
-receipt as a structured argument, for example `-f
-acceptance_receipt_json="$(cat "$EVIDENCE/acceptance-receipt.json")"`; the
-workflow reads every input through `env:`, never by interpolation into a script.
+`configDigest` of that architecture's image. It also validates the receipt's own
+shape, cohorts and timing, and records the receipt's SHA-256 and its cohorts in
+`promotion-verification.json` (schema `ploinky.box.promotion-verification/v2`).
+It cannot prove that the receipt was built from real reports or that a browser
+run took place: the Explorer and AchillesCLI commits are checked only for format.
+The dispatch is the authorized operator's release attestation, so retain and
+inspect the raw artifact directories named by the receipt (their SHA-256 digests
+are in it) before dispatching. Pass the receipt as a structured argument, for
+example `-f acceptance_receipt_json="$(cat "$EVIDENCE/acceptance-receipt.json")"`;
+the workflow reads every input through `env:`, never by interpolation into a
+script.
 
 ## Secrets
 

@@ -1614,14 +1614,16 @@ test('the repository publication instructions describe the promotion path and it
     const readme = read('README.md');
     assert.match(readme, /promote-ploinky-box-candidate\.yml/);
     assert.match(readme, /acceptance-receipt\.mjs/);
-    assert.match(readme, /ploinky\.box\.acceptance-receipt\/v1/);
+    assert.match(readme, /ploinky\.box\.acceptance-receipt\/v2/);
     assert.match(readme, /cannot (independently )?prove/i);
     assert.match(readme, /candidate_run_id/);
     assert.match(readme, /no build/i);
-    // The receipt step accepts the evidence of either engine, the five phases, and the process boundary.
+    // The receipt step accepts the evidence of either engine, the six gates in three cohorts, and the process boundary.
     assert.match(readme, /Podman/);
     assert.match(readme, /bare 64-hex/);
-    assert.match(readme, /five phases/);
+    assert.match(readme, /six gates/);
+    assert.match(readme, /three cohorts/);
+    assert.match(readme, /profile-preflight_codex\.json/);
     assert.match(readme, /refs\/heads\/main/);
     assert.match(readme, /child process/);
     assert.match(readme, /canonical/);
