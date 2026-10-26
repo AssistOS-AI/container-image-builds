@@ -729,9 +729,10 @@ test('every gate binds its preflight, report and postflight to one run, one Box 
         'postflight without a run id': [() => buildWith(id, { postflight: (p) => { delete p.runId; } }), /run id/],
         'a run id shared by two gates': [() => buildWith('webmeet-room-chat', { runId: runIdOf('webmeet-public-room'), preflight: (p) => { p.runId = runIdOf('webmeet-public-room'); }, postflight: (p) => { p.runId = runIdOf('webmeet-public-room'); } }), /distinct run id/],
         // The postflight is the terminal verdict.
-        'missing postflight': [() => withGate(id, (g) => { delete g.postflight; }), new RegExp(`gate ${id}: .*postflight`)],
-        'missing preflight': [() => withGate(id, (g) => { delete g.preflight; }), new RegExp(`gate ${id}: .*preflight`)],
-        'missing report': [() => withGate(id, (g) => { delete g.report; }), new RegExp(`gate ${id}: .*report`)],
+        'missing postflight': [() => withGate(id, (g) => { delete g.postflight; }), { message: `gate ${id}: the postflight (profile-postflight_codex.json) is required` }],
+        'missing preflight': [() => withGate(id, (g) => { delete g.preflight; }), { message: `gate ${id}: the preflight (profile-preflight_codex.json) is required` }],
+        'missing report': [() => withGate(id, (g) => { delete g.report; }), { message: `gate ${id}: the report is required` }],
+        'postflight set to null': [() => withGate(id, (g) => { g.postflight = null; }), { message: `gate ${id}: the postflight (profile-postflight_codex.json) is required` }],
         'postflight exit code 1': [() => buildWith(id, { postflight: (p) => { p.exitCode = 1; } }), /exitCode/],
         'postflight exit code as text': [() => buildWith(id, { postflight: (p) => { p.exitCode = '0'; } }), /exitCode/],
         'postflight without an exit code': [() => buildWith(id, { postflight: (p) => { delete p.exitCode; } }), /exitCode/],
@@ -776,7 +777,7 @@ test('spec 06 also needs a parent result that proves the leak scan and complete 
     const id = 'copilot-live-skills';
     assert.doesNotThrow(() => buildWith(id, {}));
     const refused = {
-        'missing parent result': [() => withGate(id, (g) => { delete g.parentResult; }), /parent result/],
+        'missing parent result': [() => withGate(id, (g) => { delete g.parentResult; }), { message: `gate ${id}: the parent result (codex-auth/parent-result.json) is required` }],
         'parent result is not JSON': [() => withGate(id, (g) => { g.parentResult = Buffer.from('not json'); }), /parent result.*JSON/],
         'failed parent result': [() => buildWith(id, { parent: (p) => { p.code = 'CLEANUP_INCOMPLETE'; } }), /code/],
         'parent result without a code': [() => buildWith(id, { parent: (p) => { delete p.code; } }), /code/],
@@ -803,6 +804,33 @@ test('spec 06 also needs a parent result that proves the leak scan and complete 
     for (const [label, [attempt, expected]] of Object.entries(refused)) assert.throws(attempt, expected, label);
     // Extra keys of the parent line are tolerated; only the named keys are read.
     assert.doesNotThrow(() => buildWith(id, { parent: (p) => { p.command = 'run'; p.exitCode = 0; p.artifactDirectory = '/x'; } }));
+});
+
+test('timestamps round in the conservative direction and the generation cap must be positive', () => {
+    const id = 'onlyoffice-confidential';
+    const setStartedAt = (value) => (p) => { p.box.startedAt = value; };
+    // A fractional duration rounds up: the report ran until start + ceil(1000.4 ms) = start + 1001 ms.
+    const fractional = (finished) => buildWith(id, { duration: 1000.4, postflight: (p) => { p.capturedAt = iso(startOf(id) + finished); } });
+    assert.throws(() => fractional(1000), /before the report finished/);
+    assert.doesNotThrow(() => fractional(1001));
+    assert.doesNotThrow(() => buildWith(id, { duration: 1000, postflight: (p) => { p.capturedAt = iso(startOf(id) + 1000); } }));
+    // stats.startTime rounds down, so started_at is never later than the report's start.
+    const started = buildWith(id, { startTime: `${iso(startOf(id)).slice(0, -1)}9999Z` });
+    assert.equal(started.gates.find((gate) => gate.id === id).started_at, iso(startOf(id)));
+    // box.startedAt rounds down, so the cohort window never opens later than the Box started.
+    const boxStart = `${COHORTS['copilot-live-skills'].startedAt.slice(0, -1)}0009Z`;
+    const cohort = buildWith('copilot-live-skills', { preflight: setStartedAt(boxStart), postflight: setStartedAt(boxStart) });
+    assert.equal(cohort.cohorts['copilot-live-skills'].started_at, COHORTS['copilot-live-skills'].startedAt);
+    // The preflight capturedAt rounds up: 0.1 ms after the test started is 1 ms after it, and is refused.
+    const capturedAt = (value) => buildWith(id, { preflight: (p) => { p.capturedAt = value; } });
+    assert.throws(() => capturedAt(`${iso(startOf(id)).slice(0, -1)}0001Z`), /preflight was captured after the test started/);
+    assert.doesNotThrow(() => capturedAt(iso(startOf(id))));
+    assert.doesNotThrow(() => capturedAt(`${iso(startOf(id) - 1).slice(0, -1)}9999Z`));
+    // The generation cap is a positive integer: zero and negative values are refused, not read as "no cap".
+    const cap = (value) => buildWith(id, { preflight: (p) => { p.generationMaxAgeMs = value; } });
+    for (const value of [0, -1, -1_800_000, 1.5]) assert.throws(() => cap(value), /the preflight generationMaxAgeMs must be a positive integer/, String(value));
+    assert.doesNotThrow(() => cap(1));
+    assert.doesNotThrow(() => cap(1_800_000));
 });
 
 test('the cohorts are read from the preflights: one generation per cohort, a different one for each cohort', () => {
@@ -1528,6 +1556,7 @@ const evidenceArgs = (directories) => Object.entries(directories).flatMap(([id, 
     '--report', `${id}=${path.join(dir, 'test-results/results.json')}`, '--preflight', `${id}=${path.join(dir, 'profile-preflight_codex.json')}`,
 ]);
 
+const exactLine = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`);
 const receiptCli = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'images/ploinky-box/acceptance-receipt.mjs'), ...args], { encoding: 'utf8', timeout: 30000 });
 
 function cliFixture(f) {
@@ -1585,12 +1614,12 @@ test('the receipt producer CLI binds each gate to one artifact directory and ref
     const postflight = path.join(directories['onlyoffice-confidential'], 'profile-postflight_codex.json');
     const kept = fs.readFileSync(postflight);
     fs.rmSync(postflight);
-    refused('missing postflight', args, /gate onlyoffice-confidential: .*postflight/);
+    refused('missing postflight', args, exactLine('gate onlyoffice-confidential: the postflight (profile-postflight_codex.json) is required'));
     fs.writeFileSync(postflight, kept);
     const parent = path.join(directories['copilot-live-skills'], 'codex-auth/parent-result.json');
     const parentBytes = fs.readFileSync(parent);
     fs.rmSync(parent);
-    refused('missing parent result', args, /gate copilot-live-skills: .*parent result/);
+    refused('missing parent result', args, exactLine('gate copilot-live-skills: the parent result (codex-auth/parent-result.json) is required'));
     fs.writeFileSync(parent, parentBytes);
     // A report from another directory, or another file name, is not the report of that invocation.
     const elsewhere = path.join(dir, 'elsewhere'); fs.mkdirSync(elsewhere);
@@ -1612,6 +1641,43 @@ test('the receipt producer CLI binds each gate to one artifact directory and ref
     // A swapped postflight is a different run, and the CLI reports it as such.
     fs.writeFileSync(postflight, fs.readFileSync(linked));
     refused('postflight of another invocation', args, /one run id/);
+});
+
+test('the receipt producer CLI reads the parent result only from a real codex-auth directory', async (t) => {
+    const f = await fixture(t);
+    const { dir, base } = cliFixture(f);
+    const directories = artifactDirectories(dir);
+    const args = evidenceArgs(directories);
+    const auth = path.join(directories['copilot-live-skills'], 'codex-auth');
+    assert.equal(receiptCli(...base, ...args).status, 0, 'the control build must pass');
+    const refused = (label, expected) => {
+        const result = receiptCli(...base, ...args);
+        assert.notEqual(result.status, 0, label);
+        assert.match(result.stderr, expected, label);
+        assert.equal(result.stdout, '', `${label} must write no receipt`);
+    };
+    // A symbolic link in place of the directory could supply a result from anywhere, even a valid one.
+    const moved = path.join(dir, 'moved-codex-auth');
+    fs.renameSync(auth, moved);
+    fs.symlinkSync(moved, auth);
+    assert.ok(fs.existsSync(path.join(auth, 'parent-result.json')), 'the linked directory holds a valid parent result');
+    refused('symlinked codex-auth', exactLine('gate copilot-live-skills: codex-auth must be a real directory, not a symbolic link or a file'));
+    fs.rmSync(auth);
+    // A file in place of the directory.
+    fs.writeFileSync(auth, 'not a directory');
+    refused('codex-auth as a file', exactLine('gate copilot-live-skills: codex-auth must be a real directory, not a symbolic link or a file'));
+    fs.rmSync(auth);
+    // An absent directory is a missing parent result.
+    refused('absent codex-auth', exactLine('gate copilot-live-skills: the parent result (codex-auth/parent-result.json) is required'));
+    fs.renameSync(moved, auth);
+    assert.equal(receiptCli(...base, ...args).status, 0, 'the restored directory builds again');
+    // A symbolic parent-result.json inside a real directory is refused as before.
+    const real = path.join(auth, 'parent-result.json');
+    const bytes = fs.readFileSync(real);
+    fs.rmSync(real);
+    fs.writeFileSync(path.join(dir, 'other-parent.json'), bytes);
+    fs.symlinkSync(path.join(dir, 'other-parent.json'), real);
+    refused('symlinked parent result', /regular file/);
 });
 
 test('the repository publication instructions describe the promotion path and its limits', () => {

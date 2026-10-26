@@ -765,7 +765,8 @@ duration (a fractional duration rounds up to the next millisecond). `finished_at
 is the postflight's `capturedAt`, rounded up to the millisecond; `started_at` is
 the report's `stats.startTime`. A gate without a postflight (the runner writes
 it last, and only after exit code 0), or with a failed or incomplete parent
-result for `06`, cannot be built. The field names are this repository's reading
+result for `06`, cannot be built. The `codex-auth` directory holding the parent
+result must itself be a real directory, not a symbolic link or a file. The field names are this repository's reading
 of the Explorer runner's artifacts; keys not listed above are never read, so
 added keys are tolerated.
 

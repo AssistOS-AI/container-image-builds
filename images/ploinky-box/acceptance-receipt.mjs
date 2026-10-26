@@ -513,11 +513,23 @@ export function readGateEvidence(id, { reportPath, preflightPath }) {
     const directory = fs.realpathSync(path.dirname(preflightPath));
     assert.ok(path.basename(reportPath) === path.basename(REPORT_FILE) && fs.realpathSync(path.dirname(reportPath)) === path.join(directory, path.dirname(REPORT_FILE)),
         `gate ${id}: the report must be ${REPORT_FILE} in the artifact directory of its preflight`);
+    // The parent result sits in `codex-auth`; that directory itself must be a real directory, not a symbolic link
+    // (which would let the file come from elsewhere) and not a file. An absent directory leaves the result missing.
+    let parentResult;
+    if (id === PARENT_RESULT_GATE) {
+        const authDirectory = path.join(directory, path.dirname(PARENT_RESULT_FILE));
+        let stat;
+        try { stat = fs.lstatSync(authDirectory); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (stat) {
+            assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), `gate ${id}: ${path.dirname(PARENT_RESULT_FILE)} must be a real directory, not a symbolic link or a file`);
+            parentResult = readOptional(path.join(directory, PARENT_RESULT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: parent result`);
+        }
+    }
     return {
         report: readBounded(reportPath, MAX_INPUT_BYTES, `gate ${id}: report`),
         preflight: readBounded(path.join(directory, PREFLIGHT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: preflight`),
         postflight: readOptional(path.join(directory, POSTFLIGHT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: postflight`),
-        ...(id === PARENT_RESULT_GATE ? { parentResult: readOptional(path.join(directory, PARENT_RESULT_FILE), MAX_EVIDENCE_BYTES, `gate ${id}: parent result`) } : {}),
+        ...(id === PARENT_RESULT_GATE ? { parentResult } : {}),
     };
 }
 
