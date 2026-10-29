@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1)"
-          node --test tests/roboteam-agent-supply-chain.test.mjs tests/roboteam-storage-init.test.mjs
+          node --test tests/roboteam-agent-supply-chain.test.mjs tests/roboteam-storage-init.test.mjs tests/roboteam-gui-tools.test.mjs
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -112,13 +112,13 @@ jobs:
             --network=none \
             --entrypoint /bin/sh \
             "$DESKTOP_IMAGE_NAME:smoke" \
-            -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -x /usr/local/bin/roboteam-computer-use-mcp && test -d /install && test -d /opt/roboteam-tools && test -d /run/secrets && test -d /run/secrets/etc-pki-entitlement && test -d /run/secrets/rhsm && test ! -e /usr/local/bin/computer-use-linux && test ! -e /usr/local/bin/supergateway'
+            -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -x /usr/local/bin/roboteam-computer-use-mcp && test -d /install && test -d /opt/roboteam-tools && test -d /run/secrets && test -d /run/secrets/etc-pki-entitlement && test -d /run/secrets/rhsm && test ! -e /usr/local/bin/computer-use-linux && test ! -e /usr/local/bin/supergateway && node /opt/roboteam-tools/smoke-gui-tools.mjs desktop'
 
       - name: Smoke build and verify local browser runtime
         run: |
           set -euo pipefail
           docker build --file images/roboteam-agent/Dockerfile.browser --tag "$BROWSER_IMAGE_NAME:smoke" images/roboteam-agent
-          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -d /install && test -d /opt/roboteam-tools && test -d /run/secrets && test -d /run/secrets/etc-pki-entitlement && test -d /run/secrets/rhsm && test ! -e /usr/local/bin/playwright-mcp'
+          docker run --rm --network=none --entrypoint /bin/sh "$BROWSER_IMAGE_NAME:smoke" -c 'test -x /usr/local/bin/node && test -x /usr/local/bin/npm && test -d /install && test -d /opt/roboteam-tools && test -d /run/secrets && test -d /run/secrets/etc-pki-entitlement && test -d /run/secrets/rhsm && test ! -e /usr/local/bin/playwright-mcp && node /opt/roboteam-tools/smoke-gui-tools.mjs browser'
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -155,7 +155,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.base.digest=sha256:1bd141d5d7aaf3e98e47b7d9665f50657d1628617b4ef47bc3bbd43d726fd77e
-            io.assistos.roboteam.tools=runtime-cache
+            io.assistos.roboteam.tools=image-baked-locked
           provenance: false
 
       - name: Build and push multi-architecture browser
@@ -171,7 +171,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.base.digest=sha256:4c7b9086d2e5054b61c9e6b0f75efceece5befeff2bec3ff543d52e000cee21d
-            io.assistos.roboteam.tools=runtime-cache
+            io.assistos.roboteam.tools=image-baked-locked
           provenance: false
 
       - name: Verify and report published runtime and workstation

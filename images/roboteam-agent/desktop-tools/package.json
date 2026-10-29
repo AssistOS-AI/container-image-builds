@@ -1,0 +1,9 @@
+{
+  "name": "@assistos/roboteam-desktop-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "supergateway": "4.2.1"
+  }
+}

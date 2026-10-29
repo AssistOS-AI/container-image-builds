@@ -25,6 +25,13 @@ RUN set -eux; \
     node --version; \
     npm --version
 
+COPY desktop-tools/ /opt/roboteam-tools/
+COPY prepare-gui-tools.mjs smoke-gui-tools.mjs smoke-mcp.mjs sources.lock.json /opt/roboteam-tools/
+RUN node /opt/roboteam-tools/prepare-gui-tools.mjs desktop \
+    && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm --prefix /opt/roboteam-tools ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && node /opt/roboteam-tools/smoke-gui-tools.mjs desktop \
+    && rm /opt/roboteam-tools/prepare-gui-tools.mjs
+
 COPY --chmod=0755 roboteam-computer-use-mcp /usr/local/bin/roboteam-computer-use-mcp
 COPY --chmod=0755 roboteam-open-browser /usr/local/bin/roboteam-open-browser
 COPY --chmod=0755 services/desktop-mcp.run /etc/s6-overlay/s6-rc.d/svc-roboteam-desktop-mcp/run
@@ -36,4 +43,4 @@ COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/roboteam-agent-sour
 EXPOSE 8100
 
 LABEL io.assistos.roboteam.desktop="1" \
-      io.assistos.roboteam.tools="runtime-cache"
+      io.assistos.roboteam.tools="image-baked-locked"

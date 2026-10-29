@@ -22,7 +22,7 @@ const sources = JSON.parse(read('images/roboteam-agent/sources.lock.json'));
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 test('RoboTeam locks immutable bases including a stable Podman release', () => {
-    assert.equal(sources.schemaVersion, 5);
+    assert.equal(sources.schemaVersion, 6);
     for (const base of [sources.nodeBase, sources.podmanBase, sources.workstationBase, sources.browserBase]) {
         assert.match(base.indexDigest, SHA256);
         assert.ok(base.image.endsWith(`@${base.indexDigest}`));
@@ -36,7 +36,7 @@ test('RoboTeam locks immutable bases including a stable Podman release', () => {
     assert.doesNotMatch(sources.podmanBase.image, /(?:upstream|latest|main|dev|rc)/i);
 });
 
-test('GUI images provide system runtimes while tools come from the persistent runtime cache', () => {
+test('GUI images bake locked helper payloads at the existing service paths', () => {
     assert.match(workstationDockerfile, new RegExp(`^FROM ${sources.workstationBase.image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
     assert.equal(sources.runtimeTools.strategy, 'resolve-latest-into-persistent-cache');
     assert.equal(sources.runtimeTools.mountPath, '/opt/roboteam-tools');
@@ -52,7 +52,14 @@ test('GUI images provide system runtimes while tools come from the persistent ru
     assert.match(computerUseLauncher, /COMPUTER_USE_LINUX_SCREENSHOT_BACKEND=gnome-screenshot/);
     assert.match(computerUseLauncher, /unset COMPUTER_USE_LINUX_ENABLE_SHELL/);
     assert.match(computerUseLauncher, /\/opt\/roboteam-tools\/computer-use-linux mcp/);
-    assert.doesNotMatch(workstationDockerfile, /computer-use-linux|npm install|supergateway@/);
+    assert.equal(sources.guiTools.strategy, 'image-baked-locked');
+    assert.equal(sources.guiTools.path, '/opt/roboteam-tools');
+    for (const [mode, definition] of [['desktop', workstationDockerfile], ['browser', browserDockerfile]]) {
+        assert.ok(definition.includes(`COPY ${mode}-tools/ /opt/roboteam-tools/`));
+        assert.ok(definition.includes(`prepare-gui-tools.mjs ${mode}`));
+        assert.ok(definition.includes(`smoke-gui-tools.mjs ${mode}`));
+        assert.match(definition, /ci --omit=dev --ignore-scripts --no-audit --no-fund/);
+    }
     assert.match(desktopMcpService, /\/opt\/roboteam-tools\/node_modules\/\.bin\/supergateway/);
     assert.match(desktopMcpService, /outputTransport streamableHttp/);
     assert.match(desktopMcpService, /--port 8100/);

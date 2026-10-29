@@ -227,14 +227,29 @@ on PATH). It contains neither a GUI nor Codex.
 `docker.io/assistos/roboteam-desktop:runtime` derives from the digest-pinned
 LinuxServer Ubuntu XFCE Webtop base. It contains Node/npm plus the X11, AT-SPI,
 window-control, screenshot, and MCP launch support required by desktop control.
-It does not contain computer-use-linux or Supergateway.
+It bakes Supergateway 4.2.1 and computer-use-linux 0.7.31 into
+`/opt/roboteam-tools`.
 `docker.io/assistos/roboteam-browser:runtime` derives from the separate
-digest-pinned LinuxServer Chromium base and contains Node/npm plus the MCP/CDP
-launch service. It does not contain Playwright MCP. RoboTeam resolves these
-tools and Codex at first use, prepares validated persistent generations under
-its `/data/tool-cache`, and mounts exact generations read-only into the relevant
-runtime. Consequently, tool releases can advance without rebuilding these large
-images.
+digest-pinned LinuxServer Chromium base and bakes Playwright MCP 0.0.83 at the
+same tool path. npm package locks retain exact transitive versions and integrity;
+`sources.lock.json` seals those locks and the amd64/arm64 desktop release hashes.
+Builds use `npm ci --ignore-scripts` with browser downloads disabled. Services
+execute the installed helpers directly, without runtime installation.
+
+The external RoboTeam tool cache and its generation mounts remain unchanged.
+Consumers must adopt the new image and stop overlaying its baked tool directory
+in their separately reviewed integration. These definitions do not complete that migration.
+
+Each GUI image runs its payload smoke during build. An offline rerun uses
+`podman run --rm --pull=never --network=none --entrypoint node IMAGE /opt/roboteam-tools/smoke-gui-tools.mjs MODE`,
+where MODE is `browser` or `desktop`. It verifies installed package versions, the
+desktop binary digest, command execution, and the flags used by the existing
+services. Desktop also completes an MCP initialize and tools/list exchange,
+verifying the server name, release version and desktop tool catalog without
+calling a desktop tool. It does not establish a working CDP or XFCE session. Native builds and
+offline smoke on both amd64 and arm64 remain required before claiming native
+payload support; the existing publication workflow only runs the offline check
+on its amd64 runner and builds arm64 through QEMU.
 
 The root-owned read-only contract is
 `/opt/roboteam-runtime/contract-v6`, containing `roboteam-runtime-v6` followed

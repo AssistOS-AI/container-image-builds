@@ -156,3 +156,30 @@ Ubuntu 24.04 archive, as these workflows already did, and uses it only to copy
 the verified layout to Docker Hub with `--preserve-digests`. Building on native
 runners removes the QEMU action and the inline Python archive verifier that the
 emulated multiplatform builds required. No npm or Python dependency is added.
+
+## RoboTeam GUI helpers
+
+Browser uses [Playwright MCP](https://github.com/microsoft/playwright-mcp)
+0.0.83, Apache-2.0, to control the existing Chromium CDP session. Desktop uses
+[Supergateway](https://github.com/supercorp-ai/supergateway) 4.2.1, MIT, to
+expose the existing stdio MCP service over HTTP, and
+[computer-use-linux](https://github.com/agent-sh/computer-use-linux/releases/tag/v0.7.31)
+0.7.31, MIT, for Linux desktop control. Existing services require these protocols;
+replacing them with local helper code would require a different integration.
+
+Separate browser-tools and desktop-tools package locks under
+`images/roboteam-agent` retain the exact npm dependency closure and integrity.
+The source lock records their SHA-256 hashes and the official GitHub release
+asset size and SHA-256 for GNU Linux amd64 and arm64. Only Desktop ships the
+native release binary, about 10 MB on amd64 and 9 MB on arm64. npm package
+licenses remain in node_modules; the upstream desktop MIT license is retained
+alongside the binary. Preserve those notices when redistributing images.
+
+The build preparer and offline smoke use Node built-ins. Build-time npm runs
+with lifecycle scripts disabled; no helper installs at runtime. The offline
+smoke rejects missing packages, version mismatches, missing CLI flags, a changed
+desktop binary, or a failed executable. The desktop MCP check uses the pinned
+release's stdio initialize and tools/list protocol. It verifies server version
+and tool availability without a GUI session; no desktop tool is called.
+Missing dependencies require rebuilding
+the image. Existing Node, Chromium, XFCE and distro dependencies are unchanged.
