@@ -966,3 +966,7 @@ on the target. Do not modify system Git, production PATH, host TLS libraries, or
 system/global Git configuration. Ubuntu maintains the dynamically linked TLS
 packages; updating this separate Git release requires a reviewed source pin and
 a new passing artifact.
+
+## ScriptaHub skill runtime
+
+`images/scriptahub-agent/Dockerfile` builds the agent-owned document, editorial, validation, presentation and audio runtime using the ScriptaHubAgent repository as build context. Dependency manifests and installers belong to `scriptahubAgent/deployment/`; application and skill sources are not edited in this repository. Build with `podman build -f <container-image-builds>/images/scriptahub-agent/Dockerfile -t docker.io/assistos/scriptahub-agent:runtime <ScriptaHubAgent>`. Preparation installs dependencies before the image is used and the final gate runs as uid 1000. The supplied verified PDF native asset set currently supports Linux ARM64 only; an unsupported architecture fails rather than substituting another converter. Publication of this image and adoption of its immutable digest remain separate operations.

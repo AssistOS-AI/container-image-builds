@@ -156,3 +156,9 @@ Ubuntu 24.04 archive, as these workflows already did, and uses it only to copy
 the verified layout to Docker Hub with `--preserve-digests`. Building on native
 runners removes the QEMU action and the inline Python archive verifier that the
 emulated multiplatform builds required. No npm or Python dependency is added.
+
+## ScriptaHub processing runtime
+
+The ScriptaHub image retains the pinned `ploinky-node` base and adds distro-managed LibreOffice Writer, QPDF, Poppler, Ghostscript, Chromium, FFmpeg, SoX, espeak-ng, libsndfile, fonts and Python venv/build tools. ScriptaHubAgent owns the thirteen skill sources, their npm lockfiles and its build-time preparation/verification scripts. The image installs the packages before startup; workflow execution never downloads missing libraries. Native PDF/model files are validated against the skill's committed size/SHA-256 inventory. Native distribution notices and the declared Eigen source archive are retained. The currently supplied native set is Linux ARM64.
+
+Local audio uses the skill's CPU Kokoro, Qwen and Piper setup programs. The ARM64 Qwen deployment selects the matching PyPI `torch==2.10.0` and `torchaudio==2.10.0` CPU distributions; the Python setup records its complete resolved package set and selected model revision. Cloud provider credentials are not build inputs and are never included in the image. Final runtime doctors run as uid 1000. Real conversion/synthesis and the private `agentExec` sandbox remain distinct native acceptance gates.
