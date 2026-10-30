@@ -1,0 +1,102 @@
+name: Publish RoboWork Worker image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - images/robo-work-worker/**
+      - .github/workflows/publish-robo-work-worker-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-robo-work-worker-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: assistos/robo-work-worker
+  IMAGE_TAG: runtime
+
+jobs:
+  publish:
+    name: Build and push runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify exact clean image-definition inputs
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Verify pinned inputs expose both native platforms
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const lock = JSON.parse(fs.readFileSync('images/robo-work-worker/sources.lock.json', 'utf8'));
+          for (const key of ['baseImage', 'nodeBase', 'webttyNativeSource']) {
+            const entry = lock[key];
+            const index = JSON.parse(execFileSync('docker', ['buildx', 'imagetools', 'inspect', '--raw', entry.image], { encoding: 'utf8' }));
+            const members = new Map(index.manifests.map((m) => [`${m.platform?.os}/${m.platform?.architecture}`, m.digest]));
+            for (const platform of ['linux/amd64', 'linux/arm64']) {
+              assert.equal(members.get(platform), entry.platformManifests[platform], `${key} ${platform}`);
+            }
+          }
+          NODE
+
+      - name: Smoke build and verify local architecture contract
+        run: |
+          set -euo pipefail
+          docker build -t "$IMAGE_NAME:smoke" images/robo-work-worker
+          docker run --rm --network=none "$IMAGE_NAME:smoke"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push multi-architecture runtime
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/robo-work-worker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: docker.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            io.assistos.robo-work.runtime-contract=robo-work-worker-v1
+          provenance: false
+
+      - name: Verify and report published runtime
+        env:
+          RUNTIME_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RUNTIME_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "docker.io/${IMAGE_NAME}@${RUNTIME_DIGEST}" > "$RUNNER_TEMP/published-index.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const index = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/published-index.json`, 'utf8'));
+          const platforms = index.manifests.map((e) => `${e.platform?.os}/${e.platform?.architecture}`).sort();
+          assert.deepEqual(platforms, ['linux/amd64', 'linux/arm64']);
+          NODE
+          printf 'Published runtime: `docker.io/%s:%s@%s`\n' "$IMAGE_NAME" "$IMAGE_TAG" "$RUNTIME_DIGEST" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,13 @@
+{
+  "name": "robo-work-worker-agent-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Locked coding-agent tool tree baked into the RoboWork worker image.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.314",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@openai/codex": "0.166.0",
+    "@opencode-ai/plugin": "1.19.5",
+    "opencode-ai": "1.19.5"
+  }
+}
