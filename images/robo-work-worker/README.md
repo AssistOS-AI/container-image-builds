@@ -1,6 +1,6 @@
 # RoboWork worker image
 
-Runtime image for the RoboWork worker (`assistos/robo-work-worker:runtime`). It is not published from this definition until a reviewed publication is dispatched.
+Runtime image for the RoboWork worker (`assistos/robo-work-worker:r10-<commit>`, one non-floating tag per publish, consumed by digest).
 
 ## Contents
 
