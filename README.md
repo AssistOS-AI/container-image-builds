@@ -19,7 +19,7 @@ shared runtime images to the `assistos` Docker Hub organization.
 | `assistos/roboteam-agent:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-desktop:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.workstation` | `publish-roboteam-agent-image.yml` |
 | `assistos/roboteam-browser:runtime` | this repo | `images/roboteam-agent` | `images/roboteam-agent/Dockerfile.browser` | `publish-roboteam-agent-image.yml` |
-| `assistos/robo-work-worker:runtime` | this repo | `images/robo-work-worker` | `images/robo-work-worker/Dockerfile` | `publish-robo-work-worker-image.yml` |
+| `assistos/robo-work-worker:r10-<commit>` | this repo | `images/robo-work-worker` | `images/robo-work-worker/Dockerfile` | `publish-robo-work-worker-image.yml` |
 | `assistos/bwrap-runner:node24-python-trixie` | `AssistOS-AI/basic` | `bwrap-runner` | `images/bwrap-runner/Dockerfile` | `publish-bwrap-runner.yml` |
 | `assistos/livekit-server-agent:webmeet-infra` | `AssistOS-AI/webmeet` | `liveKitServerAgent` | `images/livekit-server-agent/Dockerfile` | `publish-livekit-server-agent.yml` |
 | `assistos/soul-gateway:node24-sqlite` | `AssistOS-AI/AssistOSExplorer` | `soul-gateway` | `images/soul-gateway/Dockerfile` | `publish-soul-gateway-image.yml` |
