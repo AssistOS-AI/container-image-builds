@@ -10,12 +10,14 @@ test('ScriptaHub publication binds an immutable public source and the supported 
     assert.equal(lock.repository, 'https://github.com/Axiologic/ScriptaHubAgent.git');
     assert.match(lock.revision, /^[0-9a-f]{40}$/);
     assert.equal(lock.image, 'docker.io/assistos/scriptahub-agent');
-    assert.equal(lock.platform, 'linux/arm64');
-    assert.equal(read('images/scriptahub-agent/Dockerfile').split('\n')[0], `FROM ${lock.baseImage}`);
+    assert.deepEqual(lock.platforms, ['linux/amd64','linux/arm64']);
+    assert.ok(read('images/scriptahub-agent/Dockerfile').includes(`FROM ${lock.baseImage}`));
+    assert.ok(read('images/scriptahub-agent/Dockerfile').startsWith(`FROM ${lock.nativeBuilder} AS native-build`));
     assert.match(workflow, /repository: Axiologic\/ScriptaHubAgent/);
     assert.match(workflow, /ref: \$\{\{ steps.source.outputs.revision \}\}/);
-    assert.match(workflow, /runs-on: ubuntu-24\.04-arm/);
-    assert.doesNotMatch(workflow, /setup-qemu|linux\/amd64|SOURCE_REPO_TOKEN/);
+    assert.match(workflow, /runner: ubuntu-24\.04-arm/);
+    assert.match(workflow, /runner: ubuntu-24\.04\s/);
+    assert.doesNotMatch(workflow, /setup-qemu|SOURCE_REPO_TOKEN/);
 });
 
 test('runtime publication requires native offline proof and source equality before login or push', () => {
@@ -29,7 +31,9 @@ test('runtime publication requires native offline proof and source equality befo
     assert.match(workflow.slice(proof, login), /verify-skills\.mjs/);
     assert.match(workflow.slice(proof, login), /check-runtime\.mjs/);
     assert.match(workflow, /if test "\$PROMOTE_STABLE" = true/);
-    assert.match(workflow, /runtime-manifest\.json.*\n.*test .* = "\$digest"/);
+    assert.match(workflow, /runtime-index\.json.*\n.*test .* = "\$digest"/);
+    assert.match(workflow, /needs: publish/);
+    assert.match(workflow, /index.manifests.length,2/);
     assert.match(workflow, /password: \$\{\{ secrets.DOCKERHUB_TOKEN \}\}/);
     assert.match(workflow, /persist-credentials: false/);
     for (const match of workflow.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) assert.match(match[1], /^[0-9a-f]{40}$/);

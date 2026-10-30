@@ -1,3 +1,10 @@
+FROM docker.io/library/rust@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS native-build
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends python3 cmake clang pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+COPY scriptahubAgent/deployment/skills-runtime.json /build-config.json
+COPY scriptahubAgent/deployment/build-native.sh /build-native.sh
+RUN TARGETARCH="$TARGETARCH" sh /build-native.sh
+
 FROM docker.io/assistos/ploinky-node@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
 
 USER root
@@ -12,7 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # installed libraries come only from the explicit preparation step below.
 RUN apt-get update && apt-get install -y --no-install-recommends sox \
     && rm -rf /var/lib/apt/lists/*
-COPY scriptahubAgent/skills/ /opt/scriptahub/runtime/skills/
+COPY skills/ /opt/scriptahub/runtime/skills/
+COPY --from=native-build /out/ /opt/scriptahub/native-build/
 COPY scriptahubAgent/deployment/ /opt/scriptahub/runtime/
 COPY scriptahubAgent/site/reader/reader.css /opt/scriptahub/runtime/reader/reader.css
 RUN printf '%s\n' '#!/bin/sh' 'exec /usr/bin/chromium --no-sandbox --disable-dev-shm-usage "$@"' > /usr/local/bin/chromium-browser \
