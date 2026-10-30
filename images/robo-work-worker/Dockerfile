@@ -43,7 +43,11 @@ RUN set -eux; \
         findutils-1:4.10.0-7.fc44 \
         which-2.25-1.fc44 \
         tar-2:1.35-8.fc44 \
-        gzip-1.14-2.fc44; \
+        gzip-1.14-2.fc44 \
+        python3-3.14.8-1.fc44 \
+        python3-libs-3.14.8-1.fc44 \
+        python-pip-wheel-26.0.1-3.fc44 \
+        mpdecimal-4.0.1-3.fc44; \
     dnf clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5; \
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \

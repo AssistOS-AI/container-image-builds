@@ -45,11 +45,16 @@
       "findutils": "1:4.10.0-7.fc44",
       "which": "2.25-1.fc44",
       "tar": "2:1.35-8.fc44",
-      "gzip": "1.14-2.fc44"
+      "gzip": "1.14-2.fc44",
+      "python3": "3.14.8-1.fc44",
+      "python3-libs": "3.14.8-1.fc44",
+      "python-pip-wheel": "26.0.1-3.fc44",
+      "mpdecimal": "4.0.1-3.fc44"
     },
     "observedArchitecture": "x86_64 (rpm -q in localhost/robo-work-worker:r10-dev); arm64 NEVRAs are not yet observed and the arm64 build is unproven",
     "bubblewrap": "installed unchanged at /usr/bin/bwrap; required >= 0.11 (smoke asserts)",
-    "risk": "Fedora removes superseded builds from the updates repository, so a pinned NEVRA that came from updates can vanish and fail the build; rebuild then needs a deliberate re-pin. No versioned updates snapshot repository is configured or verified here."
+    "risk": "Fedora removes superseded builds from the updates repository, so a pinned NEVRA that came from updates can vanish and fail the build; rebuild then needs a deliberate re-pin. No versioned updates snapshot repository is configured or verified here.",
+    "pythonNote": "Fedora's stock python3 (monitor decision M-41), installed with install_weak_deps=False and IPv4; python-pip-wheel and mpdecimal are its only additional dependencies on this base. No setuid or file-capability change."
   },
   "ripgrep": {
     "version": "15.1.0",
