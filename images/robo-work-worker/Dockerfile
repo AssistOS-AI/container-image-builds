@@ -28,11 +28,22 @@ COPY --from=ploinky-webtty /usr/local/lib/ploinky/webtty/node_modules /usr/local
 COPY --from=ploinky-webtty /usr/local/share/ploinky/webtty/native-probe.mjs /usr/local/share/ploinky/webtty/native-probe.mjs
 COPY --from=ploinky-webtty /usr/local/share/ploinky/webtty/runtime-contract.json /usr/local/share/ploinky/webtty/runtime-contract.json
 
-# Unchanged distribution packages. Fedora's bubblewrap is installed as shipped.
+# Unchanged distribution packages at exact NEVRAs: a repository that no longer
+# serves one fails the build instead of drifting. Fedora's bubblewrap is installed as shipped.
 RUN set -eux; \
     dnf install -y --setopt=ip_resolve=4 --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-        bash bubblewrap ca-certificates curl git iproute nftables util-linux \
-        findutils which tar gzip; \
+        bash-5.3.9-3.fc44 \
+        bubblewrap-0.12.0-1.fc44 \
+        ca-certificates-2025.2.80_v9.0.304-7.fc44 \
+        curl-8.18.0-8.fc44 \
+        git-2.56.0-1.fc44 \
+        iproute-6.17.0-2.fc44 \
+        nftables-1:1.1.6-2.fc44 \
+        util-linux-2.41.6-1.fc44 \
+        findutils-1:4.10.0-7.fc44 \
+        which-2.25-1.fc44 \
+        tar-2:1.35-8.fc44 \
+        gzip-1.14-2.fc44; \
     dnf clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5; \
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
