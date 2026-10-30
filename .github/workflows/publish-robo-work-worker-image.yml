@@ -18,7 +18,8 @@ concurrency:
 
 env:
   IMAGE_NAME: assistos/robo-work-worker
-  IMAGE_TAG: runtime
+  # Non-floating: every publish is tagged by the image-definition commit.
+  IMAGE_TAG: r10-${{ github.sha }}
 
 jobs:
   publish:
