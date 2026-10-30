@@ -11,6 +11,7 @@ Runtime image for the RoboWork worker (`assistos/robo-work-worker:r10-<commit>`,
 | Bubblewrap | unchanged Fedora package at `/usr/bin/bwrap`; the smoke script requires 0.11 or newer and checks that `bwrap --help` lists `--args`, `--bind-fd`, `--ro-bind-fd`, `--disable-userns`, `--assert-userns-disabled`, `--block-fd`, `--info-fd`, `--json-status-fd`, `--seccomp`, `--hostname` and `--unshare-cgroup-try` |
 | Namespace tools | util-linux (`setpriv`, `unshare`, `nsenter`, `mount`), iproute2, nftables |
 | Shell and utilities | `bash` (`/bin/sh` is bash), git, curl, ca-certificates, ripgrep 15.1.0 (pinned checksum, as in `roboteam-agent`) |
+| Python | Fedora stock `python3` 3.14.8 with `python3-libs`, `python-pip-wheel` and `mpdecimal` at exact NEVRAs, installed without weak dependencies; the setuid and file-capability inventory is unchanged |
 | Coding agents | `@openai/codex`, `@anthropic-ai/claude-code`, `opencode-ai` with `@opencode-ai/plugin`, `@earendil-works/pi-coding-agent`, installed with `npm ci` from `agent-tools/package-lock.json` into `/opt/robo-work-tools` |
 | Terminal PTY | Ploinky's immutable node-pty build copied from the pinned `assistos/ploinky-box` index at `/usr/local/lib/ploinky/webtty` (the location `core-services/webtty/native-runtime.mjs` expects); no native build happens here |
 

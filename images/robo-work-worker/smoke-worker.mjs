@@ -23,6 +23,7 @@ report('curl', first(run('curl', ['--version'])));
 report('rg', first(run('rg', ['--version'])));
 report('bash', first(run('bash', ['--version'])));
 report('sh', fs.realpathSync('/bin/sh'));
+report('python3', first(run('python3', ['--version'])));
 
 const bwrapVersion = run('/usr/bin/bwrap', ['--version']);
 report('bwrap', bwrapVersion);
