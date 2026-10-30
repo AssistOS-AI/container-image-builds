@@ -1,12 +1,6 @@
 name: Publish RoboWork Worker image
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - images/robo-work-worker/**
-      - .github/workflows/publish-robo-work-worker-image.yml
   workflow_dispatch:
 
 permissions:

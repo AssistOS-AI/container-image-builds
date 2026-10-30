@@ -32,8 +32,24 @@
   },
   "distributionPackages": {
     "manager": "dnf",
-    "packages": ["bash", "bubblewrap", "ca-certificates", "curl", "git", "iproute", "nftables", "util-linux", "findutils", "which", "tar", "gzip"],
-    "bubblewrap": "installed unchanged at /usr/bin/bwrap; required >= 0.11 (smoke asserts); resolved version is recorded in the build evidence from `bwrap --version`"
+    "pinning": "exact NEVRA install; the build fails if a mirror no longer serves it",
+    "packages": {
+      "bash": "5.3.9-3.fc44",
+      "bubblewrap": "0.12.0-1.fc44",
+      "ca-certificates": "2025.2.80_v9.0.304-7.fc44",
+      "curl": "8.18.0-8.fc44",
+      "git": "2.56.0-1.fc44",
+      "iproute": "6.17.0-2.fc44",
+      "nftables": "1:1.1.6-2.fc44",
+      "util-linux": "2.41.6-1.fc44",
+      "findutils": "1:4.10.0-7.fc44",
+      "which": "2.25-1.fc44",
+      "tar": "2:1.35-8.fc44",
+      "gzip": "1.14-2.fc44"
+    },
+    "observedArchitecture": "x86_64 (rpm -q in localhost/robo-work-worker:r10-dev); arm64 NEVRAs are not yet observed and the arm64 build is unproven",
+    "bubblewrap": "installed unchanged at /usr/bin/bwrap; required >= 0.11 (smoke asserts)",
+    "risk": "Fedora removes superseded builds from the updates repository, so a pinned NEVRA that came from updates can vanish and fail the build; rebuild then needs a deliberate re-pin. No versioned updates snapshot repository is configured or verified here."
   },
   "ripgrep": {
     "version": "15.1.0",
@@ -64,7 +80,14 @@
     "commit": "cf2996dcf22465d5ed408a0e93aec2ca59f1f91b",
     "note": "roboteam-agent does not bake ALA; it arrives from the Ploinky workspace checkout via the manifest link-install. Recorded here only as the reviewed pin."
   },
-  "omitted": ["podman", "fuse-overlayfs", "pasta", "fusermount", "file server", "rust"],
+  "omitted": [
+    "podman",
+    "fuse-overlayfs",
+    "pasta",
+    "fusermount",
+    "file server",
+    "rust"
+  ],
   "runtimeContract": {
     "path": "/opt/robo-work-runtime/contract-v1",
     "content": "robo-work-worker-v1\n",
