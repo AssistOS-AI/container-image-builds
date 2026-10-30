@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "baseImage": {
+    "image": "docker.io/library/fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80",
+    "indexDigest": "sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80",
+    "platformManifests": {
+      "linux/amd64": "sha256:be9d65e2344d805cc11114319c685ecaa96b6d9b4350a0a6460cdb931babbd19",
+      "linux/arm64": "sha256:e402cca673711fee025f9ce21c6c08b1bd25ee26b3c482119c8675fbaaedbc85"
+    }
+  },
+  "nodeBase": {
+    "image": "docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
+    "indexDigest": "sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca",
+    "platformManifests": {
+      "linux/amd64": "sha256:5a0b29fd671000051867d7e563a16cdcc0dd39d15d14c1d34b16aeaf26619602",
+      "linux/arm64": "sha256:d7b9594f73c8f9eead6c5b1717e504bf6c65458e27daf77bb6022085c82faf03"
+    }
+  },
+  "webttyNativeSource": {
+    "image": "docker.io/assistos/ploinky-box@sha256:882f950f191007e70745f0494991dbe44e4150564e55a1a1602e1a1f16c5aa12",
+    "indexDigest": "sha256:882f950f191007e70745f0494991dbe44e4150564e55a1a1602e1a1f16c5aa12",
+    "platformManifests": {
+      "linux/amd64": "sha256:62f8d2de0399a1546fd947346feb6addfb99de4d2fca09fc8d9a8373a6086db3",
+      "linux/arm64": "sha256:2ca7a8654637bfdb7a7ce6c1f141a437531ea4896531efc65f687a1507783322"
+    },
+    "copied": [
+      "/usr/local/lib/ploinky/webtty/node_modules",
+      "/usr/local/share/ploinky/webtty/native-probe.mjs",
+      "/usr/local/share/ploinky/webtty/runtime-contract.json"
+    ],
+    "note": "Immutable node-pty 1.0.0 build used by Ploinky terminals; the worker authors and builds no native code."
+  },
+  "distributionPackages": {
+    "manager": "dnf",
+    "packages": ["bash", "bubblewrap", "ca-certificates", "curl", "git", "iproute", "nftables", "util-linux", "findutils", "which", "tar", "gzip"],
+    "bubblewrap": "installed unchanged at /usr/bin/bwrap; required >= 0.11 (smoke asserts); resolved version is recorded in the build evidence from `bwrap --version`"
+  },
+  "ripgrep": {
+    "version": "15.1.0",
+    "platforms": {
+      "linux/amd64": "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
+      "linux/arm64": "2b661c6ef508e902f388e9098d9c4c5aca72c87b55922d94abdba830b4dc885e"
+    }
+  },
+  "agentTools": {
+    "path": "/opt/robo-work-tools",
+    "strategy": "image-baked-locked",
+    "packages": {
+      "@openai/codex": "0.166.0",
+      "@anthropic-ai/claude-code": "2.1.314",
+      "opencode-ai": "1.19.5",
+      "@opencode-ai/plugin": "1.19.5",
+      "@earendil-works/pi-coding-agent": "1.4.0"
+    },
+    "files": {
+      "package.json": "c6f5ee0aee8f0c3e57e4027bcb2d03850f22602ecba97eebb5593e3a36fbf3d1",
+      "package-lock.json": "b7007896841aee83cc4af8ffe70de9c8f4d87a539806e0ddf448c678671734ea"
+    },
+    "note": "roboteam-agent resolves these at run time into a cache; the worker pins them. Versions are the latest at authoring on 2026-10-30."
+  },
+  "ala": {
+    "baked": false,
+    "repository": "AdvancedLanguageAgent",
+    "commit": "cf2996dcf22465d5ed408a0e93aec2ca59f1f91b",
+    "note": "roboteam-agent does not bake ALA; it arrives from the Ploinky workspace checkout via the manifest link-install. Recorded here only as the reviewed pin."
+  },
+  "omitted": ["podman", "fuse-overlayfs", "pasta", "fusermount", "file server", "rust"],
+  "runtimeContract": {
+    "path": "/opt/robo-work-runtime/contract-v1",
+    "content": "robo-work-worker-v1\n",
+    "owner": "0:0",
+    "mode": "0444"
+  }
+}
