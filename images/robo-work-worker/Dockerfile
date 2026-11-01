@@ -102,7 +102,7 @@ RUN set -eux; \
     printf 'robo-work-worker-v1\n' > /opt/robo-work-runtime/contract-v1; \
     chmod 0444 /opt/robo-work-runtime/contract-v1; \
     install -d -o root -g root -m 0555 /opt/robo-work-runtime/ca; \
-    install -o root -g root -m 0444 /etc/pki/tls/certs/ca-bundle.crt /opt/robo-work-runtime/ca/ca-bundle.crt; \
+    install -o root -g root -m 0444 /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /opt/robo-work-runtime/ca/ca-bundle.crt; \
     node /usr/local/share/ploinky/environment-contract.mjs; \
     node /usr/local/share/ploinky/robo-work-worker-smoke.mjs
 

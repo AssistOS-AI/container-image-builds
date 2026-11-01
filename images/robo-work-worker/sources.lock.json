@@ -128,7 +128,7 @@
     },
     "caBundle": "/opt/robo-work-runtime/ca/ca-bundle.crt",
     "wrappers": "Worker source server/sandbox/environment-bin owns the four fixed wrappers; bind that directory read-only at /rw-opt/bin. Contract wrapperTargets are worker paths; replace /opt/robo-work-tools with /rw-opt/tools inside the workload.",
-    "caSource": "/etc/pki/tls/certs/ca-bundle.crt",
+    "caSource": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
     "contractFields": {
       "architecture": "amd64 or arm64",
       "glibcFloor": "numeric version suffix string",
