@@ -1,8 +1,8 @@
 # RoboWork worker runtime. Digest-pinned inputs are recorded in sources.lock.json.
 # The worker runs as container root (the supervisor needs it); robots run as
-# uid 1000 inside Bubblewrap. No Rust or other native source is built here, and
-# Podman, fuse-overlayfs, pasta, a FUSE helper and a file server are omitted on
-# purpose. ALA is not baked: it comes from the Ploinky workspace checkout.
+# uid 1000 inside Bubblewrap. No Rust or other native source is built here.
+# Podman provides Environment image pull/create/mount; workloads still use bwrap.
+# ALA is not baked: it comes from the Ploinky workspace checkout.
 ARG FEDORA_BASE=docker.io/library/fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
 ARG NODE_IMAGE=docker.io/assistos/ploinky-node:24-bookworm-tools@sha256:36d105c9a8a85c6acf895eccb0044bd7d1852fde9ae300d9f332ff314e250fca
 ARG PLOINKY_BOX_IMAGE=docker.io/assistos/ploinky-box@sha256:882f950f191007e70745f0494991dbe44e4150564e55a1a1602e1a1f16c5aa12
@@ -31,6 +31,8 @@ COPY --from=ploinky-webtty /usr/local/share/ploinky/webtty/runtime-contract.json
 # Unchanged distribution packages at exact NEVRAs: a repository that no longer
 # serves one fails the build instead of drifting. Fedora's bubblewrap is installed as shipped.
 RUN set -eux; \
+    rpm_arch="$(rpm --eval '%{_arch}')"; \
+    case "$rpm_arch" in x86_64|aarch64) ;; *) echo "unsupported RPM architecture $rpm_arch" >&2; exit 1 ;; esac; \
     dnf install -y --setopt=ip_resolve=4 --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         bash-5.3.9-3.fc44 \
         bubblewrap-0.12.0-1.fc44 \
@@ -47,7 +49,12 @@ RUN set -eux; \
         python3-3.14.8-1.fc44 \
         python3-libs-3.14.8-1.fc44 \
         python-pip-wheel-26.0.1-3.fc44 \
-        mpdecimal-4.0.1-3.fc44; \
+        mpdecimal-4.0.1-3.fc44 \
+        "podman-5:5.8.9-1.fc44.$rpm_arch" \
+        containers-common-5:0.67.2-1.fc44.noarch \
+        "crun-0:1.28-1.fc44.$rpm_arch" \
+        "conmon-2:2.2.1-2.fc44.$rpm_arch" \
+        "fuse-overlayfs-0:1.17-1.fc44.$rpm_arch"; \
     dnf clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5; \
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
@@ -85,12 +92,19 @@ RUN set -eux; \
 
 COPY --chmod=0444 sources.lock.json /usr/local/share/ploinky/robo-work-worker-sources.json
 COPY --chmod=0755 smoke-worker.mjs /usr/local/share/ploinky/robo-work-worker-smoke.mjs
+COPY --chmod=0444 environment-contract.mjs /usr/local/share/ploinky/environment-contract.mjs
+COPY --chmod=0444 storage.conf /etc/containers/storage.conf
+COPY --chmod=0444 registries.conf /etc/containers/registries.conf
 
 RUN set -eux; \
     node -e 'JSON.parse(require("node:fs").readFileSync("/usr/local/share/ploinky/robo-work-worker-sources.json", "utf8"))'; \
     install -d -o root -g root -m 0755 /opt/robo-work-runtime; \
     printf 'robo-work-worker-v1\n' > /opt/robo-work-runtime/contract-v1; \
-    chmod 0444 /opt/robo-work-runtime/contract-v1
+    chmod 0444 /opt/robo-work-runtime/contract-v1; \
+    install -d -o root -g root -m 0555 /opt/robo-work-runtime/ca; \
+    install -o root -g root -m 0444 /etc/pki/tls/certs/ca-bundle.crt /opt/robo-work-runtime/ca/ca-bundle.crt; \
+    node /usr/local/share/ploinky/environment-contract.mjs; \
+    node /usr/local/share/ploinky/robo-work-worker-smoke.mjs
 
 WORKDIR /code
 CMD ["node", "/usr/local/share/ploinky/robo-work-worker-smoke.mjs"]

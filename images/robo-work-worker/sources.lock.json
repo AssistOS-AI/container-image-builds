@@ -49,7 +49,12 @@
       "python3": "3.14.8-1.fc44",
       "python3-libs": "3.14.8-1.fc44",
       "python-pip-wheel": "26.0.1-3.fc44",
-      "mpdecimal": "4.0.1-3.fc44"
+      "mpdecimal": "4.0.1-3.fc44",
+      "podman": "5:5.8.9-1.fc44",
+      "containers-common": "5:0.67.2-1.fc44.noarch",
+      "crun": "0:1.28-1.fc44",
+      "conmon": "2:2.2.1-2.fc44",
+      "fuse-overlayfs": "0:1.17-1.fc44"
     },
     "observedArchitecture": "x86_64 (rpm -q in localhost/robo-work-worker:r10-dev); arm64 NEVRAs are not yet observed and the arm64 build is unproven",
     "bubblewrap": "installed unchanged at /usr/bin/bwrap; required >= 0.11 (smoke asserts)",
@@ -86,10 +91,6 @@
     "note": "roboteam-agent does not bake ALA; it arrives from the Ploinky workspace checkout via the manifest link-install. Recorded here only as the reviewed pin."
   },
   "omitted": [
-    "podman",
-    "fuse-overlayfs",
-    "pasta",
-    "fusermount",
     "file server",
     "rust"
   ],
@@ -98,5 +99,46 @@
     "content": "robo-work-worker-v1\n",
     "owner": "0:0",
     "mode": "0444"
+  },
+  "environment": {
+    "contract": "/opt/robo-work-runtime/environment-contract.json",
+    "generator": "/usr/local/share/ploinky/environment-contract.mjs",
+    "schemaVersion": 1,
+    "storage": {
+      "driver": "overlay",
+      "graphroot": "/var/lib/robo-work/podman/storage",
+      "runroot": "/run/robo-work-podman",
+      "runrootMount": "worker startup mounts tmpfs size=64m,mode=0700,nosuid,nodev; image creates no mount"
+    },
+    "registries": {
+      "shortNameMode": "enforcing",
+      "unqualifiedSearchRegistries": [],
+      "authentication": "public anonymous digest pulls only; no worker registry credential"
+    },
+    "packages": {
+      "pinning": "Five direct exact versions; native architecture selected by DNF. Transitives are not pinned. See environment-spike-packages.lock.json for the observed amd64 transaction and licenses.",
+      "arm64": "Official Fedora Koji HEAD queries on 2026-11-01 returned HTTP 200 for all five selected aarch64/noarch RPM artifacts. DNF resolution, dependency closure and runtime build remain unverified.",
+      "artifactUrls": [
+        "https://kojipkgs.fedoraproject.org/packages/podman/5.8.9/1.fc44/aarch64/podman-5.8.9-1.fc44.aarch64.rpm",
+        "https://kojipkgs.fedoraproject.org/packages/containers-common/0.67.2/1.fc44/noarch/containers-common-0.67.2-1.fc44.noarch.rpm",
+        "https://kojipkgs.fedoraproject.org/packages/crun/1.28/1.fc44/aarch64/crun-1.28-1.fc44.aarch64.rpm",
+        "https://kojipkgs.fedoraproject.org/packages/conmon/2.2.1/2.fc44/aarch64/conmon-2.2.1-2.fc44.aarch64.rpm",
+        "https://kojipkgs.fedoraproject.org/packages/fuse-overlayfs/1.17/1.fc44/aarch64/fuse-overlayfs-1.17-1.fc44.aarch64.rpm"
+      ]
+    },
+    "caBundle": "/opt/robo-work-runtime/ca/ca-bundle.crt",
+    "wrappers": "Worker source server/sandbox/environment-bin owns the four fixed wrappers; bind that directory read-only at /rw-opt/bin. Contract wrapperTargets are worker paths; replace /opt/robo-work-tools with /rw-opt/tools inside the workload.",
+    "caSource": "/etc/pki/tls/certs/ca-bundle.crt",
+    "contractFields": {
+      "architecture": "amd64 or arm64",
+      "glibcFloor": "numeric version suffix string",
+      "glibcxxVersions": "numeric version suffix strings",
+      "cxxabiVersions": "numeric version suffix strings",
+      "caBundle": "worker-owned CA source path",
+      "tools": "worker absolute ELF source paths keyed node, claude, opencode",
+      "wrapperTargets": "worker absolute tool target paths keyed codex, claude, opencode, pi",
+      "injections": "workload destination paths keyed node, tools, ca, bin",
+      "unsupportedVersions": "Non-numeric GLIBC/GLIBCXX/CXXABI requirement tags fail the image build explicitly."
+    }
   }
 }

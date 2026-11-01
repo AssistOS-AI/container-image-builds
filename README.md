@@ -217,6 +217,24 @@ requires package-manager or system-directory privileges.
 
 ## RoboTeam nested Podman runtime
 
+The separate RoboWork worker image includes Podman 5.8.9 for Environment
+image acquisition and rootfs mounts. Robot processes still run under Bubblewrap.
+Its exact direct package versions are in `images/robo-work-worker/sources.lock.json`;
+transitive Fedora packages are not snapshot-pinned. The worker mounts the
+`/run/robo-work-podman` tmpfs at startup and stores image layers on disk under
+`/var/lib/robo-work/podman/storage`. The image installs no runtime mount.
+
+At build time, `environment-contract.mjs` reads the injected Node, Claude and
+OpenCode ELF version requirements and records the highest GLIBC version plus
+the required GLIBCXX and CXXABI versions in
+`/opt/robo-work-runtime/environment-contract.json`. The worker source supplies
+the four wrappers bound at `/rw-opt/bin`; the image contract and smoke verify
+their Node/tool targets and the read-only CA copy at
+`/opt/robo-work-runtime/ca/ca-bundle.crt`. A product build and smoke run are
+required for A-10. Static tests and the earlier spike image do not establish it.
+The selected ARM64 RPM artifacts exist in Fedora Koji; an ARM64 product build,
+DNF dependency resolution and native smoke have not yet been verified.
+
 `docker.io/assistos/roboteam-agent:runtime` is the outer runtime for RoboTeam. It
 uses the immutable official Podman stable multiarchitecture index as its
 Podman 5.8.7 provider and the exact Ploinky Node multiarchitecture base recorded in

@@ -1,12 +1,45 @@
 # Dependency record
 
+## RoboWork worker Environment runtime
+
+The product worker now installs the same five direct Fedora package versions
+as the reviewed spike: Podman 5.8.9, containers-common 0.67.2, crun 1.28,
+conmon 2.2.1 and fuse-overlayfs 1.17. The approved Environment plan accepts
+unchanged distribution binaries to pull public anonymous digest references
+and create/mount container rootfs objects. The worker does not run workloads
+with crun or conmon. Replacing Podman's store with a custom Node implementation
+would change that contract. Package licensing, source availability obligations,
+notice paths and the observed amd64 dependency closure are recorded below and
+in `environment-spike-packages.lock.json`; they also apply to the product.
+
+`sources.lock.json` records the exact direct versions and official Fedora Koji
+ARM64 artifact URLs checked on 2026-11-01. Artifact existence does not prove
+DNF resolution or an ARM64 build. Direct versions fail closed if repositories
+stop serving them; transitive resolution is not frozen. Retain the Fedora
+licenses and provide corresponding distribution source RPMs when publishing.
+Updates require deliberate package resolution, license/closure review and an
+image rebuild followed by the product smoke. Removing these packages removes
+Environment support; the spike overlay can be removed separately once its
+retained evidence is no longer needed.
+
+The new contract generator and its tests use Node.js built-ins only. No ELF
+utility, compiler or npm dependency is added. Build-time parsing checks version
+requirements in the injected ELF files; absent or malformed binaries fail the
+build, including unsupported non-numeric ABI version tags. The Dockerfile
+copies the distribution CA bundle into the root-owned, read-only
+`/opt/robo-work-runtime/ca/` directory. Product smoke recomputes and compares the contract, checks Podman's
+version, storage and registry configuration, four wrapper targets and the CA
+bundle, then retains the existing tool and native terminal checks. It performs
+no image pull, container creation or storage mount. Runtime runroot mounting
+belongs to worker startup.
+
 ## RoboWork Environment spike overlay
 
 `images/robo-work-worker/Dockerfile.environment-spike` is a test-only overlay
 on the immutable public worker digest in `environment-spike-packages.lock.json`.
 The approved Environment backend plan selects Podman for image pull/create/mount
-without starting workloads. Existing product packaging deliberately omits it.
-The overlay and its separate smoke do not change that product contract.
+without starting workloads. The overlay remains separate from the product
+Dockerfile and does not establish product image acceptance.
 
 The five required additions are Podman 5.8.9, containers-common 0.67.2,
 crun 1.28, conmon 2.2.1 and fuse-overlayfs 1.17. Their complete Fedora 44
