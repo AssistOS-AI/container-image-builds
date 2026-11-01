@@ -1,5 +1,53 @@
 # Dependency record
 
+## RoboWork Environment spike overlay
+
+`images/robo-work-worker/Dockerfile.environment-spike` is a test-only overlay
+on the immutable public worker digest in `environment-spike-packages.lock.json`.
+The approved Environment backend plan selects Podman for image pull/create/mount
+without starting workloads. Existing product packaging deliberately omits it.
+The overlay and its separate smoke do not change that product contract.
+
+The five required additions are Podman 5.8.9, containers-common 0.67.2,
+crun 1.28, conmon 2.2.1 and fuse-overlayfs 1.17. Their complete Fedora 44
+NEVRAs, upstream URLs and RPM license expressions are in the spike lock.
+The same lock records all 17 additional RPMs observed in the amd64 transaction,
+including package license expressions and upstream URLs. The immutable base
+provides inherited dependencies; the resolver observed no upgrades or removals.
+Only the five direct NEVRAs are pinned install inputs. Fedora repository
+metadata and transitive resolution are not frozen. Other architectures have
+not been resolved and the overlay refuses them.
+
+The plan accepts these distribution binaries because the spike must test
+Podman's actual storage and container-object behavior. A Node-only replacement
+would implement a different container store. No npm package or compiler is
+added by this helper. DNF reported 23 MiB downloaded and 73 MiB installed.
+This is a resolver observation, not a measured final image size.
+
+Podman's RPM declares Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MIT and
+MPL-2.0 components. containers-common and conmon declare Apache-2.0.
+crun declares GPL-2.0-only and fuse-overlayfs GPL-3.0-or-later. Their distro
+binaries are unchanged. Retain the packaged license files listed in the lock,
+including Podman's modules.txt, and all dependency notices. The containers-common
+RPM lists no license file; its Apache-2.0 declaration comes from RPM metadata.
+Redistribution requires preserving notices, satisfying MPL source obligations
+for covered files, providing corresponding GPL sources for redistributed GPL
+binaries, and respecting the LGPL source and replacement obligations of
+linked libraries. Fedora source RPMs at the exact selected NEVRAs provide the
+distribution sources. A public image publication must retain the required
+source availability; this slice does not publish an image.
+
+To update, resolve deliberately in a disposable Fedora 44 container on the
+selected immutable base, record architecture, direct NEVRAs and the full
+transaction additions with licenses, then update the overlay and lock together.
+The smoke uses Node.js 24 built-ins and bounded command probes. It checks
+RPM identities, tool versions, distribution storage configuration, the inherited
+worker contract and coding tools, Bubblewrap flags and the node-pty probe.
+It creates no storage and performs no pull/create/mount. Missing or incompatible
+dependencies produce a nonzero diagnostic requiring an overlay rebuild, with no
+startup installation. S1-S5 and final worker acceptance remain separate.
+Remove this overlay after the spike when product packaging owns these tools.
+
 ## Bizanso runtime
 
 `images/bizanso-agent/sources.lock.json` pins the Ploinky Node base digest and the public multilingual-e5-small model revision, dtype, and dimensions. Its package lock pins Transformers.js 4.3.1 (Apache-2.0) and the transitive ONNX Runtime dependency with npm integrity records. Runtime inference is CPU-only and offline. `poppler-utils`, `antiword`, LibreOffice Writer/Impress, and `fonts-liberation` are installed in the image for local extraction. Their distribution notices remain in the Debian packages; npm package notices remain in `node_modules`. The helper and verification code uses Node built-ins plus the pinned inference package. No private application checkout or private-source credential is a build input. Removing the model or native inference dependency would remove offline readiness; removing document tools would remove the supported legacy document extraction paths.

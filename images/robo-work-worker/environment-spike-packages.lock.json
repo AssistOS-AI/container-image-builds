@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Test-only Environment step 1 spike; not the product worker or A-10 acceptance.",
+  "baseImage": "docker.io/assistos/robo-work-worker@sha256:ad60b288d0147b427db48387b54f636c5266ec145aafeb2d26e09578cf0901fd",
+  "resolution": {
+    "date": "2026-11-01",
+    "distribution": "Fedora 44",
+    "architecture": "x86_64",
+    "platform": "linux/amd64",
+    "baseImageId": "36be12194889910658aeb10fe37eb4d014a72d11940d0d40f1485fe0cdcc605d",
+    "resolverContainer": "ba375f3e9398",
+    "resolverName": "rw-env-resolver-20261101T070000Z",
+    "installWeakDeps": false,
+    "transaction": "22 packages installed, no packages upgraded or removed; 23 MiB download, 73 MiB installed (DNF report)."
+  },
+  "pinning": "Only the five direct packages below are exact NEVRA install inputs. Transitive additions are observed, not pinned. Inherited dependencies come from the immutable base image. Fedora repositories are not a snapshot; unavailable direct versions fail the build, and transitive resolution may drift.",
+  "directPackages": [
+    {
+      "name": "podman",
+      "nevra": "podman-5:5.8.9-1.fc44.x86_64",
+      "version": "5.8.9",
+      "architecture": "x86_64",
+      "license": "Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT AND MPL-2.0",
+      "source": "https://podman.io/"
+    },
+    {
+      "name": "containers-common",
+      "nevra": "containers-common-5:0.67.2-1.fc44.noarch",
+      "version": "0.67.2",
+      "architecture": "noarch",
+      "license": "Apache-2.0",
+      "source": "https://github.com/containers/container-libs"
+    },
+    {
+      "name": "crun",
+      "nevra": "crun-0:1.28-1.fc44.x86_64",
+      "version": "1.28",
+      "architecture": "x86_64",
+      "license": "GPL-2.0-only",
+      "source": "https://github.com/containers/crun"
+    },
+    {
+      "name": "conmon",
+      "nevra": "conmon-2:2.2.1-2.fc44.x86_64",
+      "version": "2.2.1",
+      "architecture": "x86_64",
+      "license": "Apache-2.0",
+      "source": "https://github.com/containers/conmon"
+    },
+    {
+      "name": "fuse-overlayfs",
+      "nevra": "fuse-overlayfs-0:1.17-1.fc44.x86_64",
+      "version": "1.17",
+      "architecture": "x86_64",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/containers/fuse-overlayfs"
+    }
+  ],
+  "observedAdditionalPackages": [
+    {"nevra":"containers-common-extra-5:0.67.2-1.fc44.noarch", "license":"Apache-2.0", "source":"https://github.com/containers/container-libs"},
+    {"nevra":"podman-sequoia-0.3.2-2.fc44.x86_64", "license":"((MIT OR Apache-2.0) AND Unicode-DFS-2016) AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND BSD-3-Clause AND BSL-1.0 AND LGPL-2.0-or-later AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND MPL-2.0 AND Unicode-3.0 AND (Unlicense OR MIT) AND Zlib", "source":"https://crates.io/crates/podman-sequoia"},
+    {
+      "nevra": "aardvark-dns-2:1.17.1-1.fc44.x86_64",
+      "license": "Apache-2.0 AND MIT AND Zlib",
+      "source": "https://github.com/containers/aardvark-dns"
+    },
+    {
+      "nevra": "catatonit-0.2.1-5.fc44.x86_64",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/openSUSE/catatonit"
+    },
+    {
+      "nevra": "fuse-common-3.18.3-1.fc44.x86_64",
+      "license": "GPL-1.0-or-later",
+      "source": "https://github.com/libfuse/libfuse/"
+    },
+    {
+      "nevra": "fuse3-3.18.3-1.fc44.x86_64",
+      "license": "GPL-1.0-or-later",
+      "source": "https://github.com/libfuse/libfuse/"
+    },
+    {
+      "nevra": "fuse3-libs-3.18.3-1.fc44.x86_64",
+      "license": "LGPL-2.1-or-later",
+      "source": "https://github.com/libfuse/libfuse/"
+    },
+    {
+      "nevra": "gpgme-2.0.1-5.fc44.x86_64",
+      "license": "LGPL-2.1-or-later AND MIT",
+      "source": "https://gnupg.org/related_software/gpgme/"
+    },
+    {
+      "nevra": "kmod-34.2-4.fc44.x86_64",
+      "license": "GPL-2.0-or-later AND GPL-3.0-or-later AND FSFUL AND FSFULLRWD AND LGPL-2.1-only AND LGPL-2.1-or-later AND X11",
+      "source": "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git"
+    },
+    {
+      "nevra": "libpkgconf-2.5.1-1.fc44.x86_64",
+      "license": "ISC AND BSD-4-Clause AND BSD-2-Clause AND pkgconf AND MIT",
+      "source": "http://pkgconf.org/"
+    },
+    {
+      "nevra": "libseccomp-2.6.1-2.fc44.x86_64",
+      "license": "LGPL-2.1-only",
+      "source": "https://github.com/seccomp/libseccomp"
+    },
+    {
+      "nevra": "netavark-2:1.17.2-1.fc44.x86_64",
+      "license": "Apache-2.0 AND BSD-3-Clause AND MIT",
+      "source": "https://github.com/containers/netavark"
+    },
+    {
+      "nevra": "passt-0^20261002.gcba3570-1.fc44.x86_64",
+      "license": "GPL-2.0-or-later AND BSD-3-Clause",
+      "source": "https://passt.top/"
+    },
+    {
+      "nevra": "pkgconf-2.5.1-1.fc44.x86_64",
+      "license": "ISC AND BSD-4-Clause AND BSD-2-Clause AND pkgconf AND MIT",
+      "source": "http://pkgconf.org/"
+    },
+    {
+      "nevra": "pkgconf-m4-2.5.1-1.fc44.noarch",
+      "license": "GPL-2.0-or-later WITH Autoconf-exception-generic",
+      "source": "http://pkgconf.org/"
+    },
+    {
+      "nevra": "pkgconf-pkg-config-2.5.1-1.fc44.x86_64",
+      "license": "ISC AND BSD-4-Clause AND BSD-2-Clause AND pkgconf AND MIT",
+      "source": "http://pkgconf.org/"
+    },
+    {
+      "nevra": "shadow-utils-subid-2:4.19.0-7.fc44.x86_64",
+      "license": "BSD-3-Clause AND GPL-2.0-or-later",
+      "source": "https://github.com/shadow-maint/shadow"
+    }
+  ],
+  "licenseFiles": [
+    "/usr/share/licenses/podman/LICENSE",
+    "/usr/share/licenses/podman/modules.txt",
+    "/usr/share/licenses/crun/COPYING",
+    "/usr/share/licenses/conmon/LICENSE",
+    "/usr/share/licenses/fuse-overlayfs/COPYING"
+  ],
+  "storage": "Distribution storage configuration and fuse-overlayfs retained unchanged. No graphroot or runroot is created by the smoke. Actual create/mount and on-disk storage are S1 apparatus probes, not this image check.",
+  "architectures": "Only x86_64 resolved. Other architectures fail closed and need separate resolution."
+}
