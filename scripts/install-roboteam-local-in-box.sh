@@ -66,7 +66,7 @@ if [ "$target" = agent ] || [ "$target" = all ]; then
     build_image "$agent_image" Dockerfile
     # The local build reuses the published tag; stop 'ploinky update' from refreshing it from the registry.
     if /opt/ploinky/bin/ploinky-local var PLOINKY_IMAGE_REFRESH off; then
-        echo "[local-images] image refresh is off for this workspace; 'ploinky var PLOINKY_IMAGE_REFRESH check' follows the registry again"
+        echo "[local-images] image refresh is off for this workspace; 'ploinky var PLOINKY_IMAGE_REFRESH on' makes the tag follow the registry again"
     else
         echo "[local-images] could not set PLOINKY_IMAGE_REFRESH; run 'ploinky var PLOINKY_IMAGE_REFRESH off' before the next update" >&2
     fi
