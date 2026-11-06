@@ -34,19 +34,25 @@ RUN set -eux; \
     dnf install -y --setopt=ip_resolve=4 --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         bash-5.3.9-3.fc44 \
         bubblewrap-0.12.0-1.fc44 \
-        ca-certificates-2025.2.80_v9.0.304-7.fc44 \
-        curl-8.18.0-8.fc44 \
+        ca-certificates-2026.2.92_v9.0.319-2.fc44 \
+        curl-8.18.0-14.fc44 \
         git-2.56.0-1.fc44 \
         iproute-6.17.0-2.fc44 \
         nftables-1:1.1.6-2.fc44 \
         util-linux-2.41.6-1.fc44 \
         findutils-1:4.10.0-7.fc44 \
         which-2.25-1.fc44 \
+        ncurses-6.6-1.fc44 \
+        util-linux-script-2.41.6-1.fc44 \
+        hostname-3.25-4.fc44 \
+        lsof-4.98.0-9.fc44 \
+        file-5.46-10.fc44 \
+        fd-find-10.4.2-6.fc44 \
         procps-ng-4.0.6-1.fc44 \
-        tar-2:1.35-8.fc44 \
+        tar-2:1.35-9.fc44 \
         gzip-1.14-2.fc44 \
-        python3-3.14.8-1.fc44 \
-        python3-libs-3.14.8-1.fc44 \
+        python3-3.14.10-1.fc44 \
+        python3-libs-3.14.10-1.fc44 \
         python-pip-wheel-26.0.1-3.fc44 \
         mpdecimal-4.0.1-3.fc44; \
     dnf clean all; \
@@ -54,7 +60,9 @@ RUN set -eux; \
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
     test -x /usr/bin/bwrap; \
-    test -x /usr/bin/ps
+    for executable in ps pgrep pkill which tput clear infocmp script hostname lsof file fd; do \
+        command -v "$executable" >/dev/null; \
+    done
 
 ARG TARGETARCH
 

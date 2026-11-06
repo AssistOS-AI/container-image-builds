@@ -92,11 +92,27 @@ test('outer image combines Node with the nested Podman controller', () => {
         '/usr/local/bin/npx',
         '/usr/local/bin/rg',
         '/usr/bin/ps',
+        '/usr/bin/pgrep',
+        '/usr/bin/pkill',
+        '/usr/bin/which',
+        '/usr/bin/tput',
+        '/usr/bin/clear',
+        '/usr/bin/infocmp',
+        '/usr/bin/script',
+        '/usr/bin/hostname',
+        '/usr/bin/lsof',
+        '/usr/bin/file',
+        '/usr/bin/fd',
     ]) {
         assert.ok(dockerfile.includes(executable));
     }
     // Codex's background app-server needs ps; the Fedora package is pinned at its exact NEVRA.
     assert.match(dockerfile, /procps-ng-4\.0\.6-1\.fc44/);
+    for (const nevra of ['which-2.25-1', 'ncurses-6.6-1', 'util-linux-script-2.41.6-1', 'hostname-3.25-4',
+        'lsof-4.98.0-9', 'file-5.46-10', 'fd-find-10.4.2-6']) {
+        assert.ok(dockerfile.includes(`${nevra}.fc44`), nevra);
+    }
+    assert.match(dockerfile, /for executable in ps pgrep pkill which tput clear infocmp script hostname lsof file fd; do/);
     // OpenCode needs ripgrep on PATH; a checksum-pinned upstream release, never a runtime download.
     assert.match(dockerfile, /releases\/download\/15\.1\.0\/\$asset\.tar\.gz/);
     assert.match(dockerfile, /sha256sum --check --strict/);

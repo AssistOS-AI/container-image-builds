@@ -24,6 +24,10 @@ report('rg', first(run('rg', ['--version'])));
 report('bash', first(run('bash', ['--version'])));
 report('sh', fs.realpathSync('/bin/sh'));
 report('python3', first(run('python3', ['--version'])));
+report('fd', first(run('fd', ['--version'])));
+for (const tool of ['ps', 'pgrep', 'pkill', 'which', 'tput', 'clear', 'infocmp', 'script', 'hostname', 'lsof', 'file', 'fd']) {
+    run('sh', ['-c', 'command -v "$1" >/dev/null', 'sh', tool]);
+}
 
 const bwrapVersion = run('/usr/bin/bwrap', ['--version']);
 report('bwrap', bwrapVersion);

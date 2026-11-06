@@ -14,6 +14,17 @@ require_contract() {
     test -x /usr/local/bin/npm
     test -x /usr/local/bin/npx
     test -x /usr/local/bin/rg
+    # Coding agents shell out to procps-ng: Codex's background app-server records its start time with
+    # `ps -p <pid> -o lstart=`, and robot terminals see this image's /usr through Bubblewrap.
+    test -x /usr/bin/ps
+    test -x /usr/bin/pgrep
+    test -x /usr/bin/pkill
+    for executable in which tput clear infocmp script hostname lsof file fd; do
+        command -v "$executable" >/dev/null
+    done
+    test -n "$(LC_ALL=C TZ=UTC ps -p "$$" -o lstart= | tr -d ' ')"
+    # Pi decides whether fd is installed by running `fd --version`.
+    fd --version | grep -q '^fd '
     test ! -e /usr/bin/newuidmap
     test ! -e /usr/bin/newgidmap
     node --version
