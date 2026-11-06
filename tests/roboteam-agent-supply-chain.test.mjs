@@ -91,9 +91,12 @@ test('outer image combines Node with the nested Podman controller', () => {
         '/usr/local/bin/npm',
         '/usr/local/bin/npx',
         '/usr/local/bin/rg',
+        '/usr/bin/ps',
     ]) {
         assert.ok(dockerfile.includes(executable));
     }
+    // Codex's background app-server needs ps; the Fedora package is pinned at its exact NEVRA.
+    assert.match(dockerfile, /procps-ng-4\.0\.6-1\.fc44/);
     // OpenCode needs ripgrep on PATH; a checksum-pinned upstream release, never a runtime download.
     assert.match(dockerfile, /releases\/download\/15\.1\.0\/\$asset\.tar\.gz/);
     assert.match(dockerfile, /sha256sum --check --strict/);

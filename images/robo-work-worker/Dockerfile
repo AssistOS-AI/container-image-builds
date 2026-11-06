@@ -42,6 +42,7 @@ RUN set -eux; \
         util-linux-2.41.6-1.fc44 \
         findutils-1:4.10.0-7.fc44 \
         which-2.25-1.fc44 \
+        procps-ng-4.0.6-1.fc44 \
         tar-2:1.35-8.fc44 \
         gzip-1.14-2.fc44 \
         python3-3.14.8-1.fc44 \
@@ -52,7 +53,8 @@ RUN set -eux; \
     rm -rf /var/cache/dnf /var/cache/libdnf5; \
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
-    test -x /usr/bin/bwrap
+    test -x /usr/bin/bwrap; \
+    test -x /usr/bin/ps
 
 ARG TARGETARCH
 

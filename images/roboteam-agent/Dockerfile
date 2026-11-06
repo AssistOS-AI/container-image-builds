@@ -38,6 +38,15 @@ RUN set -eux; \
     rm -rf /tmp/ripgrep.tar.gz "/tmp/$asset"; \
     case "$(rg --version | head -n 1)" in 'ripgrep 15.1.0 '*) ;; *) exit 1 ;; esac
 
+# Codex's background app-server shells out to ps, and robot terminals see this
+# image's /usr through Bubblewrap; the Fedora package is pinned at its exact NEVRA.
+RUN set -eux; \
+    dnf install -y --setopt=ip_resolve=4 --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        procps-ng-4.0.6-1.fc44; \
+    dnf clean all; \
+    rm -rf /var/cache/dnf /var/cache/libdnf5; \
+    test -x /usr/bin/ps
+
 RUN set -eux; \
     truncate -s 0 /etc/subuid; \
     truncate -s 0 /etc/subgid; \
@@ -56,7 +65,8 @@ RUN set -eux; \
         /usr/local/bin/node \
         /usr/local/bin/npm \
         /usr/local/bin/npx \
-        /usr/local/bin/rg; do \
+        /usr/local/bin/rg \
+        /usr/bin/ps; do \
         test -x "$executable"; \
     done; \
     test "$(podman --version)" = 'podman version 5.8.7'; \
