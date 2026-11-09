@@ -70,7 +70,8 @@ test('ScriptaHub assets image is built from digest-pinned stages, verifies its t
     const fetchRun = assetsDockerfile.slice(assetsDockerfile.indexOf('AS fetch'), assetsDockerfile.lastIndexOf('FROM scratch'));
     const prepare = fetchRun.indexOf('prepare-assets.mjs');
     const verify = fetchRun.indexOf('verify-assets.mjs');
-    assert.ok(prepare >= 0 && verify > prepare, 'files are fetched, then verified');
+    const normalize = fetchRun.indexOf('chmod -R a+rX,go-w,a-st /assets');
+    assert.ok(prepare >= 0 && normalize > prepare && verify > normalize, 'files are fetched, given plain permissions, then verified');
     assert.match(fetchRun.slice(verify), /^verify-assets\.mjs[^\n]*--exact/);
     assert.match(fetchRun, /COPY --from=verified-models \/opt\/scriptahub\/runtime\/skills\/pdf2html\/external\/native\/models\/ /);
     assert.match(fetchRun, /COPY --from=native-build \/out\/ \/assets\/native-build\//);

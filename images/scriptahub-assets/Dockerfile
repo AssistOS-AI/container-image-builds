@@ -21,8 +21,8 @@ COPY --from=verified-models /opt/scriptahub/runtime/skills/pdf2html/external/nat
 COPY --from=native-build /out/ /assets/native-build/
 RUN mkdir -p /assets/runtime /assets/native-build \
     && node /inventory/deployment/prepare-assets.mjs --skills /inventory/skills --runtime /assets/runtime \
-    && node /inventory/deployment/verify-assets.mjs --skills /inventory/skills --runtime /assets/runtime --native-build /assets/native-build --exact \
-    && chmod -R a+rX /assets
+    && chmod -R a+rX,go-w,a-st /assets \
+    && node /inventory/deployment/verify-assets.mjs --skills /inventory/skills --runtime /assets/runtime --native-build /assets/native-build --exact
 
 FROM scratch
 COPY --from=fetch /assets/ /assets/
