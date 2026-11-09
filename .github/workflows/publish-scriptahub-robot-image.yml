@@ -1,0 +1,222 @@
+name: Publish ScriptaHub robot image
+
+# The ScriptaHub robot profile extends the RoboTeam runtime with the locally executed
+# ScriptaHub skills. It is built from the same ScriptaHub revision as the agent image
+# (images/scriptahub-agent/sources.lock.json) and from that image's exact verified digest.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scripta_runtime_image:
+        description: Verified scriptahub-agent image by digest (docker.io/assistos/scriptahub-agent@sha256:...)
+        required: true
+        type: string
+      promote_stable:
+        description: Publish the verified image as runtime
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-scriptahub-robot-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: docker.io/assistos/scriptahub-robot
+  ROBOTEAM_IMAGE: docker.io/assistos/roboteam-agent:runtime
+
+jobs:
+  resolve:
+    name: Resolve exact inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      revision: ${{ steps.inputs.outputs.revision }}
+      scripta: ${{ steps.inputs.outputs.scripta }}
+      roboteam: ${{ steps.inputs.outputs.roboteam }}
+    steps:
+      - name: Checkout image definitions
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Resolve source revision and base image digests
+        id: inputs
+        env:
+          SCRIPTA_RUNTIME_IMAGE: ${{ inputs.scripta_runtime_image }}
+        run: |
+          set -euo pipefail
+          [[ "$SCRIPTA_RUNTIME_IMAGE" =~ ^docker\.io/assistos/scriptahub-agent@sha256:[0-9a-f]{64}$ ]]
+          revision=$(node -p "JSON.parse(require('fs').readFileSync('images/scriptahub-agent/sources.lock.json')).revision")
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          docker buildx imagetools inspect --raw "$ROBOTEAM_IMAGE" > roboteam-index.json
+          roboteam="docker.io/assistos/roboteam-agent@sha256:$(sha256sum roboteam-index.json | cut -d ' ' -f1)"
+          docker buildx imagetools inspect "$roboteam" > /dev/null
+          docker buildx imagetools inspect "$SCRIPTA_RUNTIME_IMAGE" > /dev/null
+          { echo "revision=$revision"; echo "scripta=$SCRIPTA_RUNTIME_IMAGE"; echo "roboteam=$roboteam"; } >> "$GITHUB_OUTPUT"
+          printf 'Source `%s`, ScriptaHub `%s`, RoboTeam `%s`\n' "$revision" "$SCRIPTA_RUNTIME_IMAGE" "$roboteam" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Build and prove ${{ matrix.platform }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            machine: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    timeout-minutes: 150
+    steps:
+      - name: Checkout exact ScriptaHub sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: Axiologic/ScriptaHubAgent
+          ref: ${{ needs.resolve.outputs.revision }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify source checkout and prepare runner space
+        env:
+          SOURCE_REVISION: ${{ needs.resolve.outputs.revision }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_REVISION"
+          test -z "$(git -C source status --porcelain=v1)"
+          test -f source/scriptahubAgent/deployment/Dockerfile.robot
+          test "$(uname -m)" = "${{ matrix.machine }}"
+          # Only unused SDKs on the disposable hosted runner are removed.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af > /dev/null
+          df -h .
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and verify locally before publication
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: source
+          file: source/scriptahubAgent/deployment/Dockerfile.robot
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            ROBOTEAM_BASE_IMAGE=${{ needs.resolve.outputs.roboteam }}
+            SCRIPTA_RUNTIME_IMAGE=${{ needs.resolve.outputs.scripta }}
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.revision }}
+            org.opencontainers.image.source=https://github.com/Axiologic/ScriptaHubAgent
+            org.opencontainers.image.base.name=${{ needs.resolve.outputs.roboteam }}
+            io.assistos.scriptahub.runtime-image=${{ needs.resolve.outputs.scripta }}
+            io.assistos.image-definitions.revision=${{ github.sha }}
+            io.assistos.roboteam.runtime-contract=roboteam-runtime-v6
+
+      - name: Prove the installed runtime matches the exact sources
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
+          test "$(docker image inspect --format '{{.Architecture}}' "$candidate")" = "$ARCH"
+          evidence="$RUNNER_TEMP/scriptahub-robot"
+          mkdir -p "$evidence"
+          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
+            --entrypoint node "$candidate" /usr/local/share/scriptahub/runtime/verify-skills.mjs /usr/local/share/scriptahub/runtime \
+            > "$evidence/runtime.log" 2>&1
+          # The robot verifies each skill's sources against this record before running it.
+          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
+            -v "$PWD/source:/scripta-source:ro" --entrypoint node "$candidate" --input-type=module -e "
+              import { skillSource } from '/usr/local/share/scriptahub/runtime/skill-source.mjs';
+              import fs from 'node:fs';
+              const expected = JSON.parse(fs.readFileSync('/usr/local/share/scriptahub/runtime/source.json', 'utf8'));
+              const actual = await skillSource('/scripta-source/skills');
+              const differ = Object.keys({ ...expected, ...actual }).filter(name => expected[name] !== actual[name]);
+              if (differ.length) { console.error('Source mismatch:', differ.slice(0, 20)); process.exit(1); }
+              console.log('Robot runtime matches', Object.keys(actual).length, 'skill source files');" \
+            > "$evidence/source-match.log" 2>&1
+          cat "$evidence/source-match.log"
+          docker image inspect "$candidate" > "$evidence/image.json"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish verified candidate
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
+          docker push "$candidate"
+          docker buildx imagetools inspect --raw "$candidate" > "$RUNNER_TEMP/scriptahub-robot/manifest.json"
+          digest="sha256:$(sha256sum "$RUNNER_TEMP/scriptahub-robot/manifest.json" | cut -d ' ' -f1)"
+          docker buildx imagetools inspect "${IMAGE}@${digest}" > /dev/null
+          printf '%s\n' "$digest" > "$RUNNER_TEMP/scriptahub-robot/digest.txt"
+          printf 'Verified candidate: `%s@%s`\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain runtime and publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scriptahub-robot-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/scriptahub-robot
+          if-no-files-found: warn
+          retention-days: 30
+
+  assemble:
+    name: Assemble proven native architectures
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download native evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: scriptahub-robot-*
+          path: proofs
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: assistos
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Assemble and verify exact proven members before promotion
+        env:
+          PROMOTE_STABLE: ${{ inputs.promote_stable }}
+        run: |
+          set -euo pipefail
+          amd64=$(cat proofs/scriptahub-robot-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64/digest.txt)
+          arm64=$(cat proofs/scriptahub-robot-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64/digest.txt)
+          [[ "$amd64" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64" =~ ^sha256:[0-9a-f]{64}$ ]]
+          candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx imagetools create --tag "$candidate" "${IMAGE}@${amd64}" "${IMAGE}@${arm64}"
+          docker buildx imagetools inspect --raw "$candidate" > index.json
+          AMD64="$amd64" ARM64="$arm64" node --input-type=module <<'NODE'
+          import fs from 'node:fs';import assert from 'node:assert/strict';
+          const index=JSON.parse(fs.readFileSync('index.json'));
+          assert.equal(index.manifests.length,2);
+          const members=Object.fromEntries(index.manifests.map(m=>[`${m.platform.os}/${m.platform.architecture}`,m.digest]));
+          assert.deepEqual(members,{'linux/amd64':process.env.AMD64,'linux/arm64':process.env.ARM64});
+          NODE
+          digest="sha256:$(sha256sum index.json | cut -d ' ' -f1)"
+          if test "$PROMOTE_STABLE" = true; then
+            docker buildx imagetools create --tag "${IMAGE}:runtime" "${IMAGE}@${digest}"
+            docker buildx imagetools inspect --raw "${IMAGE}:runtime" > runtime-index.json
+            test "sha256:$(sha256sum runtime-index.json | cut -d ' ' -f1)" = "$digest"
+          fi
+          printf 'Verified multiarchitecture image: `%s@%s`\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
