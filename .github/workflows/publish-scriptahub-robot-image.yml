@@ -1,14 +1,15 @@
 name: Publish ScriptaHub robot image
 
 # The ScriptaHub robot profile extends the RoboTeam runtime with the locally executed
-# ScriptaHub skills. It is built from the same ScriptaHub revision as the agent image
-# (images/scriptahub-agent/sources.lock.json) and from that image's exact verified digest.
+# ScriptaHub skills. It is built from the ScriptaHub revision in images/scriptahub-agent/sources.lock.json
+# and takes its downloaded model and native files from the published ScriptaHub assets image, chosen by
+# digest. The build verifies those files against the inventories of that revision before it installs them.
 
 on:
   workflow_dispatch:
     inputs:
-      scripta_runtime_image:
-        description: Verified scriptahub-agent image by digest (docker.io/assistos/scriptahub-agent@sha256:...)
+      scripta_assets_image:
+        description: Verified scriptahub-assets image index by digest (docker.io/assistos/scriptahub-assets@sha256:...)
         required: true
         type: string
       promote_stable:
@@ -34,7 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       revision: ${{ steps.inputs.outputs.revision }}
-      scripta: ${{ steps.inputs.outputs.scripta }}
+      assets: ${{ steps.inputs.outputs.assets }}
       roboteam: ${{ steps.inputs.outputs.roboteam }}
     steps:
       - name: Checkout image definitions
@@ -46,18 +47,27 @@ jobs:
       - name: Resolve source revision and base image digests
         id: inputs
         env:
-          SCRIPTA_RUNTIME_IMAGE: ${{ inputs.scripta_runtime_image }}
+          SCRIPTA_ASSETS_IMAGE: ${{ inputs.scripta_assets_image }}
         run: |
           set -euo pipefail
-          [[ "$SCRIPTA_RUNTIME_IMAGE" =~ ^docker\.io/assistos/scriptahub-agent@sha256:[0-9a-f]{64}$ ]]
+          node --test tests/scriptahub-publication.test.mjs
+          [[ "$SCRIPTA_ASSETS_IMAGE" =~ ^docker\.io/assistos/scriptahub-assets@sha256:[0-9a-f]{64}$ ]]
           revision=$(node -p "JSON.parse(require('fs').readFileSync('images/scriptahub-agent/sources.lock.json')).revision")
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           docker buildx imagetools inspect --raw "$ROBOTEAM_IMAGE" > roboteam-index.json
           roboteam="docker.io/assistos/roboteam-agent@sha256:$(sha256sum roboteam-index.json | cut -d ' ' -f1)"
           docker buildx imagetools inspect "$roboteam" > /dev/null
-          docker buildx imagetools inspect "$SCRIPTA_RUNTIME_IMAGE" > /dev/null
-          { echo "revision=$revision"; echo "scripta=$SCRIPTA_RUNTIME_IMAGE"; echo "roboteam=$roboteam"; } >> "$GITHUB_OUTPUT"
-          printf 'Source `%s`, ScriptaHub `%s`, RoboTeam `%s`\n' "$revision" "$SCRIPTA_RUNTIME_IMAGE" "$roboteam" >> "$GITHUB_STEP_SUMMARY"
+          # The input must be the multi-architecture index itself, with exactly the two native members.
+          docker buildx imagetools inspect --raw "$SCRIPTA_ASSETS_IMAGE" > assets-index.json
+          test "sha256:$(sha256sum assets-index.json | cut -d ' ' -f1)" = "${SCRIPTA_ASSETS_IMAGE#*@}"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';import assert from 'node:assert/strict';
+          const index=JSON.parse(fs.readFileSync('assets-index.json'));
+          assert.equal(index.manifests.length,2);
+          assert.deepEqual(index.manifests.map(m=>`${m.platform.os}/${m.platform.architecture}`).sort(),['linux/amd64','linux/arm64']);
+          NODE
+          { echo "revision=$revision"; echo "assets=$SCRIPTA_ASSETS_IMAGE"; echo "roboteam=$roboteam"; } >> "$GITHUB_OUTPUT"
+          printf 'Source `%s`, ScriptaHub assets `%s`, RoboTeam `%s`\n' "$revision" "$SCRIPTA_ASSETS_IMAGE" "$roboteam" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: Build and prove ${{ matrix.platform }}
@@ -110,7 +120,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             ROBOTEAM_BASE_IMAGE=${{ needs.resolve.outputs.roboteam }}
-            SCRIPTA_RUNTIME_IMAGE=${{ needs.resolve.outputs.scripta }}
+            SCRIPTA_ASSETS_IMAGE=${{ needs.resolve.outputs.assets }}
           load: true
           push: false
           tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
@@ -119,7 +129,7 @@ jobs:
             org.opencontainers.image.revision=${{ needs.resolve.outputs.revision }}
             org.opencontainers.image.source=https://github.com/Axiologic/ScriptaHubAgent
             org.opencontainers.image.base.name=${{ needs.resolve.outputs.roboteam }}
-            io.assistos.scriptahub.runtime-image=${{ needs.resolve.outputs.scripta }}
+            io.assistos.scriptahub.assets-image=${{ needs.resolve.outputs.assets }}
             io.assistos.image-definitions.revision=${{ github.sha }}
             io.assistos.roboteam.runtime-contract=roboteam-runtime-v6
 

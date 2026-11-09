@@ -79,7 +79,7 @@ jobs:
       - name: Build locally before publication
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: source
+          context: images/scriptahub-agent
           file: images/scriptahub-agent/Dockerfile
           platforms: ${{ matrix.platform }}
           load: true
@@ -91,11 +91,10 @@ jobs:
             org.opencontainers.image.source=https://github.com/Axiologic/ScriptaHubAgent
             io.assistos.image-definitions.revision=${{ github.sha }}
 
-      - name: Prove offline runtime and exact deployed sources
+      - name: Prove the slim runtime serves the exact deployed sources offline
         env:
           IMAGE: ${{ steps.source.outputs.image }}
           ARCH: ${{ matrix.arch }}
-          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
         run: |
           set -euo pipefail
           candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
@@ -103,12 +102,11 @@ jobs:
           evidence="$RUNNER_TEMP/scriptahub-publication"
           mkdir -p "$evidence"
           docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
-            --entrypoint node "$candidate" /opt/scriptahub/runtime/verify-skills.mjs /opt/scriptahub/runtime \
-            > "$evidence/runtime.log" 2>&1
-          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
-            -v "$PWD/source:/scripta-source:ro" --entrypoint node "$candidate" \
-            /scripta-source/scriptahubAgent/deployment/check-runtime.mjs > "$evidence/source-match.log" 2>&1
+            -v "$PWD/source/scriptahubAgent:/code:ro" -v "$PWD/images/scriptahub-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
+            --entrypoint node "$candidate" /smoke-runtime.mjs > "$evidence/smoke.log" 2>&1 || { cat "$evidence/smoke.log"; exit 1; }
+          cat "$evidence/smoke.log"
           docker image inspect "$candidate" > "$evidence/image.json"
+          docker image inspect --format '{{.Size}}' "$candidate" > "$evidence/image-size.txt"
           cp images/scriptahub-agent/sources.lock.json "$evidence/sources.lock.json"
           printf '%s\n' "$GITHUB_SHA" > "$evidence/image-definitions-revision.txt"
 

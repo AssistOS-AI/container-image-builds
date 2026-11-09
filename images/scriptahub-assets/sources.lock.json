@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/Axiologic/ScriptaHubAgent.git",
+  "revision": "7e9003107066fb486cb6737cd5910b4cc97792d5",
+  "image": "docker.io/assistos/scriptahub-assets",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "nativeBuilder": "docker.io/library/rust@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922",
+  "modelsSource": "docker.io/assistos/scriptahub-agent@sha256:81040fe16c49349572e37048ef0d4660078097774542f502c9c3a21ba0d3e534",
+  "fetchBase": "docker.io/assistos/ploinky-node@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669"
+}
