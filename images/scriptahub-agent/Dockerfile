@@ -5,6 +5,11 @@ COPY scriptahubAgent/deployment/skills-runtime.json /build-config.json
 COPY scriptahubAgent/deployment/build-native.sh /build-native.sh
 RUN TARGETARCH="$TARGETARCH" sh /build-native.sh
 
+# docling.rs replaced its models-v1 release assets on 2026-11-01 with different bytes. The pinned models
+# (skills/pdf2html/external/native/integrity.json) come from the last image built with them; preparation
+# still verifies every file against its pinned SHA-256 and downloads only a file that is missing.
+FROM docker.io/assistos/scriptahub-agent@sha256:81040fe16c49349572e37048ef0d4660078097774542f502c9c3a21ba0d3e534 AS verified-models
+
 FROM docker.io/assistos/ploinky-node@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669
 
 USER root
@@ -20,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends sox \
     && rm -rf /var/lib/apt/lists/*
 COPY skills/ /opt/scriptahub/runtime/skills/
+COPY --from=verified-models /opt/scriptahub/runtime/skills/pdf2html/external/native/models/ /opt/scriptahub/runtime/skills/pdf2html/external/native/models/
 COPY --from=native-build /out/ /opt/scriptahub/native-build/
 COPY scriptahubAgent/deployment/ /opt/scriptahub/runtime/
 COPY scriptahubAgent/site/reader/reader.css /opt/scriptahub/runtime/reader/reader.css
