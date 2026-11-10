@@ -6,19 +6,28 @@ const read = file => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'ut
 const lock = JSON.parse(read('images/scriptahub-agent/sources.lock.json'));
 const workflow = read('.github/workflows/publish-scriptahub-agent-image.yml');
 
-test('ScriptaHub publication binds an immutable public source and the supported native platform', () => {
+test('ScriptaHub agent builds a verified hosted runtime from the locked source', () => {
     assert.equal(lock.repository, 'https://github.com/Axiologic/ScriptaHubAgent.git');
     assert.match(lock.revision, /^[0-9a-f]{40}$/);
     assert.equal(lock.image, 'docker.io/assistos/scriptahub-agent');
-    assert.deepEqual(lock.platforms, ['linux/amd64','linux/arm64']);
-    // The application image is the pinned base alone: it runs no skill, so it carries no skills runtime.
-    const agentDockerfile = read('images/scriptahub-agent/Dockerfile');
-    assert.deepEqual(agentDockerfile.split('\n').filter(line => /^FROM\b/.test(line)), [`FROM ${lock.baseImage}`]);
-    assert.doesNotMatch(agentDockerfile, /apt-get|prepare-skills|verify-skills|native-build|scriptahub-agent@sha256/);
-    assert.doesNotMatch(agentDockerfile, /^(?:COPY|ADD|ENV)\b/m);
-    assert.equal(lock.nativeBuilder, undefined);
-    assert.match(workflow, /repository: Axiologic\/ScriptaHubAgent/);
-    assert.match(workflow, /ref: \$\{\{ steps.source.outputs.revision \}\}/);
+    assert.deepEqual(lock.platforms, ['linux/amd64', 'linux/arm64']);
+    const dockerfile = read('images/scriptahub-agent/Dockerfile');
+    assert.match(dockerfile, new RegExp(`FROM ${lock.baseImage}`));
+    assert.match(dockerfile, /FROM \${SCRIPTA_ASSETS_IMAGE} AS manuscript-assets/);
+    const verify = dockerfile.indexOf('verify-assets.mjs');
+    const copy = dockerfile.indexOf('cp -R --no-preserve=ownership /mnt/assets/runtime');
+    assert.ok(verify >= 0 && copy > verify);
+    assert.match(dockerfile.slice(verify, copy), /--exact/);
+    assert.match(dockerfile, /prepare-skills.mjs/);
+    assert.match(dockerfile, /USER 1000:1000\nRUN node .*verify-skills.mjs/);
+    assert.match(workflow, /context: source/);
+    assert.match(workflow, /Source lock predates hosted processing protocol/);
+    assert.match(workflow, /processing-runtime-acceptance.mjs/);
+    assert.match(workflow, /processing-protocol.json/);
+    assert.match(workflow, /assert.deepEqual\(protocol, \{version: 1\}/);
+    assert.match(workflow, /SCRIPTA_ASSETS_IMAGE.*scriptahub-assets@sha256/);
+    assert.match(workflow, /sha256sum assets-index.json/);
+    assert.match(workflow, /index.manifests.length, 2/);
     assert.match(workflow, /runner: ubuntu-24\.04-arm/);
     assert.match(workflow, /runner: ubuntu-24\.04\s/);
     assert.doesNotMatch(workflow, /setup-qemu|SOURCE_REPO_TOKEN/);
@@ -26,15 +35,26 @@ test('ScriptaHub publication binds an immutable public source and the supported 
 
 test('runtime publication requires native offline proof and source equality before login or push', () => {
     const build = workflow.indexOf('name: Build locally before publication');
-    const proof = workflow.indexOf('name: Prove the slim runtime serves the exact deployed sources offline');
+    const proof = workflow.indexOf('name: Prove the hosted runtime and exact deployed sources offline');
     const login = workflow.indexOf('name: Log in to Docker Hub');
     const publish = workflow.indexOf('name: Publish verified candidate');
     assert.ok(build >= 0 && proof > build && login > proof && publish > login);
     assert.match(workflow.slice(build, proof), /push: false/);
-    assert.match(workflow.slice(proof, login), /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
-    assert.match(workflow.slice(proof, login), /smoke-runtime\.mjs/);
-    assert.match(workflow.slice(proof, login), /source\/scriptahubAgent:\/code:ro/);
-    assert.doesNotMatch(workflow.slice(proof, login), /verify-skills|check-runtime/);
+    const proofStep = workflow.slice(proof, login);
+    assert.match(proofStep, /docker save "\$candidate" \| podman load/);
+    assert.match(proofStep, /podman image inspect "\$config_id"/);
+    assert.match(proofStep, /podman.Id.replace\(\/\^sha256:\//);
+    assert.match(proofStep, /assert.equal\(podman.Architecture, docker.Architecture/);
+    assert.match(proofStep, /assert.deepEqual\(podman.Labels \?\? podman.Config.Labels, docker.Config.Labels/);
+    assert.match(proofStep, /Insufficient Podman import headroom/);
+    assert.equal((proofStep.match(/podman run --rm --init --network=none --cap-drop=ALL --security-opt=no-new-privileges --security-opt=label=disable --security-opt='unmask=\/proc\/\*' --ipc=private/g) || []).length, 2);
+    assert.match(workflow, /dpkg-query -W podman catatonit/);
+    assert.match(workflow.slice(publish), /docker image inspect --format '\{\{.Id\}\}' "\$candidate".*config-id.txt/);
+    assert.match(proofStep, /smoke-runtime\.mjs/);
+    assert.match(proofStep, /processing-runtime-acceptance\.mjs/);
+    assert.match(proofStep, /source\/skills:\/source-skills:ro/);
+    for (const label of ['skills-tree', 'deployment-tree', 'reader-css-blob', 'assets-image']) assert.ok(workflow.includes(`io.assistos.scriptahub.${label}`));
+    assert.match(workflow, /Native candidates differ/);
     assert.match(workflow, /if test "\$PROMOTE_STABLE" = true/);
     assert.match(workflow, /runtime-index\.json.*\n.*test .* = "\$digest"/);
     assert.match(workflow, /needs: publish/);
@@ -47,7 +67,6 @@ test('runtime publication requires native offline proof and source equality befo
 const assetsLock = JSON.parse(read('images/scriptahub-assets/sources.lock.json'));
 const assetsDockerfile = read('images/scriptahub-assets/Dockerfile');
 const assetsWorkflow = read('.github/workflows/publish-scriptahub-assets-image.yml');
-const robotWorkflow = read('.github/workflows/publish-scriptahub-robot-image.yml');
 const pinnedUses = text => { for (const match of text.matchAll(/^\s*uses:\s*[^@\s]+@([^\s#]+)/gm)) assert.match(match[1], /^[0-9a-f]{40}$/); };
 
 test('ScriptaHub assets lock names the public source, both platforms and every digest-pinned build input', () => {
@@ -114,29 +133,4 @@ test('ScriptaHub assets publication proves the exported bytes offline before log
     assert.match(assetsWorkflow, /password: \$\{\{ secrets.DOCKERHUB_TOKEN \}\}/);
     assert.match(assetsWorkflow, /persist-credentials: false/);
     pinnedUses(assetsWorkflow);
-});
-
-test('ScriptaHub robot publication takes a verified assets index by digest and keeps its source revision lock', () => {
-    assert.match(robotWorkflow, /scripta_assets_image:/);
-    assert.doesNotMatch(robotWorkflow, /scripta_runtime_image|SCRIPTA_RUNTIME_IMAGE|scriptahub-agent@sha256|runtime-image/);
-    const resolve = robotWorkflow.slice(robotWorkflow.indexOf('name: Resolve source revision and base image digests'), robotWorkflow.indexOf('  publish:'));
-    assert.match(resolve, /node --test tests\/scriptahub-publication\.test\.mjs/);
-    assert.ok(resolve.includes('[[ "$SCRIPTA_ASSETS_IMAGE" =~ ^docker\\.io/assistos/scriptahub-assets@sha256:[0-9a-f]{64}$ ]]'));
-    assert.match(resolve, /imagetools inspect --raw "\$SCRIPTA_ASSETS_IMAGE" > assets-index\.json/);
-    assert.match(resolve, /sha256sum assets-index\.json[^\n]*= "\$\{SCRIPTA_ASSETS_IMAGE#\*@\}"/, 'the input is the index itself');
-    assert.match(resolve, /assert\.equal\(index\.manifests\.length,2\)/);
-    assert.match(resolve, /\['linux\/amd64','linux\/arm64'\]/);
-    assert.match(resolve, /images\/scriptahub-agent\/sources\.lock\.json/);
-    assert.match(robotWorkflow, /SCRIPTA_ASSETS_IMAGE=\$\{\{ needs\.resolve\.outputs\.assets \}\}/);
-    assert.match(robotWorkflow, /io\.assistos\.scriptahub\.assets-image=\$\{\{ needs\.resolve\.outputs\.assets \}\}/);
-    assert.match(robotWorkflow, /file: source\/scriptahubAgent\/deployment\/Dockerfile\.robot/);
-    const build = robotWorkflow.indexOf('name: Build and verify locally before publication');
-    const proof = robotWorkflow.indexOf('name: Prove the installed runtime matches the exact sources');
-    const login = robotWorkflow.indexOf('name: Log in to Docker Hub');
-    const publish = robotWorkflow.indexOf('name: Publish verified candidate');
-    assert.ok(build >= 0 && proof > build && login > proof && publish > login);
-    assert.match(robotWorkflow.slice(proof, login), /--network=none --cap-drop=ALL --security-opt=no-new-privileges/);
-    assert.match(robotWorkflow.slice(proof, login), /verify-skills\.mjs/);
-    assert.match(robotWorkflow, /if test "\$PROMOTE_STABLE" = true/);
-    pinnedUses(robotWorkflow);
 });

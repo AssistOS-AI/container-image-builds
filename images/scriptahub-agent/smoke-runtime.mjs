@@ -1,25 +1,26 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { skillSource } from '/code/deployment/skill-source.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 
 // Run in a fresh candidate container with networking disabled and the ScriptaHubAgent checkout
-// mounted read-only at /code, as Ploinky mounts it. The slim agent image carries no skills
-// runtime, so the proof is that the manifest entry point serves /health without one.
+// mounted read-only at /code, as Ploinky mounts it. Verify the installed source receipt
+// against the selected checkout before starting the service.
 const port = 3002;
-const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'scriptahub-slim-'));
+const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'scriptahub-hosted-'));
 let child;
 try {
     assert.equal(process.getuid(), 1000, 'The agent must run as UID 1000');
     assert.equal(process.getgid(), 1000, 'The agent must run as GID 1000');
     const interfaces = Object.keys(os.networkInterfaces());
     assert.deepEqual(interfaces, ['lo'], 'Runtime proof requires network isolation');
-    assert.equal(existsSync('/opt/scriptahub'), false, 'The image must not carry a skills runtime');
-    assert.equal(existsSync('/usr/local/bin/scriptahub-skill'), false, 'The image must not carry a skill launcher');
+    assert.deepEqual(JSON.parse(await fs.readFile('/opt/scriptahub/runtime/source.json', 'utf8')),
+        await skillSource('/source-skills'), 'Installed skills must match the selected source checkout');
+    execFileSync(process.execPath, ['/opt/scriptahub/runtime/verify-skills.mjs', '/opt/scriptahub/runtime'], { stdio: 'inherit' });
     assert.match(execFileSync('git', ['--version'], { encoding: 'utf8' }), /^git version /);
     new DatabaseSync(':memory:').close();
 
@@ -56,9 +57,9 @@ try {
     const outcome = await Promise.race([exited, delay(10_000).then(() => 'timeout')]);
     assert.notEqual(outcome, 'timeout', 'The agent did not drain within 10 seconds of SIGTERM');
     assert.deepEqual(outcome, { code: 0, signal: null }, 'SIGTERM must end the agent with exit 0');
-    process.stdout.write('ScriptaHub slim agent runtime proven\n');
+    process.stdout.write('ScriptaHub hosted agent runtime proven\n');
 } catch (error) {
-    process.stderr.write(`ScriptaHub slim agent runtime proof failed: ${error.message}\n`);
+    process.stderr.write(`ScriptaHub hosted agent runtime proof failed: ${error.message}\n`);
     process.exitCode = 1;
 } finally {
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

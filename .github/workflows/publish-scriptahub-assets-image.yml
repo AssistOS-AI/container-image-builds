@@ -1,7 +1,7 @@
 name: Publish ScriptaHub assets image
 
 # The assets image holds only downloaded model and native files (Docling, Kokoro, Qwen, Piper and the native PDF
-# engine), each checked by SHA-256 against the inventories committed in ScriptaHubAgent. The robot image takes
+# engine), each checked by SHA-256 against the inventories committed in ScriptaHubAgent. The agent image takes
 # them from this image by digest. Nothing is published unless the exported bytes pass an offline --exact check.
 
 on:

@@ -3,6 +3,10 @@ name: Publish ScriptaHub Agent image
 on:
   workflow_dispatch:
     inputs:
+      scripta_assets_image:
+        description: Verified scriptahub-assets index by digest
+        required: true
+        type: string
       promote_stable:
         description: Publish the verified image as runtime
         required: true
@@ -41,8 +45,19 @@ jobs:
 
       - name: Validate source lock and publication contract
         id: source
+        env:
+          SCRIPTA_ASSETS_IMAGE: ${{ inputs.scripta_assets_image }}
         run: |
           set -euo pipefail
+          [[ "$SCRIPTA_ASSETS_IMAGE" =~ ^docker\.io/assistos/scriptahub-assets@sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "$SCRIPTA_ASSETS_IMAGE" > assets-index.json
+          test "sha256:$(sha256sum assets-index.json | cut -d ' ' -f1)" = "${SCRIPTA_ASSETS_IMAGE#*@}"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'; import assert from 'node:assert/strict';
+          const index = JSON.parse(fs.readFileSync('assets-index.json'));
+          assert.equal(index.manifests.length, 2);
+          assert.deepEqual(index.manifests.map(m => `${m.platform.os}/${m.platform.architecture}`).sort(), ['linux/amd64', 'linux/arm64']);
+          NODE
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           node --test tests/scriptahub-publication.test.mjs
           node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
@@ -61,6 +76,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify source checkout and prepare runner space
+        id: trees
         env:
           SOURCE_REVISION: ${{ steps.source.outputs.revision }}
         run: |
@@ -68,6 +84,16 @@ jobs:
           test "$(git -C source rev-parse HEAD)" = "$SOURCE_REVISION"
           test -z "$(git -C source status --porcelain=v1)"
           test -f source/.dockerignore
+          test -f source/scriptahubAgent/deployment/processing-runtime-acceptance.mjs || { echo "Source lock predates hosted processing protocol; update it to a committed compatible revision" >&2; exit 1; }
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'; import assert from 'node:assert/strict';
+          const protocol = JSON.parse(fs.readFileSync('source/scriptahubAgent/deployment/processing-protocol.json'));
+          assert.deepEqual(protocol, {version: 1}, 'Source lock must support hosted processing protocol version 1');
+          NODE
+          for item in skills scriptahubAgent/deployment scriptahubAgent/site/reader/reader.css; do
+            key=$(case "$item" in skills) echo skills;; scriptahubAgent/deployment) echo deployment;; *) echo reader;; esac)
+            echo "${key}=$(git -C source rev-parse "HEAD:$item")" >> "$GITHUB_OUTPUT"
+          done
           test "$(uname -m)" = "${{ matrix.machine }}"
           # Only unused SDKs on the disposable hosted runner are removed.
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
@@ -79,33 +105,91 @@ jobs:
       - name: Build locally before publication
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: images/scriptahub-agent
+          context: source
           file: images/scriptahub-agent/Dockerfile
           platforms: ${{ matrix.platform }}
           load: true
           push: false
           tags: ${{ steps.source.outputs.image }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          build-args: |
+            SCRIPTA_ASSETS_IMAGE=${{ inputs.scripta_assets_image }}
           provenance: false
           labels: |
             org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
             org.opencontainers.image.source=https://github.com/Axiologic/ScriptaHubAgent
             io.assistos.image-definitions.revision=${{ github.sha }}
+            io.assistos.scriptahub.assets-image=${{ inputs.scripta_assets_image }}
+            io.assistos.scriptahub.skills-tree=${{ steps.trees.outputs.skills }}
+            io.assistos.scriptahub.deployment-tree=${{ steps.trees.outputs.deployment }}
+            io.assistos.scriptahub.reader-css-blob=${{ steps.trees.outputs.reader }}
 
-      - name: Prove the slim runtime serves the exact deployed sources offline
+      - name: Prepare rootless Podman for native proofs
+        run: |
+          set -euo pipefail
+          if ! command -v podman >/dev/null || ! command -v catatonit >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y podman catatonit
+          fi
+          evidence="$RUNNER_TEMP/scriptahub-publication"
+          mkdir -p "$evidence"
+          { docker version; docker buildx version; podman version; dpkg-query -W podman catatonit; podman info; } > "$evidence/runtime-versions.txt"
+
+      - name: Prove the hosted runtime and exact deployed sources offline
         env:
           IMAGE: ${{ steps.source.outputs.image }}
           ARCH: ${{ matrix.arch }}
+          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
+          ASSETS_IMAGE: ${{ inputs.scripta_assets_image }}
+          SKILLS_TREE: ${{ steps.trees.outputs.skills }}
+          DEPLOYMENT_TREE: ${{ steps.trees.outputs.deployment }}
+          READER_BLOB: ${{ steps.trees.outputs.reader }}
         run: |
           set -euo pipefail
           candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
-          test "$(docker image inspect --format '{{.Architecture}}' "$candidate")" = "$ARCH"
           evidence="$RUNNER_TEMP/scriptahub-publication"
           mkdir -p "$evidence"
-          docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges \
-            -v "$PWD/source/scriptahubAgent:/code:ro" -v "$PWD/images/scriptahub-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
-            --entrypoint node "$candidate" /smoke-runtime.mjs > "$evidence/smoke.log" 2>&1 || { cat "$evidence/smoke.log"; exit 1; }
-          cat "$evidence/smoke.log"
           docker image inspect "$candidate" > "$evidence/image.json"
+          config_id=$(docker image inspect --format '{{.Id}}' "$candidate")
+          [[ "$config_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(docker image inspect --format '{{.Architecture}}' "$candidate")" = "$ARCH"
+          size=$(docker image inspect --format '{{.Size}}' "$candidate")
+          [[ "$size" =~ ^[0-9]+$ ]]
+          graph_root=$(podman info --format '{{.Store.GraphRoot}}')
+          test -d "$graph_root"
+          available=$(df -Pk "$graph_root" | awk 'NR == 2 { print $4 * 1024 }')
+          # Podman needs room for unpacked layers; reserve one additional GiB for proof scratch.
+          awk -v available="$available" -v required="$size" 'BEGIN { exit !(available >= required + 1073741824) }' || { echo "Insufficient Podman import headroom" >&2; exit 1; }
+          docker save "$candidate" | podman load
+          podman image inspect "$config_id" > "$evidence/podman-image.json"
+          DOCKER_IMAGE="$evidence/image.json" PODMAN_IMAGE="$evidence/podman-image.json" ARCH="$ARCH" node --input-type=module <<'NODE'
+          import fs from 'node:fs'; import assert from 'node:assert/strict';
+          const docker = JSON.parse(fs.readFileSync(process.env.DOCKER_IMAGE))[0];
+          const podman = JSON.parse(fs.readFileSync(process.env.PODMAN_IMAGE))[0];
+          assert.equal(`sha256:${podman.Id.replace(/^sha256:/, '')}`, docker.Id, 'Imported image config ID differs');
+          assert.equal(podman.Architecture, docker.Architecture, 'Imported architecture differs');
+          assert.equal(podman.Architecture, process.env.ARCH, 'Imported architecture is not native');
+          assert.deepEqual(podman.Labels ?? podman.Config.Labels, docker.Config.Labels, 'Imported labels differ');
+          NODE
+          printf '%s\n' "$config_id" > "$evidence/config-id.txt"
+          podman run --rm --init --network=none --cap-drop=ALL --security-opt=no-new-privileges --security-opt=label=disable --security-opt='unmask=/proc/*' --ipc=private \
+            -v "$PWD/source/scriptahubAgent:/code:ro" -v "$PWD/source/skills:/source-skills:ro" -v "$PWD/images/scriptahub-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
+            --entrypoint node "$config_id" /smoke-runtime.mjs > "$evidence/smoke.log" 2>&1 || { cat "$evidence/smoke.log"; exit 1; }
+          cat "$evidence/smoke.log"
+          podman run --rm --init --network=none --cap-drop=ALL --security-opt=no-new-privileges --security-opt=label=disable --security-opt='unmask=/proc/*' --ipc=private \
+            -v "$PWD/source/scriptahubAgent:/code:ro" --entrypoint node "$config_id" \
+            /code/deployment/processing-runtime-acceptance.mjs > "$evidence/processing.log" 2>&1 || { cat "$evidence/processing.log"; exit 1; }
+          cat "$evidence/processing.log"
+          IMAGE_EVIDENCE="$evidence/image.json" node --input-type=module <<'NODE'
+          import fs from 'node:fs'; import assert from 'node:assert/strict';
+          const labels = JSON.parse(fs.readFileSync(process.env.IMAGE_EVIDENCE))[0].Config.Labels;
+          for (const [key, value] of Object.entries({
+            'org.opencontainers.image.revision': process.env.SOURCE_REVISION,
+            'io.assistos.scriptahub.assets-image': process.env.ASSETS_IMAGE,
+            'io.assistos.scriptahub.skills-tree': process.env.SKILLS_TREE,
+            'io.assistos.scriptahub.deployment-tree': process.env.DEPLOYMENT_TREE,
+            'io.assistos.scriptahub.reader-css-blob': process.env.READER_BLOB,
+          })) assert.equal(labels[key], value, `Candidate label mismatch: ${key}`);
+          NODE
           docker image inspect --format '{{.Size}}' "$candidate" > "$evidence/image-size.txt"
           cp images/scriptahub-agent/sources.lock.json "$evidence/sources.lock.json"
           printf '%s\n' "$GITHUB_SHA" > "$evidence/image-definitions-revision.txt"
@@ -124,6 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
+          test "$(docker image inspect --format '{{.Id}}' "$candidate")" = "$(cat "$RUNNER_TEMP/scriptahub-publication/config-id.txt")"
           docker push "$candidate"
           docker buildx imagetools inspect --raw "$candidate" > "$RUNNER_TEMP/scriptahub-publication/manifest.json"
           digest="sha256:$(sha256sum "$RUNNER_TEMP/scriptahub-publication/manifest.json" | cut -d ' ' -f1)"
@@ -163,6 +248,14 @@ jobs:
         run: |
           set -euo pipefail
           image=docker.io/assistos/scriptahub-agent
+          AMD_IMAGE="proofs/scriptahub-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64/image.json" ARM_IMAGE="proofs/scriptahub-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64/image.json" node --input-type=module <<'NODE'
+          import fs from 'node:fs'; import assert from 'node:assert/strict';
+          const labels = file => JSON.parse(fs.readFileSync(file))[0].Config.Labels;
+          const a = labels(process.env.AMD_IMAGE), b = labels(process.env.ARM_IMAGE);
+          for (const key of ['org.opencontainers.image.revision', 'io.assistos.scriptahub.assets-image', 'io.assistos.scriptahub.skills-tree', 'io.assistos.scriptahub.deployment-tree', 'io.assistos.scriptahub.reader-css-blob']) {
+            assert.ok(a[key], `Missing ${key}`); assert.equal(a[key], b[key], `Native candidates differ: ${key}`);
+          }
+          NODE
           amd64=$(cat proofs/scriptahub-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64/digest.txt)
           arm64=$(cat proofs/scriptahub-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64/digest.txt)
           [[ "$amd64" =~ ^sha256:[0-9a-f]{64}$ ]]
