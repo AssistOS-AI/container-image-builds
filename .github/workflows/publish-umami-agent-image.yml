@@ -8,9 +8,20 @@ on:
         required: false
         default: ''
         type: string
+      candidate_run_id:
+        description: Required with promote_digest. Run ID of the successful candidate run of this workflow that built that digest.
+        required: false
+        default: ''
+        type: string
+      candidate_attempt:
+        description: Required with promote_digest. Exact attempt of that candidate run.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: publish-umami-agent-image
@@ -229,10 +240,34 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Require dispatch from the main branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+
       - name: Checkout exact verifier
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+
+      - name: Verify the candidate run, its artifact and both native proofs before any registry write
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTE_DIGEST: ${{ inputs.promote_digest }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_attempt }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          [[ "$PROMOTE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$CANDIDATE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          evidence="$RUNNER_TEMP/umami-candidate-evidence"
+          mkdir -p "$evidence"
+          # The candidate run must be a successful dispatch of this workflow, and its artifact must carry the named digest
+          # with native proofs that pass the verifier against the candidate commit's own lock.
+          node images/umami-agent/verify-publication.mjs promote-evidence "$evidence"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -243,15 +278,13 @@ jobs:
           username: assistos
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Verify the named digest, then move both convenience tags
+      - name: Verify the registry digest, then move both convenience tags
         env:
           PROMOTE_DIGEST: ${{ inputs.promote_digest }}
           DOCKERHUB_USERNAME: assistos
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain=v1)"
           [[ "$PROMOTE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           # An assistos/umami-agent index of exactly linux/amd64 and linux/arm64 whose configs name this Umami version and source commit.
           node images/umami-agent/verify-publication.mjs promote-check "$PROMOTE_DIGEST"

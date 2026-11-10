@@ -176,8 +176,9 @@ binary. No workflow input can override those selections.
 | GeoIP | `/app/geo/GeoLite2-City.mmdb` from `docker.umami.is/umami-software/umami:3.4.1@sha256:e69d1a7932e9dab0fc523edc7be1f3a53f3c261f57856fc2167ae74a8fc022e8` | Upstream `SKIP_BUILD_GEO=1` avoids a mutable download. The database is copied unchanged from the pinned upstream image and its SHA-256 (`3c884a44...`) is pinned and checked again at the seal. See `dependencies.md` for the licence note. |
 
 The Next build still fetches the Inter font through `next/font/google`, as the
-earlier builds did. That fetch is not pinned; the native proof requires the
-emitted font assets to load under the compiled prefix.
+earlier builds did. That fetch is not pinned; the native proof loads every
+`/_next/` script, stylesheet, and font the login HTML references under the
+compiled prefix (requiring at least one script and one stylesheet, not a font).
 
 The final stage installs the source-built standalone server, static assets,
 public files, scripts, Prisma artifacts, the workspace packages, and the pruned
@@ -220,7 +221,7 @@ tracker. The gate also proves the following.
 | Check | Required result |
 | --- | --- |
 | Built-in MCP | `tools/list` on `<prefix>/mcp` returns exactly the 23 read-only tools; requests without a key or with a login token get 401; `list_websites` reports a website the key created |
-| API key | An inserted test key authenticates `GET /api/websites` (200) and creates a website with an explicit id, and is refused (401 or 403) on `/api/users` and `/api/me/api-keys` under the compiled base path |
+| API key | An inserted test key authenticates `GET /api/websites` (200) and creates a website with an explicit id, and is refused (401 or 403) on `/api/admin/users` and `/api/me/api-keys` under the compiled base path |
 | Collection | `POST <prefix>/api/send` with a browser user agent returns a cache token and creates one session row; a crawler user agent is ignored; a forwarded client address resolves to `US` through the pinned GeoIP database |
 | Data-directory continuity | The pinned legacy image (`docker.io/assistos/umami-agent@sha256:d797b418...`, Umami 3.2.0) initializes a data directory and applies its migrations; the candidate then starts on it, `pg_controldata` reports the same control and catalog version, `check:db` applies the newer migrations, and the earlier rows survive |
 
@@ -228,8 +229,12 @@ The workflow assembles exactly those proven native manifests and their
 provenance/SBOM attestations into a run-specific candidate index, and uploads
 both native proofs and the immutable index. A candidate publication never moves
 a tag. To promote, dispatch the workflow again with
-`promote_digest=sha256:<candidate index digest>`. That run builds nothing: it
-verifies that the digest is an `assistos/umami-agent` index of exactly
+`promote_digest=sha256:<candidate index digest>`, `candidate_run_id`, and
+`candidate_attempt`, from `main`. That run builds nothing: it requires the
+candidate run to be a successful dispatch of this workflow, downloads its
+`umami-candidate-<run>-<attempt>` artifact, requires the artifact's digest to
+equal `promote_digest`, and re-runs the native-proof and candidate-index checks
+against the candidate commit's own lock. It then verifies that the digest is an `assistos/umami-agent` index of exactly
 linux/amd64 and linux/arm64 (plus attestations bound to them) whose image
 configs name Umami 3.4.1 and this source commit, points both `umami-stack` and
 `latest` at that exact digest, and verifies both tags resolve to its bytes.
@@ -929,10 +934,12 @@ gh workflow run publish-llm-runtime-cpu-image.yml \
 gh workflow run publish-umami-agent-image.yml \
   --repo AssistOS-AI/container-image-builds
 
-# Promotion: builds nothing; moves umami-stack and latest to the named, proven digest.
+# Promotion (from main): builds nothing; moves umami-stack and latest to the named, proven digest.
 gh workflow run publish-umami-agent-image.yml \
-  --repo AssistOS-AI/container-image-builds \
-  -f promote_digest=sha256:<64 lowercase hex>
+  --repo AssistOS-AI/container-image-builds --ref main \
+  -f promote_digest=sha256:<64 lowercase hex> \
+  -f candidate_run_id=<run id> \
+  -f candidate_attempt=<attempt>
 
 gh workflow run publish-bwrap-runner.yml \
   --repo AssistOS-AI/container-image-builds \

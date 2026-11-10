@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { BASE_PATH, METADATA_ASSETS, MCP_TOOLS, ADMIN_USER_ID, apiKeyRow, parseControlData, parseMcpBody, metadataAssetHash, metadataHeadAssets, nestedMetadataAssets, fetchMetadataAssets, pageAssets, verifyBuildMetadata, verifyLoopbackListener, verifyMcpTools, mcpCall, mcpSession } from '../images/umami-agent/smoke-runtime.mjs';
 import { verifySchemaEngine } from '../images/umami-agent/verify-build.mjs';
 import { rewriteMetadataSource, targets as metadataTargets } from '../images/umami-agent/patch-metadata-assets.mjs';
-import { nativeIndex, parseReference, verifyCandidate, verifyContinuity, verifyImageSizes, verifyNativeProof, registryGet, verifyPinnedBase, verifyPromotionTarget, verifyTagsResolve } from '../images/umami-agent/verify-publication.mjs';
+import { nativeIndex, parseReference, verifyCandidate, verifyContinuity, verifyImageSizes, verifyNativeProof, verifyPromotionEvidence, pinCandidateRun, checkCandidateArtifact, registryGet, verifyPinnedBase, verifyPromotionTarget, verifyTagsResolve } from '../images/umami-agent/verify-publication.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
@@ -199,10 +199,19 @@ test('workflow verifies every pinned base, assembles smoke-proven native digests
     assert.match(job('assemble'), /if: \$\{\{ inputs\.promote_digest == '' \}\}\n\s+needs: build/);
     const promote = job('promote');
     assert.match(promote, /if: \$\{\{ inputs\.promote_digest != '' \}\}/);
+    assert.match(promote, /steps:\n      - name: Require dispatch from the main branch\n        run: \|\n          set -euo pipefail\n          test "\$GITHUB_REF" = refs\/heads\/main/, 'promotion runs only from main, before anything else');
+    for (const input of ['candidate_run_id', 'candidate_attempt']) assert.match(workflow, new RegExp(`      ${input}:\\n(?:        .+\\n)*?        type: string`));
+    assert.match(promote, /CANDIDATE_RUN_ID: \$\{\{ inputs\.candidate_run_id \}\}/);
+    assert.match(promote, /CANDIDATE_RUN_ATTEMPT: \$\{\{ inputs\.candidate_attempt \}\}/);
+    assert.match(promote, /verify-publication\.mjs promote-evidence "\$evidence"/);
+    assert.ok(promote.indexOf('promote-evidence') < promote.indexOf('docker/login-action'), 'candidate evidence is verified before registry credentials exist');
+    assert.match(workflow, /permissions:\n  contents: read\n  actions: read/);
     assert.doesNotMatch(promote, /^\s+needs:|build-push-action|docker build\s/m);
     assert.match(promote, /PROMOTE_DIGEST: \$\{\{ inputs\.promote_digest \}\}/);
     assert.match(promote, /DOCKERHUB_TOKEN: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/);
-    assert.doesNotMatch(promote.replace('PROMOTE_DIGEST: ${{ inputs.promote_digest }}', '').replace("if: ${{ inputs.promote_digest != '' }}", ''), /\$\{\{ inputs\./, 'the digest reaches shell only through the environment');
+    for (const line of promote.split('\n').filter(line => line.includes('${{ inputs.'))) {
+        assert.match(line, /^\s+(?:[A-Z_]+: \$\{\{ inputs\.\w+ \}\}|if: \$\{\{ inputs\.promote_digest != '' \}\})$/, `an input reaches shell only through the environment: ${line}`);
+    }
     assert.match(promote, /\[\[ "\$PROMOTE_DIGEST" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
     assert.match(promote, /verify-publication\.mjs promote-check "\$PROMOTE_DIGEST"/);
     assert.match(promote, /--tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{IMAGE_TAG\}" --tag "docker\.io\/\$\{IMAGE_NAME\}:\$\{LATEST_TAG\}"/);
@@ -382,18 +391,16 @@ test('candidate assembly cannot replace platforms, drop attestations, or introdu
     }
 });
 
-test('native proof admission rejects stale run, source, failed HTTP, and image config substitution', t => {
-    const directory = temp(t);
-    const identity = { sha: '1'.repeat(40), runId: '12', attempt: '1' };
-    const manifest = JSON.stringify({ config: { digest: digest('e') } });
+function nativeProofFixture(directory, arch, identity) {
+    const manifest = JSON.stringify({ config: { digest: digest('e') }, ...(arch === 'amd64' ? {} : { arch }) });
     write(directory, 'native-manifest.json', manifest);
     const nativeDigest = 'sha256:' + hash(manifest);
-    const sourceIndex = JSON.stringify(index('amd64', nativeDigest));
+    const sourceIndex = JSON.stringify(index(arch, nativeDigest));
     const buildDigest = 'sha256:' + hash(sourceIndex);
     write(directory, 'source-index.json', sourceIndex);
     write(directory, 'build-digest.txt', buildDigest);
     write(directory, 'native-digest.txt', nativeDigest);
-    const source = { workflowSha: identity.sha, workflowRunId: identity.runId, workflowAttempt: identity.attempt, architecture: 'amd64',
+    const source = { workflowSha: identity.sha, workflowRunId: identity.runId, workflowAttempt: identity.attempt, architecture: arch,
         buildDigest, nativeDigest, sourceLockSha256: hash(JSON.stringify(sources)) };
     write(directory, 'source-evidence.json', source);
     const labels = {
@@ -403,7 +410,7 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
         'io.assistos.umami.source.modified': 'true', 'io.assistos.umami.base-path': BASE_PATH,
         'io.assistos.umami.pnpm-lock.sha256': sources.umami.sourceFiles['pnpm-lock.yaml'], 'io.assistos.umami.alpine.release': sources.bases.node.alpineRelease,
     };
-    const inspect = [{ Architecture: 'amd64', Os: 'linux', Id: digest('e'), Config: { Labels: labels } }];
+    const inspect = [{ Architecture: arch, Os: 'linux', Id: digest('e'), Config: { Labels: labels } }];
     write(directory, 'image-inspect.json', inspect);
     const smoke = { schema: 'ploinky.umami-image-smoke/v1', passed: true, uid: 1000, capabilityEffective: '0', noNewPrivileges: true,
         listener: '127.0.0.1:3001', databaseMigration: true, postgresVersion: sources.bases.postgres.postgresVersion,
@@ -429,6 +436,13 @@ test('native proof admission rejects stale run, source, failed HTTP, and image c
     smoke.metadataAssets = Object.entries(METADATA_ASSETS).map(([name, definition]) => ({ ...definition, path: BASE_PATH + '/' + name,
         status: 200, unprefixedHttp: 404, bytes: 100, sha256: metadataAssetHash(sources, name), contentType: metadataTypes[definition.kind] }));
     write(directory, 'runtime-smoke.json', smoke);
+    return { source, labels, inspect, smoke, sizes, continuity };
+}
+
+test('native proof admission rejects stale run, source, failed HTTP, and image config substitution', t => {
+    const directory = temp(t);
+    const identity = { sha: '1'.repeat(40), runId: '12', attempt: '1' };
+    const { source, labels, inspect, smoke, sizes, continuity } = nativeProofFixture(directory, 'amd64', identity);
     verifyNativeProof(directory, 'amd64', identity);
     for (const change of [{ workflowRunId: '11' }, { workflowSha: '2'.repeat(40) }, { sourceLockSha256: 'f'.repeat(64) }]) {
         write(directory, 'source-evidence.json', { ...source, ...change });
@@ -494,7 +508,7 @@ function registry(t) {
         const match = /^\/v2\/(.+)\/(manifests|blobs)\/(.+)$/.exec(pathname);
         if (!match) return new Response('{"token":"anonymous"}', { status: 200 });
         if (!/^Bearer anonymous$/.test(new Headers(init.headers).get('authorization') || '')) {
-            return new Response('', { status: 401, headers: { 'www-authenticate': 'Bearer realm="https://auth.example/token",service="registry.example"' } });
+            return new Response('', { status: 401, headers: { 'www-authenticate': `Bearer realm="https://${new URL(url).hostname === 'registry-1.docker.io' ? 'auth.docker.io' : 'auth.example'}/token",service="registry.example"` } });
         }
         const body = match[3].startsWith('sha256:') ? objects.get(`${match[2]}/${match[3]}`) : tags.get(match[3]);
         return body ? new Response(body, { status: 200, headers: { 'content-type': 'application/vnd.oci.image.index.v1+json' } }) : new Response('', { status: 404 });
@@ -678,24 +692,85 @@ test('native metadata probe fetches real head, manifest icons and XML tile bytes
     }
 });
 
-test('registry credentials reach only Docker Hub\'s own token service', async () => {
+test('registry credentials reach only Docker Hub, and a challenge cannot widen the scope or borrow Docker Hub\'s token service', async () => {
     const seen = [];
-    const fetchImpl = async (url, init = {}) => {
+    const challenge = (realm, scope = '') => new Response('', { status: 401, headers: { 'www-authenticate': `Bearer realm="${realm}",service="s"${scope ? `,scope="${scope}"` : ''}` } });
+    const fetchImpl = realm => async (url, init = {}) => {
         const target = new URL(url);
-        seen.push([target.hostname, new Headers(init.headers).get('authorization')]);
+        const authorization = new Headers(init.headers).get('authorization');
+        seen.push({ host: target.hostname, authorization, scope: target.searchParams.get('scope') });
         if (target.pathname.startsWith('/token')) return new Response('{"token":"t"}');
-        if (!new Headers(init.headers).get('authorization')?.startsWith('Bearer ')) {
-            const realm = target.hostname === 'registry-1.docker.io' ? 'https://auth.docker.io/token' : 'https://ghcr.example/token';
-            return new Response('', { status: 401, headers: { 'www-authenticate': `Bearer realm="${realm}",service="s"` } });
-        }
-        return new Response('{}');
+        return authorization?.startsWith('Bearer ') ? new Response('{}') : challenge(realm(target.hostname), 'repository:assistos/umami-agent:pull,push');
     };
     const credentials = { username: 'assistos', password: 'not-a-real-token' };
-    await registryGet('docker.io/assistos/umami-agent@' + digest('a'), 'manifests', digest('a'), { fetchImpl, credentials });
-    await registryGet('docker.umami.is/umami-software/umami:3.4.1', 'manifests', '3.4.1', { fetchImpl, credentials });
-    const docker = seen.find(([host, header]) => host === 'auth.docker.io');
-    assert.equal(docker[1], 'Basic ' + Buffer.from('assistos:not-a-real-token').toString('base64'));
-    assert.equal(seen.find(([host]) => host === 'ghcr.example')[1], null, 'no credential for another realm');
+    await registryGet('docker.io/assistos/umami-agent@' + digest('a'), 'manifests', digest('a'), { fetchImpl: fetchImpl(() => 'https://auth.docker.io/token'), credentials });
+    const docker = seen.find(entry => entry.host === 'auth.docker.io');
+    assert.equal(docker.authorization, 'Basic ' + Buffer.from('assistos:not-a-real-token').toString('base64'));
+    assert.equal(docker.scope, 'repository:assistos/umami-agent:pull', 'the challenger-supplied push scope is ignored');
+    seen.length = 0;
+    await registryGet('docker.umami.is/umami-software/umami:3.4.1', 'manifests', '3.4.1', { fetchImpl: fetchImpl(() => 'https://ghcr.example/token'), credentials });
+    assert.equal(seen.find(entry => entry.host === 'ghcr.example').authorization, null, 'no credential for another realm');
+    assert.equal(seen.find(entry => entry.host === 'ghcr.example').scope, 'repository:umami-software/umami:pull');
+    // A foreign registry that names Docker Hub's token service gets neither credentials nor a Docker Hub token: nothing is requested from it.
+    seen.length = 0;
+    await assert.rejects(registryGet('docker.umami.is/umami-software/umami:3.4.1', 'manifests', '3.4.1', { fetchImpl: fetchImpl(() => 'https://auth.docker.io/token'), credentials }), /may not use the token service auth\.docker\.io/);
+    assert.ok(!seen.some(entry => entry.host === 'auth.docker.io'), 'no request reached Docker Hub\'s token service');
+    assert.ok(!seen.some(entry => entry.authorization), 'no authorization header was sent anywhere');
+    // Docker Hub itself may not redirect token requests to another host (the credentials would not be sent there either).
+    await assert.rejects(registryGet('docker.io/assistos/umami-agent@' + digest('a'), 'manifests', digest('a'), { fetchImpl: fetchImpl(() => 'https://elsewhere.example/token'), credentials }), /may not use the token service/);
+    await assert.rejects(registryGet('docker.umami.is/umami-software/umami:3.4.1', 'manifests', '3.4.1', { fetchImpl: fetchImpl(() => 'http://ghcr.example/token') }), /https/);
+});
+
+const candidateRun = (overrides = {}) => ({ id: 1234, run_attempt: 2, repository: { full_name: 'AssistOS-AI/container-image-builds' }, head_repository: { full_name: 'AssistOS-AI/container-image-builds' },
+    path: '.github/workflows/publish-umami-agent-image.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_sha: 'a'.repeat(40), ...overrides });
+const candidateInputs = { runId: '1234', runAttempt: '2' };
+
+test('promotion pins a successful dispatched candidate run and exactly one live artifact built at its commit', () => {
+    const repository = 'AssistOS-AI/container-image-builds';
+    const run = pinCandidateRun(candidateRun(), candidateInputs, repository);
+    for (const change of [{ id: 9 }, { run_attempt: 1 }, { conclusion: 'failure' }, { status: 'in_progress' }, { event: 'push' }, { path: '.github/workflows/other.yml' },
+        { repository: { full_name: 'someone/else' } }, { head_repository: { full_name: 'someone/else' } }, { head_sha: 'short' }]) {
+        assert.throws(() => pinCandidateRun(candidateRun(change), candidateInputs, repository), JSON.stringify(change));
+    }
+    assert.throws(() => pinCandidateRun(candidateRun(), { runId: '12x4', runAttempt: '2' }, repository));
+    const artifact = (change = {}) => ({ name: 'umami-candidate-1234-2', expired: false, workflow_run: { id: 1234, head_sha: run.head_sha }, ...change });
+    assert.equal(checkCandidateArtifact([artifact()], candidateInputs, run).name, 'umami-candidate-1234-2');
+    for (const listing of [[], [artifact(), artifact()], [artifact({ expired: true })], [artifact({ name: 'umami-candidate-1234-1' })],
+        [artifact({ workflow_run: { id: 5, head_sha: run.head_sha } })], [artifact({ workflow_run: { id: 1234, head_sha: 'b'.repeat(40) } })]]) {
+        assert.throws(() => checkCandidateArtifact(listing, candidateInputs, run));
+    }
+});
+
+test('promotion evidence must name the promoted digest and carry passing native proofs for the candidate commit', t => {
+    const directory = temp(t);
+    const identity = { sha: '1'.repeat(40), runId: '12', attempt: '1' };
+    const manifests = [];
+    for (const arch of ['amd64', 'arm64']) {
+        const proof = path.join(directory, 'native-proofs', 'umami-proof-' + arch);
+        nativeProofFixture(proof, arch, identity);
+        manifests.push(...json(proof, 'source-index.json').manifests);
+    }
+    const candidate = JSON.stringify({ schemaVersion: 2, manifests });
+    write(directory, 'candidate-index.json', candidate);
+    write(directory, 'immutable-index.json', candidate);
+    const promoted = 'sha256:' + hash(candidate);
+    write(directory, 'digest.txt', promoted + '\n');
+    assert.deepEqual(verifyPromotionEvidence(directory, promoted, identity, sources), ['amd64', 'arm64']);
+    const arm64 = path.join(directory, 'native-proofs/umami-proof-arm64');
+    const attempts = {
+        'another promoted digest': [() => {}, digest('d'), identity, /names another digest/],
+        'another workflow run': [() => {}, promoted, { ...identity, runId: '13' }, /./],
+        'another commit': [() => {}, promoted, { ...identity, sha: '2'.repeat(40) }, /./],
+        'a candidate index that does not hash to the digest': [() => write(directory, 'candidate-index.json', candidate + '\n'), promoted, identity, /does not hash/],
+        'an immutable index that differs': [() => { write(directory, 'candidate-index.json', candidate); write(directory, 'immutable-index.json', candidate + '\n'); }, promoted, identity, /immutable index differs/],
+        'a failed smoke in one proof': [() => { write(directory, 'immutable-index.json', candidate); write(arm64, 'runtime-smoke.json', { ...json(arm64, 'runtime-smoke.json'), passed: false }); }, promoted, identity, /./],
+    };
+    for (const [name, [mutate, digestArgument, who, message]] of Object.entries(attempts)) {
+        mutate();
+        assert.throws(() => verifyPromotionEvidence(directory, digestArgument, who, sources), message, name);
+    }
+    fs.rmSync(arm64, { recursive: true });
+    assert.throws(() => verifyPromotionEvidence(directory, promoted, identity, sources), /./, 'a missing proof set');
 });
 
 for (const mode of ['stateless-initialize', 'direct-only', 'event-stream']) test(`MCP probe completes the tool inventory over ${mode}`, async t => {
