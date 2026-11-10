@@ -10,8 +10,8 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const edits = [
     ["import { useRouter } from 'next/navigation';", "import { useQueryClient } from '@tanstack/react-query';\nimport { useRouter } from 'next/navigation';"],
     ['  const router = useRouter();', '  const router = useRouter();\n  const queryClient = useQueryClient();'],
-    ['        setClientAuthToken(token);\n        setUser(user);',
-        "        setClientAuthToken(token);\n        await queryClient.cancelQueries({ queryKey: ['login'], exact: true });\n        queryClient.setQueryData(['login'], user);\n        setUser(user);"],
+    ['        setClientAuthToken(response.token);\n        setUser(response.user);',
+        "        setClientAuthToken(response.token);\n        await queryClient.cancelQueries({ queryKey: ['login'], exact: true });\n        queryClient.setQueryData(['login'], response.user);\n        setUser(response.user);"],
 ];
 
 export function rewriteLoginForm(source, reverse = false) {

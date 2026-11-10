@@ -1,47 +1,87 @@
 {
-  "schemaVersion": 2,
-  "runtimeBase": {
-    "image": "docker.io/assistos/umami-agent@sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6",
-    "indexDigest": "sha256:5ca78a8263f000bfa6f5039e225452f8a4ec6526c52157955dc83454128c8bf6",
-    "nodeVersion": "22.23.1",
-    "platformConfigs": {
-      "linux/amd64": "sha256:b891c0d8a334aec8e67a256d0dc13ea795d59d766304b5c040d533334bc8354a",
-      "linux/arm64": "sha256:1f5369c779d8d0fbc01ee08919ac91dce62e835a0517af96e1c70b73cff4f1a2"
-    },
-    "platformManifests": {
-      "linux/amd64": "sha256:e918b5e2f5012f718d8ba1dc8fd0641babad6f3d1a2d8f0f5d3e2bc66358b51b",
-      "linux/arm64": "sha256:dd9b737c01c9c4079f5e3ad5bdfc110c16bb90f188f185365fe3dafb61a7cea4"
-    },
-    "upstreamUmamiImage": {
-      "version": "3.2.0",
-      "image": "docker.umami.is/umami-software/umami:3.2.0@sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec",
-      "indexDigest": "sha256:8edfe4beaef13f9d1300619fa264ef250a3688df9cc54d24ca830ca31cb475ec",
+  "schemaVersion": 3,
+  "bases": {
+    "node": {
+      "image": "docker.io/library/node:22.23.4-alpine3.24@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202",
+      "indexDigest": "sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202",
+      "nodeVersion": "22.23.4",
+      "alpineRelease": "3.24.4",
       "platformManifests": {
-        "linux/amd64": "sha256:afbd42695964762c2accf8ed0d863211d764c3937dbba0bf808ba5e33afae763",
-        "linux/arm64": "sha256:41c5df65ee777b762411c105f9b040e33708ef8640a19a2d2b9abf3284ee3f37"
+        "linux/amd64": "sha256:947e5454e08bfe0b8ddda604915ad76275276c774f47da90d0137252c793a778",
+        "linux/arm64": "sha256:7c8f7d55c4fec6f20d97508cc80982f1301c42e0f7bc9618bf59a8850233c2ec"
+      },
+      "platformConfigs": {
+        "linux/amd64": "sha256:66bc7408b58869d57a4d97f1e814dddf8ba49e3d8c2339c93b3bfadeaddb4e40",
+        "linux/arm64": "sha256:2485efa4a85b92080ead19284cbdc342de5c3d6c5c031aaa1731f70eb1e9204b"
+      }
+    },
+    "postgres": {
+      "image": "docker.io/library/postgres:18.6-alpine3.24@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395",
+      "indexDigest": "sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395",
+      "postgresVersion": "18.6",
+      "postgresMajor": 18,
+      "alpineRelease": "3.24.4",
+      "platformManifests": {
+        "linux/amd64": "sha256:300ebd02c6d4de9ee27ad7f6855d5d21b4d3a4a5117767c1197d284c635d9736",
+        "linux/arm64": "sha256:c935aff069a7bbe5c286411a08e9678850d79be7848b190a0e4637b266478626"
+      },
+      "platformConfigs": {
+        "linux/amd64": "sha256:38b9ffe2d4c13d7c445b66306be6763dfa6f503689ea0c5b9f84544ccf3ca8e4",
+        "linux/arm64": "sha256:bc06ed2188a33388c6952bc58b9ce06dac389bbded2d70101c7c138218900f2f"
+      }
+    },
+    "upstreamUmami": {
+      "image": "docker.umami.is/umami-software/umami:3.4.1@sha256:e69d1a7932e9dab0fc523edc7be1f3a53f3c261f57856fc2167ae74a8fc022e8",
+      "indexDigest": "sha256:e69d1a7932e9dab0fc523edc7be1f3a53f3c261f57856fc2167ae74a8fc022e8",
+      "version": "3.4.1",
+      "platformManifests": {
+        "linux/amd64": "sha256:f2c645cc5cdff76e7fbfe4c7eeabc7e363840bd34364f4f719b69d11f9ef1c19",
+        "linux/arm64": "sha256:8a9a41c01febe8a47c1f3d90fdc8d2e0bd467ef545171e60d7d30218ced430c8"
+      },
+      "platformConfigs": {
+        "linux/amd64": "sha256:341cf1f89cdf5326193015875c287bdb7a4d8b036156c3349268a86921f0206b",
+        "linux/arm64": "sha256:c852ca297937a5d7bacccb31c65ddc26f1a8ff1f3784a3816bebcf40ddf763d9"
+      }
+    }
+  },
+  "continuity": {
+    "legacyImage": {
+      "image": "docker.io/assistos/umami-agent@sha256:d797b418dd13a6eb786cba4640656b6b1bc6e5da0467b98b5b8d335a250dd5a1",
+      "indexDigest": "sha256:d797b418dd13a6eb786cba4640656b6b1bc6e5da0467b98b5b8d335a250dd5a1",
+      "umamiVersion": "3.2.0",
+      "platformManifests": {
+        "linux/amd64": "sha256:73f71dc1aa4f54e39dd27e01b40ad562d3bc81a3425a96aaedd1dc2c048aa248",
+        "linux/arm64": "sha256:7ebf0f9f32c49cc248e782826c456e01753f821fe65376105a51a5b21af34a4d"
+      },
+      "platformConfigs": {
+        "linux/amd64": "sha256:29b0a216571cd7c5650c14a1eb937623cc141f1e9f3a3dc0011ccff1cc3c4131",
+        "linux/arm64": "sha256:2df73671a05149c65feed6075004a5358317c330f46b826b624855486cfef49d"
       }
     }
   },
   "umami": {
-    "version": "3.2.0",
+    "version": "3.4.1",
     "repository": "https://github.com/umami-software/umami.git",
-    "commit": "2f6e2b5ff256862a081d9e74bed18a42ebf795e3",
+    "commit": "559e3c607c23d2c72d9bd4f6481bda428255323c",
     "sourceArchive": {
-      "url": "https://codeload.github.com/umami-software/umami/tar.gz/2f6e2b5ff256862a081d9e74bed18a42ebf795e3",
-      "sha256": "faf2071ada0aef901f29d314eb1b1b2705698c5489df786d003dfd248bb7a0bd"
+      "url": "https://codeload.github.com/umami-software/umami/tar.gz/559e3c607c23d2c72d9bd4f6481bda428255323c",
+      "sha256": "0f84d93ba311c6e6d2ea87dc6d2a72506798a8cc0ffec39f725bad62eff17630"
     },
     "basePath": "/base-agent-additional-server/umamiAgent/3000",
     "sourceFiles": {
-      "Dockerfile": "ac02b1b1fe808f3890af3dd686208fdbec3478dffa893a6fd0815715002cae04",
-      "docker/proxy.ts": "2a554bad7fe23352a8a620ea8d65f3f998e88b21a07a2138fcdf2eeff2842d93",
-      "next.config.ts": "94bb0a99a3781295bf6359a1644cf5e43db0333fc6abb4a496ad2cc83ede6072",
-      "package.json": "113eb452d9a7e61774bde8984bea74358ba6c628fb5888f95b938a2d8eede237",
-      "pnpm-lock.yaml": "b5ba02abd9e346194926658cbfecd95fe4c0a5c765d653a745cf3deb06ec8171",
-      "pnpm-workspace.yaml": "94c1f0c28b5dc7f96d9262931305c2f5497ffd292473c2bac800bd366cefc3b1",
+      "Dockerfile": "b28f6c9c32f90399f90848fa5c781503034aeed797cf13eee8d81f8622627e87",
+      "docker/proxy.ts": "535204283713a7fd2f61645d833794c1340cb577094d39857a83bebbb7c0540a",
+      "next.config.ts": "193ca9e2798bf275fe88046f0427515a7156090fe3b3cd89f38e2d212c111150",
+      "package.json": "e4b78bd468bad98edb69ba29ce6231df4a1cf2ed687973f6ca65905df46f6db6",
+      "pnpm-lock.yaml": "d1661e1e1ceadd01dd2328e27c5b04d9e30dd168b875a343b4a5f42001ad5028",
+      "pnpm-workspace.yaml": "6069b982e100a242e5dbbc6647b9976ccdbf34c0729a23a7b21cb93a6a7f49fe",
+      "prisma.config.ts": "595300143b355eb3ac53341ce46a41a3aa269370bb01d869fb8a8bd9577e59fe",
       "scripts/build-geo.js": "e766d35223249983d4f247ce33d1f6ed4309145eb49219ae2215747d895f8e67",
       "scripts/build-prisma-client.js": "e1255e9108ab104ef766809ca35f35d9ef0403b175cc7ea97faae9d008e8a6c2",
-      "src/app/login/LoginForm.tsx": "71a0069a1f099365e6ec6e37fc58f81c759d85918742e8eb9635e8fd6a79794d",
-      "src/app/layout.tsx": "208c2e427b69d3ec60d590a98c218d2461ae0f6f8122125fb0a292eb2c11f9ff",
+      "scripts/check-db.js": "2431763dedf17fab9328f8157fdbc449de6c1d85174992bf9102356c8a64df4e",
+      "scripts/update-tracker.js": "a797b7339b03734aa41f483492d4f16c7cc0c8aa099ac2fc2bbf4252f394b76a",
+      "src/app/login/LoginForm.tsx": "69104df992c16ca5331025269e3d617fde361b469142ac8862727f4fc0d738ee",
+      "src/app/layout.tsx": "d9567f52cdd172698456a5ac417292d3d1a1ca5f031d49d06908c0e0662edba0",
       "public/site.webmanifest": "e302b643ac7a6e1f1f8ab02b6c5605654b057af967920b7ff686cea8a144663d",
       "public/browserconfig.xml": "c348b0d6df3d900efef7ae4b4dfc8b62b1737b04d09d4584fef243211c266866",
       "public/favicon.ico": "42db99711f76494af5ea6d9ad0655e3babbd58cfe84eedf9e6e55576a2eda571",
@@ -54,23 +94,59 @@
       "public/mstile-150x150.png": "dcbcd2991f3f6d766a0ef21bfc4981086768de544225a9facfcb637c6adb550d"
     },
     "pnpm": {
-      "integrity": "sha512-NOU4wym1VTAUyo6PRTWZf5YYCh0PYUM5NXRJk1NQ2STiL4YUaCGRJk7DPRRirCFWGv+X9rsYBlNRwWLH6PbeZw==",
-      "sha256": "8c53af02ae3ec1fb0ae75377f8d4d6217c2d7cbe6f03c16350cabf7493de6eff",
-      "url": "https://registry.npmjs.org/pnpm/-/pnpm-10.15.1.tgz",
-      "version": "10.15.1"
+      "version": "12.3.4",
+      "artifacts": {
+        "linux/amd64": {
+          "package": "@pnpm/exe.linux-x64-musl",
+          "url": "https://registry.npmjs.org/@pnpm/exe.linux-x64-musl/-/exe.linux-x64-musl-12.3.4.tgz",
+          "sha256": "4ac4e7fb80b3ba4ffb0e443adab5539de7581d5da0f29501859b30785731aa0e",
+          "integrity": "sha512-RPmk7Jb/aYaFvL2iyDN/AtMY+hUEsue732WmXpcuQ9tBpMnGyA5py7Z3+e+qmQaJ0zY/4ni9jJiyPBQHujmv6w=="
+        },
+        "linux/arm64": {
+          "package": "@pnpm/exe.linux-arm64-musl",
+          "url": "https://registry.npmjs.org/@pnpm/exe.linux-arm64-musl/-/exe.linux-arm64-musl-12.3.4.tgz",
+          "sha256": "085f6389c412105dbe18a4209ac35a2b355e85744cd5b846970bc21faa49a22c",
+          "integrity": "sha512-FBOt0/7ye6O6q4AllVV5QMviB6qE6fqkeczV/+MDWQsmo+QJrlfsh6X7CpH/tClVpBZEyIbjpUoT8bNhCYBxEg=="
+        }
+      }
+    },
+    "prisma": {
+      "version": "7.10.0",
+      "enginesPackage": "@prisma/engines@7.10.0",
+      "enginesVersion": "0edf323efd1d98336f3f0a68684b56f689b900d3",
+      "downloadsDuringBuild": true,
+      "downloadHost": "https://binaries.prisma.sh",
+      "binary": "schema-engine",
+      "platforms": {
+        "linux/amd64": {
+          "target": "linux-musl-openssl-3.0.x",
+          "url": "https://binaries.prisma.sh/all_commits/0edf323efd1d98336f3f0a68684b56f689b900d3/linux-musl-openssl-3.0.x/schema-engine.gz",
+          "gzipSha256": "e42e297d55ec7dd1221b6f42759dfa323b44f480101f7014ef6432fffb758539",
+          "sha256": "9a930656cac0928da66597d1b249e45a2e18cf5a3e20641baaaa4158358644d0"
+        },
+        "linux/arm64": {
+          "target": "linux-musl-arm64-openssl-3.0.x",
+          "url": "https://binaries.prisma.sh/all_commits/0edf323efd1d98336f3f0a68684b56f689b900d3/linux-musl-arm64-openssl-3.0.x/schema-engine.gz",
+          "gzipSha256": "d4175d12fbe3ef55c41195724bfb4043ac094f3a6d76d0d6433e56a0184ed33f",
+          "sha256": "82b96b51b53e642393dc0cc6ecf6dd06324d367505e8f8a4cb28b7c5ca4052ff"
+        }
+      }
     },
     "geo": {
-      "source": "runtimeBase",
-      "path": "/app/geo/GeoLite2-City.mmdb"
+      "source": "upstreamUmami",
+      "path": "/app/geo/GeoLite2-City.mmdb",
+      "bytes": 50634725,
+      "sha256": "3c884a441b2ab41ba01c4f99b1c9551a610de4d2e4b8f66e797c6a844c7d767b",
+      "licence": "MaxMind GeoLite2 data redistributed unchanged from the pinned upstream Umami image; see dependencies.md"
     },
     "sourcePatches": [
       {
         "id": "login-query-cache",
         "file": "patch-login-query-cache.mjs",
-        "sha256": "0eeb9ce76331aeb425a35989c872fbd265a74d43875ba70290323b8c2b274a7b",
+        "sha256": "e3afb00415d17e21863fe1c454cac14c63d0d454b51f1a2dcd98fef37bc6bf7a",
         "target": "src/app/login/LoginForm.tsx",
-        "originalSha256": "71a0069a1f099365e6ec6e37fc58f81c759d85918742e8eb9635e8fd6a79794d",
-        "patchedSha256": "438d1c0ab564a559c56b951b2b4dbd2f34b9b299a3a7f7f2908e0ac3831508bf"
+        "originalSha256": "69104df992c16ca5331025269e3d617fde361b469142ac8862727f4fc0d738ee",
+        "patchedSha256": "937a7a1a04d011c2889d694adbdf60391303cc42ae192f6bf02c509670130de3"
       },
       {
         "id": "metadata-assets",
@@ -79,8 +155,8 @@
         "targets": [
           {
             "target": "src/app/layout.tsx",
-            "originalSha256": "208c2e427b69d3ec60d590a98c218d2461ae0f6f8122125fb0a292eb2c11f9ff",
-            "patchedSha256": "7ecc3cbbae88c54f6bfa0aafd0f76a6f644931c8abb21e9e6da6348581c8554d"
+            "originalSha256": "d9567f52cdd172698456a5ac417292d3d1a1ca5f031d49d06908c0e0662edba0",
+            "patchedSha256": "d41f40824c4c561862f7e4865ad2bb772b58cc46d8cc37aa175ddec70bd2b7b1"
           },
           {
             "target": "public/site.webmanifest",
@@ -95,29 +171,5 @@
         ]
       }
     ]
-  },
-  "bun": {
-    "version": "1.3.14",
-    "release": "https://github.com/oven-sh/bun/releases/tag/bun-v1.3.14",
-    "artifacts": {
-      "linux/amd64": {
-        "name": "bun-linux-x64-musl.zip",
-        "sha256": "14bd9aedeebf1dba67e8def9531c89bc989ecfdf1de42e5bfcaf1b8cd9294719"
-      },
-      "linux/arm64": {
-        "name": "bun-linux-aarch64-musl.zip",
-        "sha256": "b98e0ad3625c5c00d1d5b5ff55605c7adddbfae151861e68ade57b2d3b8703bb"
-      }
-    }
-  },
-  "umamiMcp": {
-    "repository": "https://github.com/MadsNyl/umami-mcp.git",
-    "commit": "3ab73beda2db0ebffb0b07439b218ef562107520",
-    "committedAt": "2026-06-01T23:59:25+02:00",
-    "bunLockSha256": "92e41e798c3593657116f461377d92e8b74dbcf605f279e6e1832dbcfd0aa46f"
-  },
-  "postgresql": {
-    "version": "18.4",
-    "source": "runtimeBase"
   }
 }
