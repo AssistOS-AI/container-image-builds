@@ -420,10 +420,10 @@ async function verifyRuntime() {
         assert.equal(created.json().id, websiteId);
         const listed = await http(origin, BASE_PATH + '/api/websites', { headers: key });
         assert.ok(listed.json().data.some(website => website.id === websiteId), 'created website must be listed for the key');
-        const usersControl = await http(origin, BASE_PATH + '/api/users', { headers: session });
-        assert.equal(usersControl.status, 200, 'a login session must reach /api/users');
-        const keyUsers = await http(origin, BASE_PATH + '/api/users', { headers: key });
-        assert.ok([401, 403].includes(keyUsers.status), `an API key must be refused on /api/users under the base path, got ${keyUsers.status}`);
+        const usersControl = await http(origin, BASE_PATH + '/api/admin/users', { headers: session });
+        assert.equal(usersControl.status, 200, 'a login session must reach /api/admin/users');
+        const keyUsers = await http(origin, BASE_PATH + '/api/admin/users', { headers: key });
+        assert.ok([401, 403].includes(keyUsers.status), `an API key must be refused on /api/admin/users under the base path, got ${keyUsers.status}`);
         const keyOwnKeys = await http(origin, BASE_PATH + '/api/me/api-keys', { headers: key });
         assert.ok([401, 403].includes(keyOwnKeys.status), `an API key must be refused on /api/me/api-keys, got ${keyOwnKeys.status}`);
 

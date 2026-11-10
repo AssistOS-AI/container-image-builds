@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -80,7 +81,12 @@ export function parseReference(reference) {
     return { host, repository, tag: match.groups.tag, digest: match.groups.digest };
 }
 
-// Anonymous, read-only registry access: follow the registry's own Bearer challenge for a pull token.
+const DOCKER_HUB_REGISTRY = 'registry-1.docker.io';
+const DOCKER_HUB_TOKEN_HOST = 'auth.docker.io';
+
+// Read-only registry access: follow the registry's own Bearer challenge for a pull token. The challenge is untrusted input:
+// its scope is ignored (always pull on the queried repository), Docker Hub credentials are sent only to Docker Hub's token
+// service for a Docker Hub registry, and no other registry may name that token service at all.
 export async function registryGet(reference, kind, id, { fetchImpl = fetch, accept, credentials } = {}) {
     const { host, repository } = parseReference(reference);
     const url = `https://${host}/v2/${repository}/${kind}/${id}`;
@@ -91,10 +97,13 @@ export async function registryGet(reference, kind, id, { fetchImpl = fetch, acce
         assert.ok(challenge, `${url} requires credentials that this read-only check does not use`);
         const fields = Object.fromEntries([...challenge.matchAll(/(\w+)="([^"]*)"/g)].map(match => [match[1], match[2]]));
         const tokenUrl = new URL(fields.realm);
+        assert.equal(tokenUrl.protocol, 'https:', 'the token service must use https');
+        const dockerHub = host === DOCKER_HUB_REGISTRY;
+        assert.equal(tokenUrl.hostname === DOCKER_HUB_TOKEN_HOST, dockerHub, `${host} may not use the token service ${tokenUrl.hostname}`);
+        tokenUrl.search = '';
         if (fields.service) tokenUrl.searchParams.set('service', fields.service);
-        tokenUrl.searchParams.set('scope', fields.scope || `repository:${repository}:pull`);
-        // Credentials, when supplied, go only to Docker Hub's own token service and never to another realm.
-        const authorization = credentials && tokenUrl.hostname === 'auth.docker.io'
+        tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
+        const authorization = dockerHub && credentials
             ? { authorization: 'Basic ' + Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64') } : {};
         const token = await (await fetchImpl(tokenUrl, { headers: authorization, signal: AbortSignal.timeout(30000) })).json();
         response = await fetchImpl(url, { headers: { ...headers, authorization: `Bearer ${token.token || token.access_token}` }, signal: AbortSignal.timeout(30000) });
@@ -134,6 +143,56 @@ export async function verifyPinnedBase(name, base, options) {
 export async function verifyPinnedBases(sources = lock, options) {
     const bases = [...Object.entries(sources.bases), ['legacyImage', sources.continuity.legacyImage]];
     return Promise.all(bases.map(([name, base]) => verifyPinnedBase(name, base, options)));
+}
+
+const CANDIDATE_WORKFLOW = /^\.github\/workflows\/publish-umami-agent-image\.yml(@refs\/(heads|tags)\/[A-Za-z0-9._\/-]+)?$/;
+
+/** Pin the candidate run by exact attempt (`/runs/<id>` always describes the latest attempt). */
+export function pinCandidateRun(run, inputs, repository) {
+    assert.ok(run && typeof run === 'object' && !Array.isArray(run), 'the candidate run record is malformed');
+    assert.match(inputs.runId, /^\d+$/);
+    assert.match(inputs.runAttempt, /^\d+$/);
+    assert.equal(String(run.id), inputs.runId, 'the record is another run');
+    assert.equal(run.repository?.full_name, repository, 'the candidate run belongs to another repository');
+    assert.equal(run.head_repository?.full_name, repository, 'the candidate run was built from another repository');
+    assert.match(String(run.path), CANDIDATE_WORKFLOW, 'the candidate run is not publish-umami-agent-image.yml');
+    assert.equal(run.event, 'workflow_dispatch', 'the candidate run was not dispatched');
+    assert.equal(run.status, 'completed', 'the candidate run did not complete');
+    assert.equal(run.conclusion, 'success', 'the candidate run did not succeed');
+    assert.equal(String(run.run_attempt), inputs.runAttempt, 'the record is another run attempt');
+    assert.match(String(run.head_sha), /^[a-f0-9]{40}$/);
+    return run;
+}
+
+export const candidateArtifactName = ({ runId, runAttempt }) => `umami-candidate-${runId}-${runAttempt}`;
+
+/** Exactly one live candidate artifact, produced by the pinned run at its head commit. */
+export function checkCandidateArtifact(listing, inputs, run) {
+    assert.ok(Array.isArray(listing), 'artifact listing is malformed');
+    const name = candidateArtifactName(inputs);
+    const matches = listing.filter(artifact => artifact?.name === name);
+    assert.equal(matches.length, 1, `the candidate run must have exactly one artifact ${name}`);
+    assert.equal(matches[0].expired, false, `artifact ${name} is expired`);
+    assert.equal(String(matches[0].workflow_run?.id), inputs.runId, `artifact ${name} belongs to another run`);
+    assert.equal(matches[0].workflow_run?.head_sha, run.head_sha, `artifact ${name} was built from another commit`);
+    return matches[0];
+}
+
+/**
+ * The downloaded candidate artifact must name the promoted digest, hash to it, and carry two native proofs that pass the same
+ * verifier the candidate run used, against the lock and workflow identity of the candidate's own commit.
+ */
+export function verifyPromotionEvidence(directory, promoteDigest, identity, candidateLock) {
+    assert.match(promoteDigest, digestPattern);
+    assert.equal(fs.readFileSync(path.join(directory, 'digest.txt'), 'utf8').trim(), promoteDigest, 'the candidate artifact names another digest');
+    const candidateFile = path.join(directory, 'candidate-index.json');
+    assert.equal('sha256:' + sha(candidateFile), promoteDigest, 'the candidate index does not hash to the promoted digest');
+    assert.equal(sha(path.join(directory, 'immutable-index.json')), sha(candidateFile), 'the immutable index differs from the candidate index');
+    const proofRoot = path.join(directory, 'native-proofs');
+    assert.deepEqual(fs.readdirSync(proofRoot).sort(), ['umami-proof-amd64', 'umami-proof-arm64']);
+    const proofs = ['amd64', 'arm64'].map(arch => verifyNativeProof(path.join(proofRoot, 'umami-proof-' + arch), arch, identity, candidateLock));
+    verifyCandidate(read(candidateFile), proofs);
+    return proofs.map(proof => proof.architecture);
 }
 
 export const PUBLISHED_IMAGE = 'docker.io/assistos/umami-agent';
@@ -221,7 +280,7 @@ export function verifyNativeProof(directory, architecture, identity, sources = l
     assert.equal(smoke.databaseMigration, true);
     for (const field of ['loginHttp', 'heartbeatHttp', 'authLoginHttp', 'authVerifyHttp', 'trackerHttp', 'apiKeyWebsites', 'apiKeyWebsiteCreate', 'sessionUsers']) assert.equal(smoke[field], 200, field);
     assert.equal(smoke.unprefixedNextHttp, 404);
-    assert.ok([401, 403].includes(smoke.apiKeyUsers), 'an API key must be refused on /api/users');
+    assert.ok([401, 403].includes(smoke.apiKeyUsers), 'an API key must be refused on /api/admin/users');
     assert.ok([401, 403].includes(smoke.apiKeyOwnKeys), 'an API key must be refused on /api/me/api-keys');
     assert.equal(smoke.mcpUnauthenticated, 401);
     assert.equal(smoke.mcpLoginToken, 401);
@@ -289,6 +348,21 @@ async function main() {
         ? { credentials: { username: process.env.DOCKERHUB_USERNAME, password: process.env.DOCKERHUB_TOKEN } } : {};
     if (mode === 'verify-bases') {
         for (const base of await verifyPinnedBases(lock, options)) console.log(`${base.name}=${base.indexDigest}`);
+        return;
+    }
+    if (mode === 'promote-evidence') {
+        const repository = process.env.GITHUB_REPOSITORY;
+        const inputs = { runId: process.env.CANDIDATE_RUN_ID, runAttempt: process.env.CANDIDATE_RUN_ATTEMPT };
+        const promoteDigest = process.env.PROMOTE_DIGEST;
+        const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+        const run = pinCandidateRun(JSON.parse(gh('api', `repos/${repository}/actions/runs/${inputs.runId}/attempts/${inputs.runAttempt}`)), inputs, repository);
+        const listing = gh('api', '--paginate', `repos/${repository}/actions/runs/${inputs.runId}/artifacts`, '--jq', '.artifacts[]').split('\n').filter(Boolean).map(line => JSON.parse(line));
+        checkCandidateArtifact(listing, inputs, run);
+        assert.equal(fs.readdirSync(directory).length, 0, 'the download directory must start empty');
+        gh('run', 'download', inputs.runId, '--repo', repository, '--name', candidateArtifactName(inputs), '--dir', directory);
+        const candidateLock = JSON.parse(gh('api', '-H', 'Accept: application/vnd.github.raw', `repos/${repository}/contents/images/umami-agent/sources.lock.json?ref=${run.head_sha}`));
+        const architectures = verifyPromotionEvidence(directory, promoteDigest, { sha: run.head_sha, runId: inputs.runId, attempt: inputs.runAttempt }, candidateLock);
+        console.log(`evidence=${promoteDigest} run=${inputs.runId}/${inputs.runAttempt} sha=${run.head_sha} proofs=${architectures.join(',')}`);
         return;
     }
     if (mode === 'promote-check') {
