@@ -30,8 +30,10 @@ export function verifyBuildMetadata(app, lock) {
     const metadata = readJson(path.join(app, 'ploinky-umami-build.json'));
     const required = path.join(app, '.next/required-server-files.json');
     const config = readJson(required).config;
+    assert.equal(lock.schemaVersion, 3);
     assert.equal(metadata.schema, 'ploinky.umami-build/v1');
-    assert.equal(metadata.version, '3.2.0');
+    assert.equal(metadata.version, '3.4.1');
+    assert.equal(metadata.version, lock.umami.version);
     assert.equal(metadata.sourceCommit, lock.umami.commit);
     assert.equal(metadata.sourceArchiveSha256, lock.umami.sourceArchive.sha256);
     assert.deepEqual(metadata.sourcePatches, lock.umami.sourcePatches);
@@ -43,14 +45,24 @@ export function verifyBuildMetadata(app, lock) {
         sourcePatches: lock.umami.sourcePatches,
     });
     assert.equal(metadata.basePath, BASE_PATH);
-    assert.equal(metadata.runtimeBaseImage, lock.runtimeBase.image);
+    assert.deepEqual(metadata.baseImages, { node: lock.bases.node.image, postgres: lock.bases.postgres.image, geo: lock.bases.upstreamUmami.image });
+    assert.equal(metadata.alpineRelease, lock.bases.node.alpineRelease);
     assert.equal(metadata.pnpmVersion, lock.umami.pnpm.version);
     assert.equal(metadata.pnpmLockSha256, lock.umami.sourceFiles['pnpm-lock.yaml']);
     assert.equal(metadata.pnpmLockSha256, sha(path.join(app, 'pnpm-lock.yaml')));
+    assert.equal(metadata.prisma.version, lock.umami.prisma.version);
+    assert.equal(metadata.prisma.enginesVersion, lock.umami.prisma.enginesVersion);
+    assert.match(metadata.prisma.schemaEngine.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(Object.values(lock.umami.prisma.platforms).some(platform => platform.sha256 === metadata.prisma.schemaEngine.sha256), 'schema engine must be a pinned binary');
+    const engines = path.join(app, 'node_modules/.pnpm', lock.umami.prisma.enginesPackage.replace('/', '+'), 'node_modules', lock.umami.prisma.enginesPackage.replace(/@[^@]+$/, ''));
+    const installedEngines = fs.readdirSync(engines).filter(name => name.startsWith(lock.umami.prisma.binary));
+    assert.equal(installedEngines.length, 1, 'exactly one schema engine is installed');
+    assert.equal(sha(path.join(engines, installedEngines[0])), metadata.prisma.schemaEngine.sha256, 'installed schema engine bytes');
     assert.equal(metadata.requiredServerFilesSha256, sha(required));
     assert.equal(metadata.standaloneServerSha256, sha(path.join(app, 'server.js')));
     assert.equal(metadata.trackerSha256, sha(path.join(app, 'public/script.js')));
     assert.equal(metadata.geoDatabaseSha256, sha(path.join(app, 'geo/GeoLite2-City.mmdb')));
+    assert.equal(metadata.geoDatabaseSha256, lock.umami.geo.sha256);
     assert.equal(config.basePath, BASE_PATH);
     assert.equal(config.assetPrefix, BASE_PATH);
     assert.equal(config.env.basePath, BASE_PATH);
@@ -176,6 +188,52 @@ export function verifyLoopbackListener(procText, port) {
     assert.equal(listeners[0][1], '0100007F:' + hexadecimalPort, 'Next must bind only IPv4 loopback');
 }
 
+export const MCP_TOOLS = ['list_websites', 'get_website_daterange', 'get_website_stats', 'get_website_traffic', 'get_website_metrics', 'get_realtime',
+    'get_events', 'get_event_stats', 'get_event_series', 'get_event_properties', 'get_sessions', 'get_session_stats', 'get_session',
+    'get_annotations', 'list_segments', 'list_funnels', 'run_funnel', 'get_goals', 'run_journey', 'run_retention', 'run_attribution',
+    'get_revenue', 'get_performance'];
+export const ADMIN_USER_ID = '41e2b680-648e-4b09-bcd7-3e2b10c06264';
+const DATABASE_PORT = 54329;
+const NPM_CLI = '/usr/local/lib/node_modules/npm/bin/npm-cli.js';
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+// Umami stores an API key as the unsalted SHA-512 hex digest of the whole key and displays its first 14 characters.
+export function apiKeyRow(key) {
+    assert.match(key, /^umami_[0-9a-f]{32}$/);
+    return { hash: crypto.createHash('sha512').update(key).digest('hex'), prefix: key.slice(0, 14) };
+}
+
+export function parseMcpBody(contentType, text, id) {
+    const messages = [];
+    if (/text\/event-stream/i.test(contentType)) {
+        for (const event of text.split(/\r?\n\r?\n/)) {
+            const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+            if (data) messages.push(JSON.parse(data));
+        }
+    } else if (text.trim()) {
+        const parsed = JSON.parse(text);
+        messages.push(...(Array.isArray(parsed) ? parsed : [parsed]));
+    }
+    return messages.find(message => message.id === id);
+}
+
+export function verifyMcpTools(tools) {
+    const names = tools.map(tool => tool.name);
+    assert.equal(new Set(names).size, names.length, 'duplicate MCP tool');
+    assert.equal(names.length, 23, 'the built-in MCP exposes 23 tools');
+    assert.deepEqual([...names].sort(), [...MCP_TOOLS].sort(), 'the built-in MCP tool names');
+    return names.length;
+}
+
+export function parseControlData(text) {
+    const field = name => {
+        const match = text.match(new RegExp(`^${name}:\\s+(.+)$`, 'm'));
+        assert.ok(match, `pg_controldata did not report "${name}"`);
+        return match[1].trim();
+    };
+    return { controlVersion: field('pg_control version number'), catalogVersion: field('Catalog version number'), state: field('Database cluster state') };
+}
+
 function command(file, args, options = {}) {
     try { return execFileSync(file, args, { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'], ...options }); }
     catch (error) {
@@ -186,26 +244,90 @@ function command(file, args, options = {}) {
     }
 }
 
+const psql = sql => command('psql', ['-h', '127.0.0.1', '-p', String(DATABASE_PORT), '-U', 'smoke', '-d', 'umami', '-v', 'ON_ERROR_STOP=1', '--no-psqlrc', '-At', '-c', sql]).trim();
+const npmRun = (script, cwd, env) => command(process.execPath, [NPM_CLI, 'run', script], { cwd, env });
+const startPostgres = (directory, sockets, log) => command('pg_ctl', ['-D', directory, '-l', log, '-o', `-h 127.0.0.1 -p ${DATABASE_PORT} -k ${sockets}`, '-w', 'start']);
+const stopPostgres = (directory, mode = 'fast') => command('pg_ctl', ['-D', directory, '-m', mode, '-w', 'stop'], { timeout: 30000 });
+
 function startDatabase(home, env) {
     const directory = path.join(home, 'postgres');
-    const stop = () => command('pg_ctl', ['-D', directory, '-m', 'immediate', '-w', 'stop'], { timeout: 15000 });
     let started = false;
     try {
         command('initdb', ['-D', directory, '-U', 'smoke', '--auth=trust', '--no-locale', '--encoding=UTF8']);
-        command('pg_ctl', ['-D', directory, '-l', path.join(home, 'postgres.log'), '-o', `-h 127.0.0.1 -p 54329 -k ${home}`, '-w', 'start']);
+        startPostgres(directory, home, path.join(home, 'postgres.log'));
         started = true;
-        command('createdb', ['-h', '127.0.0.1', '-p', '54329', '-U', 'smoke', 'umami']);
-        command(process.execPath, ['/usr/local/lib/node_modules/npm/bin/npm-cli.js', 'run', 'check-db'], { cwd: '/app', env });
+        command('createdb', ['-h', '127.0.0.1', '-p', String(DATABASE_PORT), '-U', 'smoke', 'umami']);
+        npmRun('check:db', '/app', env);
         command(process.execPath, ['scripts/update-tracker.js'], { cwd: '/app', env });
-        return stop;
+        return () => stopPostgres(directory, 'immediate');
     } catch (error) {
-        if (started) stop();
+        if (started) stopPostgres(directory, 'immediate');
         fs.rmSync(home, { recursive: true, force: true });
         throw error;
     }
 }
 
-async function main() {
+function verifyRuntimeStack(lock) {
+    assert.equal(process.versions.node, lock.bases.node.nodeVersion);
+    assert.equal(fs.readFileSync('/etc/alpine-release', 'utf8').trim(), lock.bases.node.alpineRelease);
+    assert.equal(lock.bases.node.alpineRelease, lock.bases.postgres.alpineRelease, 'both bases come from one Alpine release');
+    const version = command('postgres', ['--version']).match(/\(PostgreSQL\) (\d+\.\d+)/)?.[1];
+    assert.equal(version, lock.bases.postgres.postgresVersion);
+    assert.equal(Number(version.split('.')[0]), lock.bases.postgres.postgresMajor);
+    for (const missing of ['/opt/bun', '/opt/umami-mcp']) assert.ok(!fs.existsSync(missing), `${missing} must not exist`);
+    fs.accessSync('/usr/local/bin/su-exec', fs.constants.X_OK);
+    return version;
+}
+
+async function http(origin, pathname, { method = 'GET', headers = {}, body } = {}) {
+    const response = await fetch(origin + pathname, { method, redirect: 'manual', signal: AbortSignal.timeout(20000),
+        headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+        body: body === undefined ? undefined : JSON.stringify(body) });
+    const text = await response.text();
+    return { status: response.status, headers: response.headers, text, json: () => JSON.parse(text) };
+}
+
+export async function mcpCall(origin, key, body, headers = {}) {
+    const response = await http(origin, BASE_PATH + '/mcp', { method: 'POST', body,
+        headers: { authorization: `Bearer ${key}`, accept: 'application/json, text/event-stream', ...headers } });
+    return { ...response, message: response.status === 200 && 'id' in body ? parseMcpBody(response.headers.get('content-type') || '', response.text, body.id) : undefined };
+}
+
+async function mcpListTools(origin, key, headers) {
+    const tools = [];
+    let cursor;
+    for (let page = 0; page < 5; page++) {
+        const response = await mcpCall(origin, key, { jsonrpc: '2.0', id: 10 + page, method: 'tools/list', params: cursor ? { cursor } : {} }, headers);
+        assert.equal(response.status, 200, `MCP tools/list returned ${response.status}: ${safeDiagnostic(response.text).slice(0, 300)}`);
+        assert.ok(response.message?.result, `MCP tools/list returned no result: ${safeDiagnostic(response.text).slice(0, 300)}`);
+        tools.push(...response.message.result.tools);
+        cursor = response.message.result.nextCursor;
+        if (!cursor) return tools;
+    }
+    assert.fail('MCP tools/list did not finish within five pages');
+}
+
+// The built-in MCP is a stateless Streamable HTTP endpoint. Try the initialize handshake first, then a direct request.
+export async function mcpSession(origin, key) {
+    const initialized = await mcpCall(origin, key, { jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'ploinky-image-smoke', version: '1' } } });
+    const attempts = [];
+    if (initialized.message?.result?.protocolVersion) {
+        const headers = { 'mcp-protocol-version': initialized.message.result.protocolVersion };
+        const sessionId = initialized.headers.get('mcp-session-id');
+        if (sessionId) headers['mcp-session-id'] = sessionId;
+        await mcpCall(origin, key, { jsonrpc: '2.0', method: 'notifications/initialized' }, headers);
+        attempts.push(['initialize', headers]);
+    }
+    attempts.push(['direct', {}]);
+    let failure;
+    for (const [handshake, headers] of attempts) {
+        try { return { handshake, headers, tools: await mcpListTools(origin, key, headers) }; } catch (error) { failure ??= error; }
+    }
+    throw failure;
+}
+
+async function verifyRuntime() {
     assert.equal(process.getuid(), 1000, 'image smoke must use the agent UID');
     const procStatus = fs.readFileSync('/proc/self/status', 'utf8');
     assert.match(procStatus, /^CapEff:\s+0+$/m, 'image smoke must have no effective capabilities');
@@ -213,13 +335,13 @@ async function main() {
     const app = '/app';
     const lock = readJson('/usr/local/share/ploinky/umami-agent-sources.json');
     const metadata = verifyBuildMetadata(app, lock);
-    assert.equal(process.versions.node, lock.runtimeBase.nodeVersion);
+    const postgresVersion = verifyRuntimeStack(lock);
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'umami-image-smoke-'));
     const port = 3001;
     const origin = `http://127.0.0.1:${port}`;
     const env = { ...process.env, HOME: home, HOSTNAME: '127.0.0.1', PORT: String(port),
-        NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1', BASE_PATH,
-        DATABASE_URL: 'postgresql://smoke:smoke@127.0.0.1:54329/umami',
+        NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1', BASE_PATH, MCP_ENABLED: '1',
+        DATABASE_URL: `postgresql://smoke:smoke@127.0.0.1:${DATABASE_PORT}/umami`,
         APP_SECRET: 'image-smoke-has-no-external-authority' };
     const stopDatabase = startDatabase(home, env);
     const child = spawn(process.execPath, [path.join(app, 'server.js')], {
@@ -274,20 +396,75 @@ async function main() {
             headers: { authorization: `Bearer ${authentication.token}` }, signal: AbortSignal.timeout(15000) });
         assert.equal(verify.status, 200, 'authenticated API verification');
         assert.equal((await verify.json()).username, 'admin');
-        const tracker = await fetch(origin + BASE_PATH + '/script.js', { redirect: 'manual', signal: AbortSignal.timeout(10000) });
+        const tracker = await http(origin, BASE_PATH + '/script.js');
         assert.equal(tracker.status, 200, 'prefixed tracker script');
-        assert.equal(hash(Buffer.from(await tracker.arrayBuffer())), metadata.trackerSha256);
+        assert.match(tracker.headers.get('content-type') || '', /(?:java|ecma)script/, 'tracker media type');
+        assert.equal(hash(Buffer.from(tracker.text)), metadata.trackerSha256);
         const actualAsset = new URL([...assets.keys()][0]);
         const bare = await fetch(origin + actualAsset.pathname.slice(BASE_PATH.length) + actualAsset.search, { redirect: 'manual', signal: AbortSignal.timeout(10000) });
         assert.equal(bare.status, 404, 'the actual emitted Next asset must be unavailable without the compiled prefix');
         await bare.arrayBuffer();
+
+        // API key: insert a key the way a bootstrap would, then prove what it may and may not reach under the compiled base path.
+        const apiKey = 'umami_' + crypto.randomBytes(16).toString('hex');
+        const row = apiKeyRow(apiKey);
+        psql(`INSERT INTO api_key (api_key_id, user_id, name, key_hash, key_prefix) VALUES ('${crypto.randomUUID()}', '${ADMIN_USER_ID}', 'image smoke', '${row.hash}', '${row.prefix}')`);
+        const key = { authorization: `Bearer ${apiKey}` };
+        const session = { authorization: `Bearer ${authentication.token}` };
+        const websiteId = crypto.randomUUID();
+        const websites = await http(origin, BASE_PATH + '/api/websites', { headers: key });
+        assert.equal(websites.status, 200, 'API key must authenticate /api/websites');
+        const created = await http(origin, BASE_PATH + '/api/websites', { method: 'POST', headers: key,
+            body: { id: websiteId, name: 'Image smoke', domain: 'smoke.example' } });
+        assert.equal(created.status, 200, `API key must create a website with an explicit id: ${safeDiagnostic(created.text).slice(0, 300)}`);
+        assert.equal(created.json().id, websiteId);
+        const listed = await http(origin, BASE_PATH + '/api/websites', { headers: key });
+        assert.ok(listed.json().data.some(website => website.id === websiteId), 'created website must be listed for the key');
+        const usersControl = await http(origin, BASE_PATH + '/api/users', { headers: session });
+        assert.equal(usersControl.status, 200, 'a login session must reach /api/users');
+        const keyUsers = await http(origin, BASE_PATH + '/api/users', { headers: key });
+        assert.ok([401, 403].includes(keyUsers.status), `an API key must be refused on /api/users under the base path, got ${keyUsers.status}`);
+        const keyOwnKeys = await http(origin, BASE_PATH + '/api/me/api-keys', { headers: key });
+        assert.ok([401, 403].includes(keyOwnKeys.status), `an API key must be refused on /api/me/api-keys, got ${keyOwnKeys.status}`);
+
+        // Built-in MCP: stateless Streamable HTTP, API keys only.
+        const unauthenticated = await http(origin, BASE_PATH + '/mcp', { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'tools/list' }, headers: { accept: 'application/json, text/event-stream' } });
+        assert.equal(unauthenticated.status, 401, 'MCP must refuse requests without an API key');
+        const loginTokenMcp = await mcpCall(origin, authentication.token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+        assert.equal(loginTokenMcp.status, 401, 'MCP must refuse login tokens');
+        const mcp = await mcpSession(origin, apiKey);
+        const mcpTools = verifyMcpTools(mcp.tools);
+        const called = await mcpCall(origin, apiKey, { jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'list_websites', arguments: {} } }, mcp.headers);
+        assert.equal(called.status, 200, `MCP tools/call returned ${called.status}`);
+        assert.ok(called.message?.result && !called.message.result.isError, 'MCP list_websites must succeed');
+        assert.ok(JSON.stringify(called.message.result).includes(websiteId), 'MCP list_websites must report the created website');
+
+        // Collection: a browser user agent creates one session, a crawler none.
+        const payload = { type: 'event', payload: { website: websiteId, hostname: 'smoke.example', url: '/smoke', title: 'Smoke', language: 'en-US', screen: '1920x1080' } };
+        const bot = await http(origin, BASE_PATH + '/api/send', { method: 'POST', body: payload, headers: { 'user-agent': 'curl/8.0 Googlebot/2.1' } });
+        assert.equal(bot.status, 200);
+        assert.deepEqual(bot.json(), { beep: 'boop' }, 'crawler user agents must be ignored');
+        const sent = await http(origin, BASE_PATH + '/api/send', { method: 'POST', body: payload,
+            headers: { 'user-agent': BROWSER_USER_AGENT, 'cf-connecting-ip': '8.8.8.8' } });
+        assert.equal(sent.status, 200, `api/send returned ${sent.status}: ${safeDiagnostic(sent.text).slice(0, 300)}`);
+        const sentBody = sent.json();
+        assert.equal(typeof sentBody.cache, 'string');
+        assert.ok(sentBody.cache.length > 20, 'api/send must return a cache token');
+        const sessionRows = Number(psql(`SELECT count(*) FROM session WHERE website_id = '${websiteId}'`));
+        assert.equal(sessionRows, 1, 'api/send must create exactly one session row');
+        assert.equal(Number(psql(`SELECT count(*) FROM website_event WHERE website_id = '${websiteId}'`)), 1);
+        assert.equal(psql(`SELECT country FROM session WHERE website_id = '${websiteId}'`), 'US', 'the pinned GeoIP database must resolve the forwarded client address');
+
         verifyLoopbackListener(fs.readFileSync('/proc/net/tcp', 'utf8'), port);
         assert.ok(!fs.readFileSync('/proc/net/tcp6', 'utf8').split('\n').map(line => line.trim().split(/\s+/)).some(fields => fields[3] === '0A' && fields[1]?.endsWith(':0BB9')),
             'Next must not expose an additional IPv6 listener');
         assert.equal(closed, false, 'Next stopped during asset verification');
         console.log(JSON.stringify({ schema: 'ploinky.umami-image-smoke/v1', passed: true, uid: process.getuid(),
-            capabilityEffective: '0', noNewPrivileges: true, listener: '127.0.0.1:3001',
-            metadata, loginHttp: 200, databaseMigration: true, heartbeatHttp: 200, authLoginHttp: 200, authVerifyHttp: 200, trackerHttp: 200, unprefixedNextHttp: 404, assets: observed, metadataAssets }));
+            capabilityEffective: '0', noNewPrivileges: true, listener: '127.0.0.1:3001', postgresVersion,
+            metadata, loginHttp: 200, databaseMigration: true, heartbeatHttp: 200, authLoginHttp: 200, authVerifyHttp: 200, trackerHttp: 200, unprefixedNextHttp: 404,
+            apiKeyWebsites: websites.status, apiKeyWebsiteCreate: created.status, apiKeyUsers: keyUsers.status, apiKeyOwnKeys: keyOwnKeys.status, sessionUsers: usersControl.status,
+            mcpUnauthenticated: unauthenticated.status, mcpLoginToken: loginTokenMcp.status, mcpHandshake: mcp.handshake, mcpTools, mcpListWebsites: true,
+            sendBotIgnored: true, sendCacheToken: true, sessionRows, sessionCountry: 'US', assets: observed, metadataAssets }));
     } catch (error) {
         error.serverOutput = safeDiagnostic(output);
         throw error;
@@ -300,6 +477,100 @@ async function main() {
         stopDatabase();
         fs.rmSync(home, { recursive: true, force: true });
     }
+}
+
+// Existing-data-directory continuity. The workflow runs `continuity-init` in the pinned legacy image and `continuity-verify`
+// in the candidate, on one data directory. Both phases use only Node built-ins and the image's own PostgreSQL tools.
+function continuityEnvironment(directory) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'umami-continuity-'));
+    return { home, sockets: path.join(home, 'sockets'), data: path.join(directory, 'postgres'), initFile: path.join(directory, 'continuity-init.json'),
+        env: { ...process.env, HOME: home, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1',
+            DATABASE_URL: `postgresql://smoke:smoke@127.0.0.1:${DATABASE_PORT}/umami` } };
+}
+
+function continuityInit(directory) {
+    assert.equal(process.getuid(), 1000, 'continuity smoke must use the agent UID');
+    const { home, sockets, data, initFile, env } = continuityEnvironment(directory);
+    fs.mkdirSync(sockets);
+    assert.ok(!fs.existsSync(data) && !fs.existsSync(initFile), 'continuity initialisation needs an empty data directory');
+    let started = false;
+    try {
+        command('initdb', ['-D', data, '-U', 'smoke', '--auth=trust', '--no-locale', '--encoding=UTF8']);
+        startPostgres(data, sockets, path.join(home, 'postgres.log'));
+        started = true;
+        command('createdb', ['-h', '127.0.0.1', '-p', String(DATABASE_PORT), '-U', 'smoke', 'umami']);
+        npmRun('check-db', '/app', env);
+        const websiteId = crypto.randomUUID();
+        psql(`INSERT INTO website (website_id, name, domain, user_id, created_by) VALUES ('${websiteId}', 'continuity', 'continuity.example', '${ADMIN_USER_ID}', '${ADMIN_USER_ID}')`);
+        psql('CREATE TABLE continuity_marker (id integer PRIMARY KEY, note text NOT NULL)');
+        psql("INSERT INTO continuity_marker VALUES (1, 'written by the legacy image')");
+        const migrations = Number(psql('SELECT count(*) FROM _prisma_migrations'));
+        // The legacy image's server tools are not assumed to include pg_controldata, so its control file is read through SQL.
+        const [controlVersion, catalogVersion] = psql('SELECT pg_control_version, catalog_version_no FROM pg_control_system()').split('|');
+        assert.match(controlVersion, /^\d+$/);
+        assert.match(catalogVersion, /^\d+$/);
+        stopPostgres(data);
+        started = false;
+        const initial = { postgresVersion: command('postgres', ['--version']).trim(), umamiVersion: readJson('/app/package.json').version,
+            majorVersion: fs.readFileSync(path.join(data, 'PG_VERSION'), 'utf8').trim(), postgresUid: Number(command('id', ['-u', 'postgres']).trim()),
+            controlVersion, catalogVersion, migrations, websiteId };
+        fs.writeFileSync(initFile, JSON.stringify(initial, null, 2) + '\n', { flag: 'wx' });
+        console.log(JSON.stringify({ schema: 'ploinky.umami-continuity-init/v1', passed: true, ...initial }));
+    } finally {
+        if (started) stopPostgres(data, 'immediate');
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+}
+
+function continuityVerify(directory) {
+    assert.equal(process.getuid(), 1000, 'continuity smoke must use the agent UID');
+    const lock = readJson('/usr/local/share/ploinky/umami-agent-sources.json');
+    const { home, sockets, data, initFile, env } = continuityEnvironment(directory);
+    fs.mkdirSync(sockets);
+    const initial = readJson(initFile);
+    assert.equal(initial.umamiVersion, lock.continuity.legacyImage.umamiVersion, 'the data directory came from the pinned legacy Umami');
+    const before = parseControlData(command('pg_controldata', [data]));
+    assert.deepEqual(before, { controlVersion: initial.controlVersion, catalogVersion: initial.catalogVersion, state: 'shut down' },
+        'the candidate PostgreSQL must see a cleanly shut down control file with the versions the legacy PostgreSQL wrote');
+    const major = fs.readFileSync(path.join(data, 'PG_VERSION'), 'utf8').trim();
+    assert.equal(major, initial.majorVersion);
+    assert.equal(Number(major), lock.bases.postgres.postgresMajor);
+    assert.equal(Number(command('id', ['-u', 'postgres']).trim()), initial.postgresUid, 'the postgres user keeps its numeric id');
+    let started = false;
+    try {
+        startPostgres(data, sockets, path.join(home, 'postgres.log'));
+        started = true;
+        assert.equal(psql("SELECT note FROM continuity_marker WHERE id = 1"), 'written by the legacy image');
+        assert.equal(psql(`SELECT count(*) FROM website WHERE website_id = '${initial.websiteId}'`), '1');
+        npmRun('check:db', '/app', env);
+        const migrations = Number(psql('SELECT count(*) FROM _prisma_migrations'));
+        assert.ok(migrations > initial.migrations, 'the candidate must apply its newer migrations to the existing data');
+        assert.equal(psql('SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL'), '0');
+        assert.equal(psql("SELECT to_regclass('api_key') IS NOT NULL"), 't', 'the API key table must exist after migration');
+        assert.equal(psql(`SELECT count(*) FROM website WHERE website_id = '${initial.websiteId}'`), '1');
+        assert.equal(psql("SELECT note FROM continuity_marker WHERE id = 1"), 'written by the legacy image');
+        stopPostgres(data);
+        started = false;
+        const after = parseControlData(command('pg_controldata', [data]));
+        assert.equal(after.state, 'shut down');
+        assert.equal(after.catalogVersion, before.catalogVersion);
+        console.log(JSON.stringify({ schema: 'ploinky.umami-continuity-smoke/v1', passed: true, existingDataDir: 'ok',
+            legacy: { umamiVersion: initial.umamiVersion, postgresVersion: initial.postgresVersion, migrations: initial.migrations },
+            candidate: { postgresVersion: command('postgres', ['--version']).trim(), migrations, umamiVersion: readJson('/app/package.json').version },
+            majorVersion: Number(major), catalogVersion: after.catalogVersion, controlVersion: after.controlVersion, postgresUid: initial.postgresUid }));
+    } finally {
+        if (started) stopPostgres(data, 'immediate');
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+}
+
+async function main() {
+    const [mode = 'runtime', directory] = process.argv.slice(2);
+    if (mode === 'runtime') return verifyRuntime();
+    assert.ok(directory && path.isAbsolute(directory), 'continuity phases need an absolute data directory');
+    if (mode === 'continuity-init') return continuityInit(directory);
+    assert.equal(mode, 'continuity-verify');
+    return continuityVerify(directory);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

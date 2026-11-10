@@ -861,7 +861,7 @@ test('local-llm image carries the pinned LM Studio SDK closure, fetched by sha51
     assert.match(workflow, /createRequire\(\\"\/opt\/local-llm\/lmstudio-sdk\/\\"\)/);
 });
 
-test('umami-agent workflow source-builds a pinned prefix over the retained stack', () => {
+test('umami-agent image is self-contained: public digest-pinned bases only, source-built at the Router prefix', () => {
     const workflow = read('.github/workflows/publish-umami-agent-image.yml');
     const dockerfile = read('images/umami-agent/Dockerfile');
     const sources = JSON.parse(read('images/umami-agent/sources.lock.json'));
@@ -869,23 +869,39 @@ test('umami-agent workflow source-builds a pinned prefix over the retained stack
     assert.match(workflow, /images\/umami-agent/);
     assert.match(workflow, /IMAGE_NAME:\s*assistos\/umami-agent/);
     assert.match(workflow, /IMAGE_TAG:\s*umami-stack/);
+    assert.match(workflow, /LATEST_TAG:\s*latest/);
     assert.match(workflow, /platforms:\s*\$\{\{ matrix\.platform \}\}/);
     assert.match(workflow, /runner: ubuntu-24\.04-arm/);
+    assert.match(workflow, /verify-publication\.mjs verify-bases/);
     assert.match(workflow, /postgres --version/);
-    assert.match(workflow, /bun --version/);
-    assert.match(workflow, /\/opt\/umami-mcp\/dist\/index\.js/);
-    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_stable == true \}\}/);
+    assert.match(workflow, /command -v bun/);
+    assert.match(workflow, /test ! -e \/opt\/umami-mcp/);
+    assert.match(workflow, /promote_digest:/);
+    assert.match(workflow, /if:\s*\$\{\{ inputs\.promote_digest != '' \}\}/);
+    assert.doesNotMatch(workflow, /promote_stable|runtimeBase/);
     assert.doesNotMatch(workflow, /^  push:/m);
-    assert.deepEqual(dockerfile.match(/^FROM .+$/gm), [
-        `FROM ${sources.runtimeBase.image} AS umami-build`, `FROM ${sources.runtimeBase.image}`,
+
+    const froms = dockerfile.match(/^FROM .+$/gm);
+    assert.deepEqual(froms, [
+        `FROM ${sources.bases.node.image} AS node-base`,
+        `FROM ${sources.bases.upstreamUmami.image} AS umami-geo`,
+        `FROM ${sources.bases.postgres.image} AS postgres-base`,
+        'FROM node-base AS umami-build',
+        'FROM scratch',
     ]);
+    // No stage may build on, or copy from, an image this repository publishes.
+    for (const from of froms) assert.doesNotMatch(from, /assistos\//, `a FROM names an assistos image: ${from}`);
+    assert.doesNotMatch(dockerfile, /assistos\//);
+    assert.ok(!('runtimeBase' in sources) && !('bun' in sources) && !('umamiMcp' in sources));
     assert.match(dockerfile, /BASE_PATH=\/base-agent-additional-server\/umamiAgent\/3000/);
-    assert.match(dockerfile, /install --frozen-lockfile --prod=false/);
-    assert.match(dockerfile, /npm run build-docker/);
-    assert.match(dockerfile, /RUN rm -rf \/app && mkdir \/app/);
+    assert.match(dockerfile, /pnpm install --frozen-lockfile/);
+    assert.match(dockerfile, /pnpm build:docker/);
+    assert.doesNotMatch(dockerfile, /rm -rf \/app/);
     assert.doesNotMatch(dockerfile, /^ARG |apk add|npm install -g|git clone|sed -i/m);
-    assert.equal(sources.postgresql.version, '18.4');
-    assert.equal(sources.bun.version, '1.3.14');
+    assert.equal(sources.schemaVersion, 3);
+    assert.equal(sources.bases.postgres.postgresMajor, 18);
+    assert.equal(sources.bases.node.alpineRelease, sources.bases.postgres.alpineRelease);
+    assert.equal(sources.umami.version, '3.4.1');
 });
 
 test('bwrap-runner workflow publishes only digest-proven native candidates before optional promotion', () => {

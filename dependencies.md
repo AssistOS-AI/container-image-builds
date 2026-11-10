@@ -4,6 +4,24 @@
 
 `images/bizanso-agent/sources.lock.json` pins the Ploinky Node base digest and the public multilingual-e5-small model revision, dtype, and dimensions. Its package lock pins Transformers.js 4.3.1 (Apache-2.0) and the transitive ONNX Runtime dependency with npm integrity records. Runtime inference is CPU-only and offline. `poppler-utils`, `antiword`, LibreOffice Writer/Impress, and `fonts-liberation` are installed in the image for local extraction. Their distribution notices remain in the Debian packages; npm package notices remain in `node_modules`. The helper and verification code uses Node built-ins plus the pinned inference package. No private application checkout or private-source credential is a build input. Removing the model or native inference dependency would remove offline readiness; removing document tools would remove the supported legacy document extraction paths.
 
+## Umami agent runtime
+
+`images/umami-agent/sources.lock.json` (schema 3) pins every input of the `assistos/umami-agent` image. The image no longer builds on an earlier `assistos/umami-agent` image, and it contains no Bun and no `MadsNyl/umami-mcp`: Umami 3.4's own read-only MCP endpoint replaces that server.
+
+| Input | Pin | Licence and role |
+| --- | --- | --- |
+| `node:22.23.4-alpine3.24` | Index `sha256:0e175475...`, native manifests and configs in the lock | Node.js (MIT) and npm (Artistic-2.0). Build image, and the source of `node`, `npm`, `libstdc++` and `libgcc` in the runtime. |
+| `postgres:18.6-alpine3.24` | Index `sha256:123b1799...`, native manifests and configs in the lock | PostgreSQL (PostgreSQL licence), `gosu` (Apache-2.0) and Alpine packages under their own licences. Runtime root filesystem. PostgreSQL stays on major 18 and on musl so the data directory initialized by the earlier Alpine 18.4 image is reused without dump or restore. |
+| Alpine 3.24.4 | `/etc/alpine-release` of both images above | The two images must report the same release, which the build checks. This is what makes the copied Node binary and its libraries compatible with the PostgreSQL root filesystem. |
+| Umami 3.4.1 | Commit `559e3c607c23d2c72d9bd4f6481bda428255323c`, archive SHA-256 in the lock | MIT. Built from source with two recorded patches (login query cache, metadata asset prefix). |
+| pnpm 12.3.4 | `@pnpm/exe.linux-x64-musl` and `@pnpm/exe.linux-arm64-musl` npm tarballs, SHA-256 and SHA-512 in the lock | MIT. Native executable used only in the build stage. |
+| Prisma 7.10.0 schema engine | Engines revision `0edf323efd1d98336f3f0a68684b56f689b900d3`, installed-binary SHA-256 per architecture in the lock | Apache-2.0. Downloaded from `binaries.prisma.sh` by the `@prisma/engines` postinstall; the build fails unless exactly the pinned binary is installed. Required at runtime by `prisma migrate deploy`. |
+| npm dependencies of Umami | Upstream `pnpm-lock.yaml`, SHA-256 in the lock | Installed with `--frozen-lockfile`; the lock records resolved versions and integrity hashes. |
+| GeoLite2 City database | `/app/geo/GeoLite2-City.mmdb` from `docker.umami.is/umami-software/umami:3.4.1@sha256:e69d1a79...`, SHA-256 `3c884a441b2ab41ba01c4f99b1c9551a610de4d2e4b8f66e797c6a844c7d767b` | The file is MaxMind GeoLite2 data. Upstream Umami obtains it from `GitSquared/node-geolite2-redist`, whose README states CC BY-SA 4.0 for the databases and refers to MaxMind's EULA and attribution requirement (it names the data as created by MaxMind, available from https://www.maxmind.com). The file is copied unchanged and not refreshed by this repository, so it ages with the pinned upstream image. Review the MaxMind terms before redistributing the image beyond this project's use. |
+| `docker.io/assistos/umami-agent@sha256:d797b418...` | Index, manifests and configs in the lock | Continuity test input only (Umami 3.2.0). It initializes a data directory that the candidate must start on. It is never a `FROM` and never ships in the image. |
+
+Next fetches the Inter font through `next/font/google` during the build, as the earlier builds did. That fetch is not pinned, and the native proof requires the emitted font assets to load. The helper and verification code uses Node built-ins only. Removing the Prisma engine or the GeoLite2 database would remove database migration and visitor geolocation respectively.
+
 ## Ploinky Box library bundles
 
 Node.js 24 is the runtime prerequisite. The image uses the immutable Node image

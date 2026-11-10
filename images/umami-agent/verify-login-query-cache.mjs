@@ -20,7 +20,7 @@ const require = queryCoreDirectory ? null
 const corePackage = queryCoreDirectory
     ? path.join(queryCoreDirectory, 'package.json')
     : require.resolve('@tanstack/query-core/package.json');
-assert.equal(JSON.parse(fs.readFileSync(corePackage)).version, '5.101.0');
+assert.equal(JSON.parse(fs.readFileSync(corePackage)).version, '5.102.8');
 const { QueryClient, QueryObserver } = queryCoreDirectory
     ? await import(pathToFileURL(path.join(queryCoreDirectory, 'build/modern/index.js')))
     : require('@tanstack/query-core');
@@ -55,6 +55,8 @@ async function check(source, pendingVerify) {
                 assert.deepEqual(credentials, { username: 'fixture', password: 'fixture-only' });
                 await options.onSuccess({ token: 'fixture-token', user });
             },
+            consumeReturnUrl: () => null,
+            sessionStorage: { setItem: () => assert.fail('the password path must not stage a two-factor token') },
             setClientAuthToken: value => { storedToken = value; },
             setUser: value => { assert.equal(storedToken, 'fixture-token'); principal = value; },
             router: { push: destination => {
@@ -83,6 +85,31 @@ async function check(source, pendingVerify) {
     }
 }
 
+async function checkTwoFactor(source) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 60000 } } });
+    const unauthorized = Object.assign(new Error('fixture verification rejected'), { status: 401 });
+    await client.fetchQuery({ queryKey: ['login'], queryFn: () => Promise.reject(unauthorized) }).catch(() => {});
+    const staged = [];
+    const navigations = [];
+    try {
+        const submit = submitHandler(source, {
+            queryClient: client,
+            mutateAsync: async (credentials, options) => { await options.onSuccess({ requiresTwoFactor: true, partialToken: 'fixture-partial' }); },
+            consumeReturnUrl: () => assert.fail('the two-factor branch must not consume the return URL'),
+            sessionStorage: { setItem: (key, value) => staged.push([key, value]) },
+            setClientAuthToken: () => assert.fail('the two-factor branch must not store a session token'),
+            setUser: () => assert.fail('the two-factor branch must not publish a user'),
+            router: { push: destination => navigations.push(destination) },
+        });
+        await submit({ username: 'fixture', password: 'fixture-only' });
+        assert.deepEqual(staged, [['umami.partial-token', 'fixture-partial']]);
+        assert.deepEqual(navigations, ['/login/two-factor']);
+        assert.equal(client.getQueryState(['login']).error?.status, 401, 'the two-factor branch must leave the login query untouched');
+    } finally {
+        client.clear();
+    }
+}
+
 for (const pending of [false, true]) {
     const baseline = await check(original, pending);
     assert.equal(baseline.error?.status, 401, 'upstream behavior must reproduce the retained/late verification error');
@@ -92,6 +119,8 @@ for (const pending of [false, true]) {
     assert.equal(fixed.status, 'success');
     assert.deepEqual(fixed.data, fixed.user, 'cache stores the user, not the login response envelope');
 }
+await checkTwoFactor(original);
+await checkTwoFactor(patched);
 console.log(JSON.stringify({ schema: 'ploinky.umami-login-cache-regression/v1', passed: true,
-    queryCoreVersion: '5.101.0', initialErrorReproduced: true, pendingErrorReproduced: true,
-    authoritativeLoginCache: true, lateVerificationCannotOverwrite: true, unrelatedQueryPreserved: true }));
+    queryCoreVersion: '5.102.8', initialErrorReproduced: true, pendingErrorReproduced: true,
+    authoritativeLoginCache: true, lateVerificationCannotOverwrite: true, unrelatedQueryPreserved: true, twoFactorBranchUntouched: true }));
