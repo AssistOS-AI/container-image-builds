@@ -110,7 +110,7 @@ jobs:
               test "$(postgres --version | cut -d " " -f3)" = "$EXPECTED_POSTGRES"
               test "$(cat /etc/alpine-release)" = "$EXPECTED_ALPINE"
               for tool in postgres initdb pg_ctl pg_controldata pg_isready psql createdb su-exec npm; do command -v "$tool" > /dev/null; done
-              if command -v bun > /dev/null; then echo 'Bun must not be installed' >&2; exit 1; fi
+              if command -v bun > /dev/null; then echo "Bun must not be installed" >&2; exit 1; fi
               test ! -e /opt/umami-mcp
               test -f /app/ploinky-umami-build.json
               test "$(stat -c "%u:%g:%a" /usr/local/share/ploinky/umami-agent-sources.json)" = 0:0:444
