@@ -14,18 +14,21 @@ desktop_env() {
 DISPLAY="$(desktop_env DISPLAY)"
 DBUS_SESSION_BUS_ADDRESS="$(desktop_env DBUS_SESSION_BUS_ADDRESS)"
 XDG_RUNTIME_DIR="$(desktop_env XDG_RUNTIME_DIR)"
-export DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+LC_ALL="$(desktop_env LC_ALL)"
+export DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR LC_ALL
 
 if wmctrl -lx | grep -qi 'chromium'; then
     wmctrl -xa chromium.Chromium 2>/dev/null || wmctrl -a Chromium 2>/dev/null || true
     exit 0
 fi
 
+language="$(printf '%s' "${LC_ALL:-}" | sed -n 's/^\([a-zA-Z][a-zA-Z]*\)_\([a-zA-Z][a-zA-Z]*\).*/\1-\2/p')"
 mkdir -p /config/.cache/roboteam /config/.config/chromium
 nohup /usr/bin/chromium \
     --no-sandbox \
     --force-renderer-accessibility \
     --start-maximized \
+    ${language:+--lang="$language"} \
     --user-data-dir=/config/.config/chromium \
     about:blank \
     > /config/.cache/roboteam/chromium.log 2>&1 </dev/null &

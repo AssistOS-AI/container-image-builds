@@ -10,6 +10,7 @@ const dockerfile = read('images/roboteam-agent/Dockerfile');
 const workstationDockerfile = read('images/roboteam-agent/Dockerfile.workstation');
 const browserDockerfile = read('images/roboteam-agent/Dockerfile.browser');
 const computerUseLauncher = read('images/roboteam-agent/roboteam-computer-use-mcp');
+const browserLauncher = read('images/roboteam-agent/roboteam-open-browser');
 const desktopMcpService = read('images/roboteam-agent/services/desktop-mcp.run');
 const browserMcpService = read('images/roboteam-agent/services/browser-mcp.run');
 const storage = read('images/roboteam-agent/storage.conf');
@@ -51,6 +52,8 @@ test('GUI images provide system runtimes while tools come from the persistent ru
     assert.match(computerUseLauncher, /DBUS_SESSION_BUS_ADDRESS/);
     assert.match(computerUseLauncher, /COMPUTER_USE_LINUX_SCREENSHOT_BACKEND=gnome-screenshot/);
     assert.match(computerUseLauncher, /unset COMPUTER_USE_LINUX_ENABLE_SHELL/);
+    assert.match(browserLauncher, /desktop_env LC_ALL/);
+    assert.match(browserLauncher, /--lang="\$language"/);
     assert.match(computerUseLauncher, /\/opt\/roboteam-tools\/computer-use-linux mcp/);
     assert.doesNotMatch(workstationDockerfile, /computer-use-linux|npm install|supergateway@/);
     assert.match(desktopMcpService, /\/opt\/roboteam-tools\/node_modules\/\.bin\/supergateway/);
