@@ -85,6 +85,60 @@ jobs:
           test -z "$(git -C source status --porcelain=v1)"
           test -f source/.dockerignore
           test -f source/scriptahubAgent/deployment/processing-runtime-acceptance.mjs || { echo "Source lock predates hosted processing protocol; update it to a committed compatible revision" >&2; exit 1; }
+          git -C source cat-file -e "$SOURCE_REVISION:scriptahubAgent/deployment/dependency-inputs.txt" || { echo "Source lock predates mounted skill sources; update it to a committed compatible revision" >&2; exit 1; }
+          # BEGIN ScriptaHub dependency fingerprint
+          dependency_fingerprint_inputs() {
+            repo=$1; rev=$2; work=$3
+            inputs=scriptahubAgent/deployment/dependency-inputs.txt
+            list="$work/list"
+            git -C "$repo" cat-file blob "$rev:$inputs" > "$list" || return 1
+            test -s "$list" || return 1
+            tr -d "\r\000" < "$list" > "$work/clean" || return 1
+            cmp -s "$list" "$work/clean" || return 1
+            tail -c 1 "$list" > "$work/last" || return 1
+            printf "\n" > "$work/lf" || return 1
+            cmp -s "$work/last" "$work/lf" || return 1
+            rc=0; grep -q "^\$" "$list" || rc=$?
+            test "$rc" -eq 1 || return 1
+            rc=0; LC_ALL=C grep -v -E "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\$" "$list" > "$work/bad" || rc=$?
+            test "$rc" -eq 1 || return 1
+            rc=0; LC_ALL=C grep -E "(^|/)\\.\\.?(/|\$)" "$list" > "$work/dots" || rc=$?
+            test "$rc" -eq 1 || return 1
+            LC_ALL=C sort -u "$list" > "$work/sorted" || return 1
+            cmp -s "$list" "$work/sorted" || return 1
+            rc=0; grep -x -F "$inputs" "$list" > "$work/self" || rc=$?
+            test "$rc" -eq 0 || return 1
+            printf "scriptahub-dependency-fingerprint-v1\n" > "$work/lines" || return 1
+            while IFS= read -r p; do
+              git -C "$repo" ls-tree "$rev" -- "$p" > "$work/entry" || return 1
+              n=$(wc -l < "$work/entry") || return 1
+              test "$n" -eq 1 || return 1
+              read -r mode type oid name < "$work/entry" || return 1
+              case "$mode" in 100644|100755) ;; *) return 1 ;; esac
+              test "$type" = blob || return 1
+              test "$name" = "$p" || return 1
+              case "$oid" in *[!0-9a-f]*) return 1 ;; esac
+              test "${#oid}" -eq 40 || return 1
+              printf "%s %s\n" "$oid" "$p" >> "$work/lines" || return 1
+            done < "$list"
+            if command -v sha256sum > /dev/null; then
+              sha256sum < "$work/lines" > "$work/sum" || return 1
+            else
+              shasum -a 256 < "$work/lines" > "$work/sum" || return 1
+            fi
+            read -r digest rest < "$work/sum" || return 1
+            printf "%s\n" "$digest"
+          }
+          dependency_fingerprint() {
+            work=$(mktemp -d) || return 1
+            if dependency_fingerprint_inputs "$1" "$2" "$work"; then status=0; else status=1; fi
+            rm -rf "$work"
+            return "$status"
+          }
+          # END ScriptaHub dependency fingerprint
+          dependency=$(dependency_fingerprint source "$SOURCE_REVISION") || { echo "Dependency inputs at the locked revision are invalid" >&2; exit 1; }
+          [[ "$dependency" =~ ^[0-9a-f]{64}$ ]]
+          echo "dependency=${dependency}" >> "$GITHUB_OUTPUT"
           node --input-type=module <<'NODE'
           import fs from 'node:fs'; import assert from 'node:assert/strict';
           const protocol = JSON.parse(fs.readFileSync('source/scriptahubAgent/deployment/processing-protocol.json'));
@@ -122,6 +176,7 @@ jobs:
             io.assistos.scriptahub.skills-tree=${{ steps.trees.outputs.skills }}
             io.assistos.scriptahub.deployment-tree=${{ steps.trees.outputs.deployment }}
             io.assistos.scriptahub.reader-css-blob=${{ steps.trees.outputs.reader }}
+            io.assistos.scriptahub.dependency-fingerprint=${{ steps.trees.outputs.dependency }}
 
       - name: Prepare rootless Podman for native proofs
         run: |
@@ -143,6 +198,7 @@ jobs:
           SKILLS_TREE: ${{ steps.trees.outputs.skills }}
           DEPLOYMENT_TREE: ${{ steps.trees.outputs.deployment }}
           READER_BLOB: ${{ steps.trees.outputs.reader }}
+          DEPENDENCY: ${{ steps.trees.outputs.dependency }}
         run: |
           set -euo pipefail
           candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
@@ -172,11 +228,13 @@ jobs:
           NODE
           printf '%s\n' "$config_id" > "$evidence/config-id.txt"
           podman run --rm --init --network=none --cap-drop=ALL --security-opt=no-new-privileges --security-opt=label=disable --security-opt='unmask=/proc/*' --ipc=private \
-            -v "$PWD/source/scriptahubAgent:/code:ro" -v "$PWD/source/skills:/source-skills:ro" -v "$PWD/images/scriptahub-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
+            -v "$PWD/source:/workspace/ScriptaHubAgent:ro" -v "$PWD/source/scriptahubAgent:/code:ro" -v "$PWD/source/skills:/source-skills:ro" -v "$PWD/images/scriptahub-agent/smoke-runtime.mjs:/smoke-runtime.mjs:ro" \
+            -e WORKSPACE_PATH=/workspace -e DEPENDENCY_FINGERPRINT="$DEPENDENCY" \
             --entrypoint node "$config_id" /smoke-runtime.mjs > "$evidence/smoke.log" 2>&1 || { cat "$evidence/smoke.log"; exit 1; }
           cat "$evidence/smoke.log"
           podman run --rm --init --network=none --cap-drop=ALL --security-opt=no-new-privileges --security-opt=label=disable --security-opt='unmask=/proc/*' --ipc=private \
-            -v "$PWD/source/scriptahubAgent:/code:ro" --entrypoint node "$config_id" \
+            -v "$PWD/source:/workspace/ScriptaHubAgent:ro" -v "$PWD/source/scriptahubAgent:/code:ro" \
+            -e WORKSPACE_PATH=/workspace -e DEPENDENCY_FINGERPRINT="$DEPENDENCY" --entrypoint node "$config_id" \
             /code/deployment/processing-runtime-acceptance.mjs > "$evidence/processing.log" 2>&1 || { cat "$evidence/processing.log"; exit 1; }
           cat "$evidence/processing.log"
           IMAGE_EVIDENCE="$evidence/image.json" node --input-type=module <<'NODE'
@@ -188,6 +246,7 @@ jobs:
             'io.assistos.scriptahub.skills-tree': process.env.SKILLS_TREE,
             'io.assistos.scriptahub.deployment-tree': process.env.DEPLOYMENT_TREE,
             'io.assistos.scriptahub.reader-css-blob': process.env.READER_BLOB,
+            'io.assistos.scriptahub.dependency-fingerprint': process.env.DEPENDENCY,
           })) assert.equal(labels[key], value, `Candidate label mismatch: ${key}`);
           NODE
           docker image inspect --format '{{.Size}}' "$candidate" > "$evidence/image-size.txt"
@@ -252,7 +311,7 @@ jobs:
           import fs from 'node:fs'; import assert from 'node:assert/strict';
           const labels = file => JSON.parse(fs.readFileSync(file))[0].Config.Labels;
           const a = labels(process.env.AMD_IMAGE), b = labels(process.env.ARM_IMAGE);
-          for (const key of ['org.opencontainers.image.revision', 'io.assistos.scriptahub.assets-image', 'io.assistos.scriptahub.skills-tree', 'io.assistos.scriptahub.deployment-tree', 'io.assistos.scriptahub.reader-css-blob']) {
+          for (const key of ['org.opencontainers.image.revision', 'io.assistos.scriptahub.assets-image', 'io.assistos.scriptahub.skills-tree', 'io.assistos.scriptahub.deployment-tree', 'io.assistos.scriptahub.reader-css-blob', 'io.assistos.scriptahub.dependency-fingerprint']) {
             assert.ok(a[key], `Missing ${key}`); assert.equal(a[key], b[key], `Native candidates differ: ${key}`);
           }
           NODE
