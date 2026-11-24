@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/Axiologic/ScriptaHubAgent.git",
-  "revision": "04f51dd1c51dc8edbdec7eb1ccf46c50c4e2da19",
+  "revision": "b5ab61d84d91fa00c6ec5e7717e8d2e2f837dece",
   "image": "docker.io/assistos/scriptahub-agent",
   "baseImage": "docker.io/assistos/ploinky-node@sha256:accd925fcbf460c1f4c7a5cd9e2d46539c615bbfad2e896cabb7556d8050a669",
   "platforms": [
