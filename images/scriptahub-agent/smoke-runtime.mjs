@@ -71,5 +71,7 @@ try {
     process.exitCode = 1;
 } finally {
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    // The service makes its skill runtime snapshots read-only (0555), so restore write access before removal.
+    try { execFileSync('/bin/chmod', ['-R', 'u+rwx', directory]); } catch { /* removal below reports what remains */ }
     await fs.rm(directory, { recursive: true, force: true });
 }

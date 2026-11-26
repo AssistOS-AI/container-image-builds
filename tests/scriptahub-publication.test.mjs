@@ -68,6 +68,7 @@ test('runtime publication requires native offline proof and source equality befo
     const assemble = workflow.slice(workflow.indexOf('assemble:'));
     assert.match(assemble, /'io.assistos.scriptahub.reader-css-blob', 'io.assistos.scriptahub.dependency-fingerprint'\]/);
     const smoke = read('images/scriptahub-agent/smoke-runtime.mjs');
+    assert.ok(smoke.indexOf("'/bin/chmod', ['-R', 'u+rwx', directory]") > 0 && smoke.indexOf("'/bin/chmod', ['-R', 'u+rwx', directory]") < smoke.lastIndexOf('fs.rm(directory'), 'read-only skill snapshots must be made writable before the proof removes its directory');
     for (const text of [/receipt.dependencyFingerprint, label/, /assert\.equal\(mounted, label/, /checkoutReader\('\/workspace\/ScriptaHubAgent'\)/, /WORKSPACE_PATH: '\/workspace'/, /source\.json/]) assert.match(smoke, text);
     for (const label of ['skills-tree', 'deployment-tree', 'reader-css-blob', 'assets-image', 'dependency-fingerprint']) assert.ok(workflow.includes(`io.assistos.scriptahub.${label}`));
     assert.match(workflow, /Native candidates differ/);
